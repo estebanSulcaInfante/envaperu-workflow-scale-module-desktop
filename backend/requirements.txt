@@ -1,0 +1,20 @@
+# Flask & Extensions
+Flask==3.0.0
+Flask-CORS==4.0.0
+Flask-SQLAlchemy==3.1.1
+
+# Database
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.23
+
+# Serial Communication (Scale)
+pyserial==3.5
+
+# Printer (ESC/POS) - Optional
+python-escpos==3.1
+
+# Environment
+python-dotenv==1.0.0
+
+# Build
+pyinstaller==6.3.0

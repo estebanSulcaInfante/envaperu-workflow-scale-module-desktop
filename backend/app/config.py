@@ -11,10 +11,10 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key')
     DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
     
-    # Database
+    # Database (SQLite default for testing, PostgreSQL for production)
     SQLALCHEMY_DATABASE_URI = os.getenv(
         'DATABASE_URL',
-        'postgresql://postgres:postgres@localhost:5432/scale_module'
+        'sqlite:///pesajes.db'
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     

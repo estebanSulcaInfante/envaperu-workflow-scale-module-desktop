@@ -22,14 +22,19 @@ class ScaleService:
     def connect(self) -> bool:
         """Establece conexión con la balanza"""
         try:
+            print(f"[BALANZA] Intentando conectar a {self.port} @ {self.baud_rate}...")
             self.serial_connection = serial.Serial(
-                self.port,
-                self.baud_rate,
+                port=self.port,
+                baudrate=self.baud_rate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
                 timeout=1
             )
+            print(f"[BALANZA] ✅ Conexión exitosa en {self.port}")
             return True
         except serial.SerialException as e:
-            print(f"Error conectando a balanza: {e}")
+            print(f"[BALANZA] ❌ Error conectando: {e}")
             return False
     
     def disconnect(self):

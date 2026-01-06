@@ -58,6 +58,7 @@ class ScaleService:
                 
                 # Múltiples patrones para diferentes formatos de balanza
                 patterns = [
+                    r"(\d+\.?\d*)kg\s+NET",           # "2.7kg NET" - formato de tu balanza!
                     r"^\s*\d+\.\s+(\d+\.?\d*)",       # "1.     2.1"
                     r"(\d+\.?\d*)\s*kg",             # "2.1 kg" o "2.1kg"
                     r"^\s*(\d+\.?\d*)\s*$",          # "  2.1  " (solo número)

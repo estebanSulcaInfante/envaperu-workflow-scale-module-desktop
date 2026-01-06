@@ -35,15 +35,24 @@ function App() {
     loadPesajes();
   }, []);
 
-  // Poll for weight when listening
+  // Poll for weight when listening - AUTO GRABAR cuando llega peso nuevo
   useEffect(() => {
     let interval;
     if (listening) {
       interval = setInterval(async () => {
         try {
           const { data } = await balanzaApi.ultimoPeso();
-          if (data.peso_kg !== null) {
-            setPeso(data.peso_kg);
+          // Si hay peso nuevo y válido (>= 1kg), auto-grabar e imprimir
+          if (data.peso_kg !== null && data.peso_kg !== peso) {
+            const nuevoPeso = data.peso_kg;
+            setPeso(nuevoPeso);
+            
+            // Auto-grabar e imprimir si el peso es válido (>= 1kg)
+            if (nuevoPeso >= 1.0 && formData.nro_op) {
+              await autoGrabarEImprimir(nuevoPeso);
+            } else if (nuevoPeso > 0 && nuevoPeso < 1.0) {
+              showToast('⚠️ Peso muy bajo (< 1kg), no se imprimirá', 'error');
+            }
           }
         } catch (err) {
           console.error('Error polling peso:', err);
@@ -51,7 +60,7 @@ function App() {
       }, 500);
     }
     return () => clearInterval(interval);
-  }, [listening]);
+  }, [listening, peso, formData]);
 
   const checkStatus = async () => {
     try {
@@ -81,25 +90,41 @@ function App() {
   const handleQrInput = async (value) => {
     setQrInput(value);
     
-    // Try to parse when it looks like a complete QR
+    // Try to parse when it looks like a complete QR (has semicolons)
     if (value.includes(';') && value.split(';').length >= 6) {
-      try {
-        const { data } = await pesajesApi.parseQr(value);
-        if (data.status === 'ok') {
-          setFormData(prev => ({
-            ...prev,
-            molde: data.data.molde || '',
-            maquina: data.data.maquina || '',
-            nro_op: data.data.nro_op || '',
-            turno: data.data.turno || '',
-            fecha_orden_trabajo: data.data.fecha_orden_trabajo || '',
-            nro_orden_trabajo: data.data.nro_orden_trabajo || ''
-          }));
-          showToast('QR procesado correctamente');
-        }
-      } catch (err) {
-        console.error('Error parsing QR:', err);
+      await processQrData(value);
+    }
+  };
+
+  // Handle Enter key from USB scanner
+  const handleQrKeyDown = async (e) => {
+    if (e.key === 'Enter' && qrInput.trim()) {
+      e.preventDefault();
+      await processQrData(qrInput);
+    }
+  };
+
+  // Process QR data
+  const processQrData = async (qrString) => {
+    try {
+      const { data } = await pesajesApi.parseQr(qrString);
+      if (data.status === 'ok') {
+        setFormData(prev => ({
+          ...prev,
+          molde: data.data.molde || '',
+          maquina: data.data.maquina || '',
+          nro_op: data.data.nro_op || '',
+          turno: data.data.turno || '',
+          fecha_orden_trabajo: data.data.fecha_orden_trabajo || '',
+          nro_orden_trabajo: data.data.nro_orden_trabajo || ''
+        }));
+        showToast('✅ QR escaneado correctamente');
+        // Clear QR input after successful scan
+        setQrInput('');
       }
+    } catch (err) {
+      console.error('Error parsing QR:', err);
+      showToast('⚠️ Error al leer QR', 'error');
     }
   };
 
@@ -127,9 +152,39 @@ function App() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  // Auto grabar e imprimir (flujo de 1 botón)
+  const autoGrabarEImprimir = async (pesoValue) => {
+    try {
+      const { data } = await pesajesApi.crear({
+        peso_kg: pesoValue,
+        ...formData,
+        qr_data_original: qrInput
+      });
+      
+      // Imprimir automáticamente
+      await pesajesApi.imprimir(data.id);
+      showToast('✅ Guardado e impreso automáticamente');
+      loadPesajes();
+      
+      // Show sticker preview
+      const preview = await pesajesApi.previewSticker(data.id);
+      setStickerPreview(preview.data.preview);
+      
+    } catch (err) {
+      showToast('❌ Error al guardar/imprimir', 'error');
+    }
+  };
+
   const handleGrabar = async () => {
-    if (peso <= 0) {
-      showToast('El peso debe ser mayor a 0', 'error');
+    // Validar peso mínimo
+    if (peso < 1.0) {
+      showToast('⚠️ Peso inválido (mínimo 1 kg)', 'error');
+      return;
+    }
+    
+    // Validar que hay datos del QR
+    if (!formData.nro_op) {
+      showToast('⚠️ Escanea un QR primero', 'error');
       return;
     }
 
@@ -139,7 +194,10 @@ function App() {
         ...formData,
         qr_data_original: qrInput
       });
-      showToast('Pesaje guardado correctamente');
+      
+      // Imprimir automáticamente
+      await pesajesApi.imprimir(data.id);
+      showToast('✅ Guardado e impreso correctamente');
       loadPesajes();
       
       // Show sticker preview
@@ -147,17 +205,29 @@ function App() {
       setStickerPreview(preview.data.preview);
       
     } catch (err) {
-      showToast('Error al guardar', 'error');
+      showToast('❌ Error al guardar', 'error');
     }
   };
 
   const handleImprimir = async (id) => {
     try {
       await pesajesApi.imprimir(id);
-      showToast('Sticker enviado a impresión');
+      showToast('🖨️ Sticker enviado a impresión');
       loadPesajes();
     } catch (err) {
       showToast('Error al imprimir', 'error');
+    }
+  };
+
+  const handleEliminar = async (id) => {
+    if (!confirm('¿Eliminar este pesaje?')) return;
+    
+    try {
+      await pesajesApi.eliminar(id);
+      showToast('🗑️ Pesaje eliminado');
+      loadPesajes();
+    } catch (err) {
+      showToast('Error al eliminar', 'error');
     }
   };
 
@@ -220,12 +290,13 @@ function App() {
             {/* QR Input */}
             <div className="qr-section">
               <div className="qr-input-group">
-                <label>Código QR</label>
+                <label>📷 Escanear QR</label>
                 <input
                   type="text"
                   value={qrInput}
                   onChange={(e) => handleQrInput(e.target.value)}
-                  placeholder="Escanear QR de Registro Diario..."
+                  onKeyDown={handleQrKeyDown}
+                  placeholder="Escanear con pistola QR..."
                   autoFocus
                 />
               </div>
@@ -329,14 +400,8 @@ function App() {
 
             {/* Action Buttons */}
             <div className="actions-row">
-              <button className="btn btn-warning" onClick={handleReimprimir}>
-                🖨️ Re-imprimir etiqueta
-              </button>
-              <button className="btn btn-success" onClick={handleGrabar} disabled={peso <= 0}>
-                💾 Grabar
-              </button>
               <button className="btn btn-secondary" onClick={handleLimpiar}>
-                🗑️ Limpiar
+                🔄 Limpiar formulario
               </button>
             </div>
 
@@ -375,6 +440,13 @@ function App() {
                       title="Imprimir sticker"
                     >
                       🖨️
+                    </button>
+                    <button 
+                      className="btn btn-icon btn-danger"
+                      onClick={() => handleEliminar(p.id)}
+                      title="Eliminar pesaje"
+                    >
+                      🗑️
                     </button>
                   </div>
                 </div>

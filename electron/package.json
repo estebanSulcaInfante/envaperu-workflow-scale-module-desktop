@@ -39,7 +39,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "icon.ico"
+      "icon": "logoBalanzaModule.png"
     },
     "nsis": {
       "oneClick": false,

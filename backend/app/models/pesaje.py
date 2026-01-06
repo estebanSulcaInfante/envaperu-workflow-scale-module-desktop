@@ -69,6 +69,20 @@ class Pesaje(db.Model):
         """
         from urllib.parse import urlparse, parse_qs, unquote_plus
         
+        # Limpiar: algunos scanners duplican el contenido o agregan saltos
+        qr_string = qr_string.strip()
+        
+        # Si hay URL duplicada, quedarse con la primera
+        if 'viewform' in qr_string:
+            idx = qr_string.find('viewform')
+            idx2 = qr_string.find('viewform', idx + 8)
+            if idx2 > 0:
+                # Cortar en el punto donde empieza la URL duplicada
+                # Buscar el inicio de la segunda URL (https)
+                cut_point = qr_string.find('https', idx + 1)
+                if cut_point > 0:
+                    qr_string = qr_string[:cut_point]
+        
         # Intentar parsear como URL de Google Forms
         if 'docs.google.com/forms' in qr_string or 'entry.' in qr_string:
             try:

@@ -106,8 +106,11 @@ class ScaleService:
     
     def _listen_loop(self, callback: Callable[[float], None]):
         """Loop interno de escucha"""
-        if not self.connect():
-            return
+        # Reutilizar conexión existente, solo conectar si no está abierta
+        if not self.serial_connection or not self.serial_connection.is_open:
+            if not self.connect():
+                print("[BALANZA] ❌ No se pudo conectar en listen_loop")
+                return
         
         while self.is_listening:
             weight = self.read_weight()

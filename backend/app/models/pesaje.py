@@ -62,8 +62,43 @@ class Pesaje(db.Model):
     def parse_qr_data(qr_string: str) -> dict:
         """
         Parsea el string del QR escaneado.
-        Formato: "398;CERNIDOR ROMANO;HT-250B;OP1354;DIURNO;2026-01-03;0000"
+        
+        Soporta dos formatos:
+        1. URL de Google Forms: "https://docs.google.com/forms/...?entry.374896580=OP-1354&entry.1779940712=MOLDE"
+        2. Formato legacy: "398;CERNIDOR ROMANO;HT-250B;OP1354;DIURNO;2026-01-03;0000"
         """
+        from urllib.parse import urlparse, parse_qs, unquote_plus
+        
+        # Intentar parsear como URL de Google Forms
+        if 'docs.google.com/forms' in qr_string or 'entry.' in qr_string:
+            try:
+                parsed = urlparse(qr_string)
+                params = parse_qs(parsed.query)
+                
+                # Extraer valores de los entry fields
+                # Mapeo de entry IDs a nombres de campo
+                entry_map = {
+                    'entry.374896580': 'nro_op',      # numero_op
+                    'entry.1779940712': 'molde',       # molde
+                    'entry.885430358': 'peso_unitario', # peso_unitario
+                    'entry.873760233': 'maquina',      # maquina
+                }
+                
+                result = {}
+                for entry_id, field_name in entry_map.items():
+                    if entry_id in params:
+                        # parse_qs retorna listas, tomar primer valor
+                        value = params[entry_id][0] if params[entry_id] else ''
+                        result[field_name] = unquote_plus(value)
+                
+                # Si encontramos al menos nro_op, es válido
+                if result.get('nro_op'):
+                    return result
+                    
+            except Exception as e:
+                print(f"Error parsing Google Forms URL: {e}")
+        
+        # Fallback: formato legacy con punto y coma
         parts = qr_string.split(';')
         if len(parts) >= 7:
             return {
@@ -75,6 +110,7 @@ class Pesaje(db.Model):
                 'fecha_orden_trabajo': parts[5].strip(),
                 'nro_orden_trabajo': parts[6].strip() if len(parts) > 6 else None,
             }
+        
         return {}
     
     def generate_sticker_qr_data(self) -> str:

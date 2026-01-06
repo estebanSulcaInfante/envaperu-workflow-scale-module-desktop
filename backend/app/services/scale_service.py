@@ -46,17 +46,36 @@ class ScaleService:
         
         try:
             if self.serial_connection.in_waiting > 0:
-                line = self.serial_connection.readline().decode('utf-8', errors='ignore').strip()
+                raw_data = self.serial_connection.readline()
+                line = raw_data.decode('utf-8', errors='ignore').strip()
                 
-                # Ignorar líneas decorativas
+                print(f"[BALANZA] Raw: {raw_data}")  # Debug
+                print(f"[BALANZA] Line: '{line}'")   # Debug
+                
+                # Ignorar líneas decorativas o vacías
                 if "---" in line or "S/N" in line or not line:
                     return None
                 
-                match = self.pattern.search(line)
-                if match:
-                    return float(match.group(1))
+                # Múltiples patrones para diferentes formatos de balanza
+                patterns = [
+                    r"^\s*\d+\.\s+(\d+\.?\d*)",       # "1.     2.1"
+                    r"(\d+\.?\d*)\s*kg",             # "2.1 kg" o "2.1kg"
+                    r"^\s*(\d+\.?\d*)\s*$",          # "  2.1  " (solo número)
+                    r"[GN]\s*(\d+\.?\d*)",           # "G 2.1" o "N 2.1"
+                    r"(\d+\.\d+)",                    # Cualquier decimal
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, line)
+                    if match:
+                        weight = float(match.group(1))
+                        print(f"[BALANZA] Peso detectado: {weight} kg")  # Debug
+                        return weight
+                
+                print(f"[BALANZA] No se pudo parsear: '{line}'")  # Debug
+                
         except Exception as e:
-            print(f"Error leyendo peso: {e}")
+            print(f"[BALANZA] Error leyendo peso: {e}")
         
         return None
     

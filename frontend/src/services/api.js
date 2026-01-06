@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE = '/api';
+// Usar URL absoluta para evitar problemas de proxy
+const API_BASE = 'http://127.0.0.1:5050/api';
 
 const api = axios.create({
   baseURL: API_BASE,

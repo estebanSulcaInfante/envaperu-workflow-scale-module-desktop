@@ -65,7 +65,7 @@ def crear_pesaje():
 def parse_qr():
     """
     Parsea el contenido de un QR escaneado.
-    Formato: "398;CERNIDOR ROMANO;HT-250B;OP1354;DIURNO;2026-01-03;0000"
+    Soporta URL de Google Forms y formato legacy.
     """
     data = request.get_json()
     qr_string = data.get('qr_data', '')
@@ -73,14 +73,18 @@ def parse_qr():
     if not qr_string:
         return jsonify({'error': 'qr_data es requerido'}), 400
     
+    print(f"[QR] Recibido: {qr_string[:100]}...")  # Debug log
+    
     parsed = Pesaje.parse_qr_data(qr_string)
     
-    if not parsed:
-        return jsonify({'error': 'Formato de QR inválido'}), 400
+    print(f"[QR] Parsed result: {parsed}")  # Debug log
     
+    # Retornar resultado aunque esté parcialmente vacío
+    # El frontend decidirá si es suficiente
     return jsonify({
-        'status': 'ok',
-        'data': parsed
+        'status': 'ok' if parsed else 'partial',
+        'data': parsed,
+        'raw_input': qr_string[:50]  # Para debug
     })
 
 

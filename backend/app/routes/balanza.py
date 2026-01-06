@@ -28,9 +28,18 @@ def conectar():
     """Conecta con la balanza"""
     service = get_scale_service()
     success = service.connect()
+    
+    if not success:
+        return jsonify({
+            'status': 'error',
+            'connected': False,
+            'error': f'No se pudo conectar a {service.port}. Verifica que el puerto esté disponible.'
+        }), 500
+    
     return jsonify({
-        'status': 'ok' if success else 'error',
-        'connected': success
+        'status': 'ok',
+        'connected': True,
+        'port': service.port
     })
 
 
@@ -49,6 +58,16 @@ def iniciar_escucha():
     _weight_queue = []
     
     service = get_scale_service()
+    
+    # Verificar que esté conectado primero
+    if not service.serial_connection or not service.serial_connection.is_open:
+        if not service.connect():
+            return jsonify({
+                'status': 'error',
+                'listening': False,
+                'error': f'No se pudo conectar a {service.port}'
+            }), 500
+    
     service.start_listening(_on_weight_received)
     
     return jsonify({

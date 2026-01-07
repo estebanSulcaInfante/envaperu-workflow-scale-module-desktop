@@ -165,15 +165,24 @@ function App() {
 
   // Auto grabar e imprimir (flujo de 1 botón)
   const autoGrabarEImprimir = async (pesoValue) => {
+    console.log('[AUTO] autoGrabarEImprimir llamado con:', { pesoValue, formData });
+    
     try {
-      const { data } = await pesajesApi.crear({
+      const pesajeData = {
         peso_kg: pesoValue,
         ...formData,
         qr_data_original: qrInput
-      });
+      };
+      console.log('[AUTO] Creando pesaje:', pesajeData);
+      
+      const { data } = await pesajesApi.crear(pesajeData);
+      console.log('[AUTO] Pesaje creado con ID:', data.id);
       
       // Imprimir automáticamente
+      console.log('[AUTO] Enviando a imprimir ID:', data.id);
       await pesajesApi.imprimir(data.id);
+      console.log('[AUTO] ✅ Impresión completada');
+      
       showToast('✅ Guardado e impreso automáticamente');
       loadPesajes();
       
@@ -182,6 +191,7 @@ function App() {
       setStickerPreview(preview.data.preview);
       
     } catch (err) {
+      console.error('[AUTO] ❌ Error en autoGrabarEImprimir:', err);
       showToast('❌ Error al guardar/imprimir', 'error');
     }
   };

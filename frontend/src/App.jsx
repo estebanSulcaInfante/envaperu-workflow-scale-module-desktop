@@ -301,6 +301,37 @@ function App() {
         </div>
       </header>
 
+      {/* Status Banner - Workflow Guidance */}
+      {!connected && (
+        <div className="status-banner warning">
+          <span className="banner-icon">⚠️</span>
+          <span className="banner-text">
+            <strong>Paso 1:</strong> Conecta la balanza haciendo clic en el botón "Balanza Desconectada" arriba
+          </span>
+          <button className="btn btn-sm btn-primary" onClick={handleConnect}>
+            🔌 Conectar Balanza
+          </button>
+        </div>
+      )}
+      
+      {connected && !formData.nro_op && (
+        <div className="status-banner info">
+          <span className="banner-icon">📷</span>
+          <span className="banner-text">
+            <strong>Paso 2:</strong> Escanea el código QR de una Orden de Producción para comenzar a registrar pesos
+          </span>
+        </div>
+      )}
+      
+      {connected && formData.nro_op && (
+        <div className="status-banner success">
+          <span className="banner-icon">✅</span>
+          <span className="banner-text">
+            <strong>Listo:</strong> OP {formData.nro_op} cargada. Coloca productos en la balanza para registrar automáticamente.
+          </span>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="main-content">
         {/* Left Panel - Form */}
@@ -311,15 +342,19 @@ function App() {
             {/* QR Input */}
             <div className="qr-section">
               <div className="qr-input-group">
-                <label>📷 Escanear QR</label>
+                <label>📷 Escanear QR de Orden de Producción</label>
                 <input
                   type="text"
                   value={qrInput}
                   onChange={(e) => handleQrInput(e.target.value)}
                   onKeyDown={handleQrKeyDown}
-                  placeholder="Escanear con pistola QR..."
+                  placeholder={formData.nro_op ? "✅ QR escaneado - Escanear otra OP..." : "⏳ Esperando escaneo de QR..."}
                   autoFocus
+                  className={!formData.nro_op ? 'input-highlight' : ''}
                 />
+                {!formData.nro_op && (
+                  <small className="input-hint">👆 Escanea el QR de la hoja de OP aquí</small>
+                )}
               </div>
             </div>
 

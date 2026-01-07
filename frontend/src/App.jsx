@@ -52,11 +52,15 @@ function App() {
           // Si hay peso nuevo y válido (>= 1kg), auto-grabar e imprimir
           if (data.peso_kg !== null && data.peso_kg !== peso) {
             const nuevoPeso = data.peso_kg;
+            console.log(`[AUTO] Peso recibido: ${nuevoPeso} kg, nro_op: ${formData.nro_op || '(vacío)'}`);
             setPeso(nuevoPeso);
             
-            // Auto-grabar e imprimir si el peso es válido (>= 1kg)
+            // Auto-grabar e imprimir si el peso es válido (>= 1kg) y hay QR escaneado
             if (nuevoPeso >= 1.0 && formData.nro_op) {
+              console.log('[AUTO] ✅ Condiciones cumplidas, auto-grabando...');
               await autoGrabarEImprimir(nuevoPeso);
+            } else if (nuevoPeso >= 1.0 && !formData.nro_op) {
+              showToast('⚠️ Escanea el QR primero para auto-imprimir', 'error');
             } else if (nuevoPeso > 0 && nuevoPeso < 1.0) {
               showToast('⚠️ Peso muy bajo (< 1kg), no se imprimirá', 'error');
             }

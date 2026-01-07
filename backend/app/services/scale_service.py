@@ -4,6 +4,10 @@ import re
 import threading
 from typing import Optional, Callable
 from flask import current_app
+from app.utils.logger import get_balanza_logger
+
+# Logger para este módulo
+log = get_balanza_logger()
 
 
 class ScaleService:
@@ -22,7 +26,7 @@ class ScaleService:
     def connect(self) -> bool:
         """Establece conexión con la balanza"""
         try:
-            print(f"[BALANZA] Intentando conectar a {self.port} @ {self.baud_rate}...")
+            log.info(f"Intentando conectar a {self.port} @ {self.baud_rate}...")
             self.serial_connection = serial.Serial(
                 port=self.port,
                 baudrate=self.baud_rate,
@@ -31,10 +35,10 @@ class ScaleService:
                 stopbits=serial.STOPBITS_ONE,
                 timeout=1
             )
-            print(f"[BALANZA] ✅ Conexión exitosa en {self.port}")
+            log.info(f"✅ Conexión exitosa en {self.port}")
             return True
         except serial.SerialException as e:
-            print(f"[BALANZA] ❌ Error conectando: {e}")
+            log.error(f"Error conectando: {e}")
             return False
     
     def disconnect(self):
@@ -54,8 +58,8 @@ class ScaleService:
                 raw_data = self.serial_connection.readline()
                 line = raw_data.decode('utf-8', errors='ignore').strip()
                 
-                print(f"[BALANZA] Raw: {raw_data}")  # Debug
-                print(f"[BALANZA] Line: '{line}'")   # Debug
+                log.debug(f"Raw: {raw_data}")
+                log.debug(f"Line: '{line}'")
                 
                 # Ignorar líneas decorativas o vacías
                 if "---" in line or "S/N" in line or not line:
@@ -75,13 +79,13 @@ class ScaleService:
                     match = re.search(pattern, line)
                     if match:
                         weight = float(match.group(1))
-                        print(f"[BALANZA] Peso detectado: {weight} kg")  # Debug
+                        log.info(f"Peso detectado: {weight} kg")
                         return weight
                 
-                print(f"[BALANZA] No se pudo parsear: '{line}'")  # Debug
+                log.warning(f"No se pudo parsear: '{line}'")
                 
         except Exception as e:
-            print(f"[BALANZA] Error leyendo peso: {e}")
+            log.error(f"Error leyendo peso: {e}")
         
         return None
     
@@ -109,7 +113,7 @@ class ScaleService:
         # Reutilizar conexión existente, solo conectar si no está abierta
         if not self.serial_connection or not self.serial_connection.is_open:
             if not self.connect():
-                print("[BALANZA] ❌ No se pudo conectar en listen_loop")
+                log.error("No se pudo conectar en listen_loop")
                 return
         
         while self.is_listening:

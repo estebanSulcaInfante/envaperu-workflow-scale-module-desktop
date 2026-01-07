@@ -7,6 +7,10 @@ from datetime import datetime
 from typing import Optional
 from app.models.pesaje import Pesaje
 from app.services.printer_service import get_printer_service
+from app.utils.logger import get_sticker_logger
+
+# Logger para este módulo
+log = get_sticker_logger()
 
 
 class StickerService:
@@ -212,21 +216,28 @@ PRINT 1,1
     
     def print_sticker(self, pesaje: Pesaje, printer_type: str = None) -> bool:
         """Genera e imprime un sticker para el pesaje dado."""
+        log.info(f"Iniciando impresión para pesaje {pesaje.id}")
         printer = get_printer_service()
         ptype = printer_type or printer.printer_type
+        log.debug(f"Tipo de impresora: {ptype}, Nombre: {printer.printer_name}")
         
         try:
             if ptype == 'TSPL':
                 tspl = self.generate_tspl(pesaje)
-                return printer.print_tspl(tspl)
+                log.debug(f"Generado TSPL ({len(tspl)} bytes)")
+                result = printer.print_tspl(tspl)
+                log.info(f"Resultado de impresión: {'✅ OK' if result else '❌ FALLO'}")
+                return result
             elif ptype == 'ZPL':
                 zpl = self.generate_zpl(pesaje)
+                log.debug(f"Generado ZPL ({len(zpl)} bytes)")
                 return printer.print_zpl(zpl)
             else:  # ESC_POS por defecto
                 commands = self.generate_escpos(pesaje)
+                log.debug(f"Generado ESC/POS ({len(commands)} bytes)")
                 return printer.print_escpos(commands)
         except Exception as e:
-            print(f"Error imprimiendo sticker: {e}")
+            log.error(f"Error imprimiendo sticker: {e}", exc_info=True)
             return False
 
 

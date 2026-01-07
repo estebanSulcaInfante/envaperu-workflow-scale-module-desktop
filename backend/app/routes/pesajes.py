@@ -3,8 +3,12 @@ from flask import Blueprint, request, jsonify
 from app import db
 from app.models.pesaje import Pesaje
 from app.services.sticker_service import get_sticker_service
+from app.utils.logger import get_pesaje_logger
 
 pesajes_bp = Blueprint('pesajes', __name__)
+
+# Logger para este módulo
+log = get_pesaje_logger()
 
 
 @pesajes_bp.route('', methods=['GET'])
@@ -29,8 +33,10 @@ def listar_pesajes():
 def crear_pesaje():
     """Crea un nuevo registro de pesaje"""
     data = request.get_json()
+    log.info(f"POST /pesajes - Datos recibidos: peso_kg={data.get('peso_kg')}, nro_op={data.get('nro_op')}, molde={data.get('molde')}")
     
     if not data or 'peso_kg' not in data:
+        log.error("peso_kg es requerido")
         return jsonify({'error': 'peso_kg es requerido'}), 400
     
     # Parse fecha_orden_trabajo si viene como string
@@ -57,6 +63,7 @@ def crear_pesaje():
     
     db.session.add(pesaje)
     db.session.commit()
+    log.info(f"✅ Pesaje creado con ID: {pesaje.id}")
     
     return jsonify(pesaje.to_dict()), 201
 
@@ -73,11 +80,11 @@ def parse_qr():
     if not qr_string:
         return jsonify({'error': 'qr_data es requerido'}), 400
     
-    print(f"[QR] Recibido: {qr_string[:100]}...")  # Debug log
+    log.debug(f"parse-qr recibido: {qr_string[:100]}...")
     
     parsed = Pesaje.parse_qr_data(qr_string)
     
-    print(f"[QR] Parsed result: {parsed}")  # Debug log
+    log.debug(f"parse-qr resultado: {parsed}")
     
     # Retornar resultado aunque esté parcialmente vacío
     # El frontend decidirá si es suficiente
@@ -134,16 +141,20 @@ def actualizar_pesaje(id):
 @pesajes_bp.route('/<int:id>', methods=['DELETE'])
 def eliminar_pesaje(id):
     """Elimina un pesaje"""
+    log.info(f"DELETE /pesajes/{id}")
     pesaje = Pesaje.query.get_or_404(id)
     db.session.delete(pesaje)
     db.session.commit()
+    log.info(f"✅ Pesaje {id} eliminado")
     return '', 204
 
 
 @pesajes_bp.route('/<int:id>/imprimir', methods=['POST'])
 def imprimir_sticker(id):
     """Imprime el sticker de un pesaje"""
+    log.info(f"POST /pesajes/{id}/imprimir")
     pesaje = Pesaje.query.get_or_404(id)
+    log.debug(f"Pesaje: {pesaje.peso_kg}kg, {pesaje.molde}, {pesaje.nro_op}")
     
     sticker_service = get_sticker_service()
     success = sticker_service.print_sticker(pesaje)
@@ -152,8 +163,10 @@ def imprimir_sticker(id):
         pesaje.sticker_impreso = True
         pesaje.fecha_impresion = datetime.utcnow()
         db.session.commit()
+        log.info(f"✅ Sticker enviado a impresión para pesaje {id}")
         return jsonify({'status': 'ok', 'message': 'Sticker enviado a impresión'})
     else:
+        log.error(f"Error al imprimir pesaje {id}")
         return jsonify({'status': 'error', 'message': 'Error al imprimir'}), 500
 
 

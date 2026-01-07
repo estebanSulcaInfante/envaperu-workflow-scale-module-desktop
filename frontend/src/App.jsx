@@ -33,6 +33,13 @@ function App() {
   useEffect(() => {
     checkStatus();
     loadPesajes();
+    
+    // Auto-llenar fecha con fecha actual
+    const today = new Date().toISOString().split('T')[0];
+    setFormData(prev => ({
+      ...prev,
+      fecha_orden_trabajo: today
+    }));
   }, []);
 
   // Poll for weight when listening - AUTO GRABAR cuando llega peso nuevo

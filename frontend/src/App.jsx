@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { pesajesApi, balanzaApi, syncApi } from './services/api';
+import GenerarRDP from './components/GenerarRDP';
 
 function App() {
   // Connection state
@@ -33,6 +34,7 @@ function App() {
   // UI state
   const [toast, setToast] = useState(null);
   const [stickerPreview, setStickerPreview] = useState(null);
+  const [showRdpModal, setShowRdpModal] = useState(false);
 
   // Load status and pesajes on mount
   useEffect(() => {
@@ -309,6 +311,13 @@ function App() {
       <header className="header">
         <h1>⚖️ Sistema de Pesado - ENVAPERU</h1>
         <div className="header-right">
+          <button 
+            className="btn btn-secondary"
+            onClick={() => setShowRdpModal(true)}
+            style={{ marginRight: '12px' }}
+          >
+            📋 Generar RDP
+          </button>
           <div 
             className={`connection-badge ${connected ? 'connected' : 'disconnected'}`}
             onClick={handleConnect}
@@ -565,6 +574,14 @@ function App() {
         <div className={`toast ${toast.type}`}>
           {toast.message}
         </div>
+      )}
+      
+      {/* Modal Generar RDP */}
+      {showRdpModal && (
+        <GenerarRDP 
+          formData={formData}
+          onClose={() => setShowRdpModal(false)}
+        />
       )}
     </div>
   );

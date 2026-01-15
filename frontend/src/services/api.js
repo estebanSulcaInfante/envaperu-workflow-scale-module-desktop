@@ -79,4 +79,22 @@ export const syncApi = {
     api.get('/sync/status')
 };
 
+// ===== RDP (Registro Diario Producción) =====
+export const rdpApi = {
+  getSiguiente: () =>
+    api.get('/rdp/siguiente'),
+  
+  generar: (data) =>
+    api.post('/rdp/generar', data),
+  
+  anular: (correlativo, motivo) =>
+    api.post('/rdp/cache/anular', { correlativo, motivo }),
+  
+  cacheStatus: () =>
+    api.get('/rdp/cache/status'),
+  
+  cacheReponer: () =>
+    api.post('/rdp/cache/reponer')
+};
+
 export default api;

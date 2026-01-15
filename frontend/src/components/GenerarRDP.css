@@ -1,0 +1,253 @@
+.generar-rdp-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.generar-rdp-modal {
+  background: white;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.rdp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #1E3A5F, #2E5A8F);
+  color: white;
+}
+
+.rdp-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.rdp-close {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.rdp-error {
+  background: #ffebee;
+  color: #c62828;
+  padding: 12px 20px;
+  font-size: 0.9rem;
+}
+
+.rdp-content {
+  padding: 20px;
+}
+
+.rdp-correlativo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background: #f5f5f5;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.rdp-label {
+  font-weight: 500;
+  color: #666;
+}
+
+.rdp-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #1E3A5F;
+}
+
+.rdp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rdp-row {
+  display: flex;
+  gap: 12px;
+}
+
+.rdp-row .rdp-field {
+  flex: 1;
+}
+
+.rdp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rdp-field label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #666;
+}
+
+.rdp-field input,
+.rdp-field select {
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+.rdp-field input:focus,
+.rdp-field select:focus {
+  outline: none;
+  border-color: #1E3A5F;
+}
+
+.rdp-resultado {
+  margin-top: 16px;
+  padding: 16px;
+  background: #e8f5e9;
+  border-radius: 8px;
+}
+
+.rdp-success {
+  color: #2e7d32;
+  font-size: 1.1rem;
+}
+
+.rdp-impreso {
+  margin-top: 8px;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.rdp-actions {
+  padding: 16px 20px;
+  background: #f5f5f5;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.rdp-btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.rdp-btn-primary {
+  background: linear-gradient(135deg, #1E3A5F, #2E5A8F);
+  color: white;
+}
+
+.rdp-btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(30, 58, 95, 0.4);
+}
+
+.rdp-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.rdp-btn-secondary {
+  background: #e0e0e0;
+  color: #333;
+  margin-right: 12px;
+}
+
+.rdp-btn-secondary:hover:not(:disabled) {
+  background: #d0d0d0;
+}
+
+.rdp-btn-danger {
+  background: linear-gradient(135deg, #c62828, #e53935);
+  color: white;
+}
+
+.rdp-btn-cancel {
+  background: #e0e0e0;
+  color: #333;
+  margin-right: 8px;
+}
+
+/* Cache info */
+.rdp-corr-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rdp-cache-info {
+  text-align: right;
+}
+
+.rdp-cache-count {
+  font-size: 0.85rem;
+  color: #666;
+  background: #e3f2fd;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+/* Anular dialog */
+.rdp-anular-dialog {
+  margin-top: 16px;
+  padding: 16px;
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  border-radius: 8px;
+}
+
+.rdp-anular-title {
+  font-weight: 600;
+  color: #e65100;
+  margin-bottom: 12px;
+}
+
+.rdp-anular-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* Resultado anulado */
+.rdp-resultado.anulado {
+  background: #fff3e0;
+}
+
+.rdp-anulado {
+  color: #e65100;
+  font-size: 1.1rem;
+}
+
+.rdp-anulado-motivo {
+  margin-top: 4px;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+/* Actions spacing */
+.rdp-actions {
+  padding: 16px 20px;
+  background: #f5f5f5;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}

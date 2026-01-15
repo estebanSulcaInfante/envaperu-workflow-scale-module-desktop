@@ -80,10 +80,12 @@ def create_app():
     from app.routes.pesajes import pesajes_bp
     from app.routes.balanza import balanza_bp
     from app.routes.sync import sync_bp
+    from app.routes.rdp import rdp_bp
     
     app.register_blueprint(pesajes_bp, url_prefix='/api/pesajes')
     app.register_blueprint(balanza_bp, url_prefix='/api/balanza')
     app.register_blueprint(sync_bp)
+    app.register_blueprint(rdp_bp)
     
     # Create tables
     with app.app_context():

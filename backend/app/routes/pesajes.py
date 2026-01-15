@@ -57,6 +57,8 @@ def crear_pesaje():
         nro_orden_trabajo=data.get('nro_orden_trabajo'),
         operador=data.get('operador'),
         color=data.get('color'),
+        pieza_sku=data.get('pieza_sku'),
+        pieza_nombre=data.get('pieza_nombre'),
         observaciones=data.get('observaciones'),
         qr_data_original=data.get('qr_data_original')
     )
@@ -122,6 +124,10 @@ def actualizar_pesaje(id):
         pesaje.nro_orden_trabajo = data['nro_orden_trabajo']
     if 'color' in data:
         pesaje.color = data['color']
+    if 'pieza_sku' in data:
+        pesaje.pieza_sku = data['pieza_sku']
+    if 'pieza_nombre' in data:
+        pesaje.pieza_nombre = data['pieza_nombre']
     if 'operador' in data:
         pesaje.operador = data['operador']
     if 'observaciones' in data:

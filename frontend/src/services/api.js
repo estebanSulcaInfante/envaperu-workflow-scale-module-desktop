@@ -67,4 +67,16 @@ export const balanzaApi = {
     api.get('/balanza/pesos-pendientes')
 };
 
+// ===== Sync (catálogo moldes) =====
+export const syncApi = {
+  syncMoldes: () =>
+    api.post('/sync/moldes'),
+  
+  getCachedPiezas: (moldeNombre) =>
+    api.get(`/sync/cache/piezas/${encodeURIComponent(moldeNombre)}`),
+  
+  status: () =>
+    api.get('/sync/status')
+};
+
 export default api;

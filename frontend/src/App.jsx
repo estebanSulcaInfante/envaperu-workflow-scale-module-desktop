@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { pesajesApi, balanzaApi } from './services/api';
+import { pesajesApi, balanzaApi, syncApi } from './services/api';
 
 function App() {
   // Connection state
@@ -19,8 +19,13 @@ function App() {
     fecha_orden_trabajo: '',
     nro_orden_trabajo: '',
     operador: '',
-    color: ''
+    color: '',
+    pieza_sku: '',
+    pieza_nombre: ''
   });
+  
+  // Piezas disponibles para el molde actual (del cache)
+  const [piezasDisponibles, setPiezasDisponibles] = useState([]);
   
   // Pesajes list
   const [pesajes, setPesajes] = useState([]);
@@ -120,17 +125,31 @@ function App() {
     try {
       const { data } = await pesajesApi.parseQr(qrString);
       if (data.status === 'ok') {
+        const moldeNombre = data.data.molde || '';
         setFormData(prev => ({
           ...prev,
-          molde: data.data.molde || '',
+          molde: moldeNombre,
           maquina: data.data.maquina || '',
           nro_op: data.data.nro_op || '',
           turno: data.data.turno || '',
           fecha_orden_trabajo: data.data.fecha_orden_trabajo || '',
-          nro_orden_trabajo: data.data.nro_orden_trabajo || ''
+          nro_orden_trabajo: data.data.nro_orden_trabajo || '',
+          pieza_sku: '',
+          pieza_nombre: ''
         }));
+        
+        // Buscar piezas cacheadas para este molde
+        if (moldeNombre) {
+          try {
+            const { data: piezasData } = await syncApi.getCachedPiezas(moldeNombre);
+            setPiezasDisponibles(piezasData || []);
+          } catch (err) {
+            console.log('No hay piezas cacheadas para este molde');
+            setPiezasDisponibles([]);
+          }
+        }
+        
         showToast('✅ QR escaneado correctamente');
-        // Clear QR input after successful scan
         setQrInput('');
       }
     } catch (err) {
@@ -441,6 +460,35 @@ function App() {
                   placeholder="Color del producto"
                 />
               </div>
+              
+              {/* Selector de Pieza/Componente */}
+              {piezasDisponibles.length > 0 && (
+                <div className="form-group">
+                  <label>Pieza / Componente</label>
+                  <select
+                    value={formData.pieza_sku}
+                    onChange={(e) => {
+                      const selectedPieza = piezasDisponibles.find(p => p.pieza_sku === e.target.value);
+                      setFormData(prev => ({
+                        ...prev,
+                        pieza_sku: e.target.value,
+                        pieza_nombre: selectedPieza?.pieza_nombre || ''
+                      }));
+                    }}
+                    style={{ borderColor: formData.pieza_sku ? 'var(--success)' : 'var(--warning)' }}
+                  >
+                    <option value="">Pieza Completa (Kit)</option>
+                    {piezasDisponibles.map(p => (
+                      <option key={p.pieza_sku} value={p.pieza_sku}>
+                        {p.pieza_nombre} ({p.tipo})
+                      </option>
+                    ))}
+                  </select>
+                  <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                    Selecciona qué componente estás pesando
+                  </small>
+                </div>
+              )}
             </div>
 
             {/* Weight Display */}

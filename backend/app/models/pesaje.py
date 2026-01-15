@@ -24,6 +24,11 @@ class Pesaje(db.Model):
     # Datos adicionales
     operador = db.Column(db.String(100), nullable=True)  # OPE: Admin
     color = db.Column(db.String(50), nullable=True)  # COL:
+    
+    # Pieza/componente seleccionado (del dropdown)
+    pieza_sku = db.Column(db.String(50), nullable=True)
+    pieza_nombre = db.Column(db.String(100), nullable=True)
+    
     observaciones = db.Column(db.Text, nullable=True)
     
     # Estado del sticker
@@ -50,6 +55,8 @@ class Pesaje(db.Model):
             'nro_orden_trabajo': self.nro_orden_trabajo,
             'operador': self.operador,
             'color': self.color,
+            'pieza_sku': self.pieza_sku,
+            'pieza_nombre': self.pieza_nombre,
             'observaciones': self.observaciones,
             'sticker_impreso': self.sticker_impreso,
             'fecha_impresion': self.fecha_impresion.isoformat() if self.fecha_impresion else None,

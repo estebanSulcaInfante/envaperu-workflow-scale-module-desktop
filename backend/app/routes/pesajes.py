@@ -1,5 +1,7 @@
 from datetime import datetime, date, timezone
-from flask import Blueprint, request, jsonify
+import io
+import openpyxl
+from flask import Blueprint, request, jsonify, send_file
 from app import db
 from app.models.pesaje import Pesaje
 from app.services.sticker_service import get_sticker_service
@@ -213,3 +215,102 @@ def marcar_sincronizado():
     
     db.session.commit()
     return jsonify({'status': 'ok', 'count': len(ids)})
+
+
+@pesajes_bp.route('/exportar', methods=['GET'])
+def exportar_pesajes():
+    """Exporta los pesajes a un archivo Excel (.xlsx) filtrado por rango de fechas"""
+    fecha_inicio_str = request.args.get('fecha_inicio')
+    fecha_fin_str = request.args.get('fecha_fin')
+    
+    query = Pesaje.query
+    
+    # Validar y aplicar filtros de fecha
+    try:
+        if fecha_inicio_str:
+            fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
+            # Inicio del día en UTC
+            inicio_dt = datetime.combine(fecha_inicio, datetime.min.time(), tzinfo=timezone.utc)
+            query = query.filter(Pesaje.fecha_hora >= inicio_dt)
+            
+        if fecha_fin_str:
+            fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+            # Fin del día en UTC
+            fin_dt = datetime.combine(fecha_fin, datetime.max.time(), tzinfo=timezone.utc)
+            query = query.filter(Pesaje.fecha_hora <= fin_dt)
+    except ValueError:
+        return jsonify({'error': 'Formato de fecha inválido. Usar YYYY-MM-DD'}), 400
+        
+    pesajes = query.order_by(Pesaje.fecha_hora.desc()).all()
+    
+    # Crear Excel con openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Pesajes"
+    
+    # Definir columnas
+    columnas = [
+        "ID", "Fecha/Hora", "Peso (kg)", "Peso Unit. (g)", "Nro OP", "Turno", "Fecha OT", "Nro OT",
+        "Máquina", "Molde", "Color", "Operador", "Pieza SKU", "Pieza Nombre",
+        "Observaciones", "Sincronizado"
+    ]
+    ws.append(columnas)
+    
+    # Agregar datos
+    for p in pesajes:
+        fh_str = p.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if p.fecha_hora else ''
+        fot_str = p.fecha_orden_trabajo.strftime('%Y-%m-%d') if p.fecha_orden_trabajo else ''
+        
+        fila = [
+            p.id,
+            fh_str,
+            p.peso_kg,
+            p.peso_unitario_teorico,
+            p.nro_op,
+            p.turno,
+            fot_str,
+            p.nro_orden_trabajo,
+            p.maquina,
+            p.molde,
+            p.color,
+            p.operador,
+            p.pieza_sku,
+            p.pieza_nombre,
+            p.observaciones,
+            "Sí" if p.sincronizado else "No"
+        ]
+        ws.append(fila)
+        
+    # Ajustar ancho de columnas básico
+    for col in ws.columns:
+        max_length = 0
+        column = col[0].column_letter # Obtener la letra de la columna
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2)
+        ws.column_dimensions[column].width = min(adjusted_width, 50)
+        
+    # Guardar a bytes en memoria
+    excel_file = io.BytesIO()
+    wb.save(excel_file)
+    excel_file.seek(0)
+    
+    # Nombre de archivo dinámico
+    rango_fechas = ""
+    if fecha_inicio_str and fecha_fin_str:
+        rango_fechas = f"_{fecha_inicio_str}_a_{fecha_fin_str}"
+    elif fecha_inicio_str:
+        rango_fechas = f"_desde_{fecha_inicio_str}"
+        
+    filename = f"pesajes{rango_fechas}.xlsx"
+    
+    return send_file(
+        excel_file,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename
+    )

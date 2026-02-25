@@ -8,6 +8,7 @@ function GenerarRDP({ formData, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [resultado, setResultado] = useState(null);
+  const [modoOffline, setModoOffline] = useState(false);
   
   // Estado para anular
   const [showAnular, setShowAnular] = useState(false);
@@ -21,7 +22,8 @@ function GenerarRDP({ formData, onClose }) {
     maquina: formData?.maquina || '',
     turno: formData?.turno || '',
     fecha_ot: formData?.fecha_orden_trabajo || new Date().toISOString().split('T')[0],
-    operador: formData?.operador || ''
+    operador: formData?.operador || '',
+    color: formData?.color || ''
   });
 
   useEffect(() => {
@@ -34,16 +36,20 @@ function GenerarRDP({ formData, onClose }) {
       setSiguiente(data.siguiente);
       setDisponibles(data.disponibles_local || data.disponibles || 0);
       setError(null);
+      setModoOffline(false);
     } catch (err) {
       console.error('Error obteniendo siguiente:', err);
-      setError('Sin conexión al servidor central');
-      setSiguiente(null);
+      // Habilitar modo offline para ingreso manual
+      setModoOffline(true);
+      setSiguiente(''); 
+      setDisponibles(0);
+      setError('Servidor inaccesible. Modo Offline activado: Ingresa el correlativo manualmente.');
     }
   };
 
   const handleGenerar = async () => {
-    if (!siguiente) {
-      setError('No hay correlativos disponibles');
+    if (!siguiente || siguiente.trim() === '') {
+      setError('Debe indicar un correlativo');
       return;
     }
     
@@ -51,11 +57,21 @@ function GenerarRDP({ formData, onClose }) {
     setError(null);
     
     try {
-      const { data } = await rdpApi.generar(rdpData);
+      const payload = { ...rdpData };
+      if (modoOffline) {
+         payload.correlativo_manual = siguiente.trim();
+      }
+      
+      const { data } = await rdpApi.generar(payload);
       setResultado(data);
-      setSiguiente(null);
-      setDisponibles(data.disponibles_local || 0);
-      fetchSiguiente();
+      if (!modoOffline) {
+          setSiguiente(null);
+          setDisponibles(data.disponibles_local || 0);
+          fetchSiguiente();
+      } else {
+          // En offline, lo blanqueamos para que puedan ingresar el sgt
+          setSiguiente('');
+      }
     } catch (err) {
       console.error('Error generando RDP:', err);
       setError(err.response?.data?.error || 'Error generando RDP');
@@ -109,37 +125,50 @@ function GenerarRDP({ formData, onClose }) {
         
         <div className="rdp-content">
           <div className="rdp-correlativo">
-            <div className="rdp-corr-info">
+            <div className="rdp-corr-info" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span className="rdp-label">Correlativo:</span>
-              <span className="rdp-value">{siguiente || '---'}</span>
+              {modoOffline ? (
+                 <input 
+                   type="text" 
+                   value={siguiente || ''} 
+                   onChange={(e) => setSiguiente(e.target.value)}
+                   placeholder="Ej: OT-1234"
+                   style={{ fontSize: '1.2rem', padding: '4px 8px', width: '150px' }}
+                 />
+              ) : (
+                 <span className="rdp-value">{siguiente || '---'}</span>
+              )}
             </div>
             <div className="rdp-cache-info">
-              <span className="rdp-cache-count">{disponibles} disponibles</span>
+              {modoOffline ? (
+                <span className="rdp-cache-count" style={{ color: 'var(--warning)' }}>⚠️ Modo Manual</span>
+              ) : (
+                <span className="rdp-cache-count">{disponibles} disponibles</span>
+              )}
             </div>
           </div>
           
           <div className="rdp-form">
-            <div className="rdp-row">
-              <div className="rdp-field">
-                <label>N° OP</label>
-                <input 
-                  name="nro_op"
-                  value={rdpData.nro_op}
-                  onChange={handleChange}
-                  placeholder="OP-1322"
-                />
-              </div>
-              <div className="rdp-field">
-                <label>Turno</label>
-                <select name="turno" value={rdpData.turno} onChange={handleChange}>
-                  <option value="">Seleccionar</option>
-                  <option value="DIURNO">DIURNO</option>
-                  <option value="NOCTURNO">NOCTURNO</option>
-                </select>
-              </div>
+            <div className="rdp-field">
+              <label>N° OP</label>
+              <input 
+                name="nro_op"
+                value={rdpData.nro_op}
+                onChange={handleChange}
+                placeholder="OP-1322"
+              />
             </div>
             
             <div className="rdp-field">
+              <label>Turno</label>
+              <select name="turno" value={rdpData.turno} onChange={handleChange}>
+                <option value="">Seleccionar</option>
+                <option value="DIURNO">DIURNO</option>
+                <option value="NOCTURNO">NOCTURNO</option>
+              </select>
+            </div>
+            
+            <div className="rdp-field full-width">
               <label>Molde</label>
               <input 
                 name="molde"
@@ -149,25 +178,24 @@ function GenerarRDP({ formData, onClose }) {
               />
             </div>
             
-            <div className="rdp-row">
-              <div className="rdp-field">
-                <label>Máquina</label>
-                <input 
-                  name="maquina"
-                  value={rdpData.maquina}
-                  onChange={handleChange}
-                  placeholder="INY-05"
-                />
-              </div>
-              <div className="rdp-field">
-                <label>Fecha</label>
-                <input 
-                  type="date"
-                  name="fecha_ot"
-                  value={rdpData.fecha_ot}
-                  onChange={handleChange}
-                />
-              </div>
+            <div className="rdp-field">
+              <label>Máquina</label>
+              <input 
+                name="maquina"
+                value={rdpData.maquina}
+                onChange={handleChange}
+                placeholder="INY-05"
+              />
+            </div>
+            
+            <div className="rdp-field">
+              <label>Fecha</label>
+              <input 
+                type="date"
+                name="fecha_ot"
+                value={rdpData.fecha_ot}
+                onChange={handleChange}
+              />
             </div>
             
             <div className="rdp-field">
@@ -177,6 +205,38 @@ function GenerarRDP({ formData, onClose }) {
                 value={rdpData.operador}
                 onChange={handleChange}
                 placeholder="Nombre del operador"
+                list="operadores-rdp-list"
+              />
+              <datalist id="operadores-rdp-list">
+                  <option value="Almea Zapata Maria Jose" />
+                  <option value="Pinedo Nelson" />
+                  <option value="Cedeño Cedeño Juan Carlos" />
+                  <option value="Sulca Cahuana Carlos" />
+                  <option value="Pinedo Cruces Jose Luis" />
+                  <option value="Rengifo Chumbe Jose Luis" />
+                  <option value="Zapata Guatarama Crisalida" />
+                  <option value="Villamizar Said" />
+                  <option value="Malaver Nestor" />
+                  <option value="Henriquez Silfredo" />
+                  <option value="Vilchez Marjorie" />
+                  <option value="Cruces Juana" />
+                  <option value="Linariz Yerica Isabel" />
+                  <option value="Casablanca Jair" />
+                  <option value="Gonzalez Perez Josder Johan" />
+                  <option value="Requena Gabriel Armando" />
+                  <option value="Calderas Algimiro" />
+                  <option value="Luna Jheoriannys" />
+                  <option value="Murga Cynthia" />
+              </datalist>
+            </div>
+
+            <div className="rdp-field">
+              <label>Color</label>
+              <input 
+                name="color"
+                value={rdpData.color}
+                onChange={handleChange}
+                placeholder="Color"
               />
             </div>
           </div>

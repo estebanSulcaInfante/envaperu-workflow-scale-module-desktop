@@ -16,6 +16,9 @@
   border-radius: 12px;
   width: 90%;
   max-width: 500px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 }
@@ -52,6 +55,8 @@
 
 .rdp-content {
   padding: 20px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .rdp-correlativo {
@@ -76,18 +81,14 @@
 }
 
 .rdp-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
 }
 
-.rdp-row {
-  display: flex;
-  gap: 12px;
-}
-
-.rdp-row .rdp-field {
-  flex: 1;
+/* Modificamos los campos que queremos que ocupen toda la fila */
+.rdp-field.full-width {
+  grid-column: 1 / -1;
 }
 
 .rdp-field {

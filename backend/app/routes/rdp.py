@@ -59,25 +59,31 @@ def generar_rdp():
     
     if not data:
         return jsonify({'error': 'Faltan datos'}), 400
+        
+    # Verificar si viene un correlativo manual (Modo Offline)
+    correlativo_manual = data.get('correlativo_manual')
     
-    # 1. Consumir del cache local
-    correlativo = consumir_local(
-        nro_op=data.get('nro_op'),
-        molde=data.get('molde')
-    )
-    
-    # Si no hay correlativos locales, intentar reponer y reintentar
-    if correlativo is None:
-        reponer_cache()
+    if correlativo_manual:
+        correlativo = correlativo_manual
+    else:
+        # 1. Consumir del cache local
         correlativo = consumir_local(
             nro_op=data.get('nro_op'),
             molde=data.get('molde')
         )
-    
-    if correlativo is None:
-        return jsonify({
-            'error': 'No hay correlativos disponibles (local ni central)'
-        }), 503
+        
+        # Si no hay correlativos locales, intentar reponer y reintentar
+        if correlativo is None:
+            reponer_cache()
+            correlativo = consumir_local(
+                nro_op=data.get('nro_op'),
+                molde=data.get('molde')
+            )
+        
+        if correlativo is None:
+            return jsonify({
+                'error': 'No hay correlativos disponibles (local ni central)'
+            }), 503
     
     # 2. Construir datos RDP
     rdp_data = {
@@ -100,13 +106,14 @@ def generar_rdp():
     except Exception as e:
         print(f"Error imprimiendo sticker RDP: {e}")
     
-    # 5. Auto-reponer cache en background si es necesario
-    disponibles = get_disponibles_count()
-    if necesita_reponer():
-        try:
-            reponer_cache()
-        except Exception as e:
-            print(f"Warning: No se pudo reponer cache: {e}")
+    # 5. Auto-reponer cache en background si es necesario (solo si no es manual)
+    if not correlativo_manual:
+        disponibles = get_disponibles_count()
+        if necesita_reponer():
+            try:
+                reponer_cache()
+            except Exception as e:
+                print(f"Warning: No se pudo reponer cache: {e}")
     
     return jsonify({
         'success': True,

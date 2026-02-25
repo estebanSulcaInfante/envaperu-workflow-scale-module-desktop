@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { pesajesApi, balanzaApi, syncApi } from './services/api';
-import GenerarRDP from './components/GenerarRDP';
+import { pesajesApi, balanzaApi, syncApi, rdpApi } from './services/api';
+import ExportarExcel from './components/ExportarExcel';
 
 function App() {
   // Connection state
@@ -22,7 +22,8 @@ function App() {
     operador: '',
     color: '',
     pieza_sku: '',
-    pieza_nombre: ''
+    pieza_nombre: '',
+    peso_unitario_teorico: ''
   });
   
   // Piezas disponibles para el molde actual (del cache)
@@ -34,7 +35,9 @@ function App() {
   // UI state
   const [toast, setToast] = useState(null);
   const [stickerPreview, setStickerPreview] = useState(null);
-  const [showRdpModal, setShowRdpModal] = useState(false);
+  const [showExcelModal, setShowExcelModal] = useState(false);
+  const [generandoOT, setGenerandoOT] = useState(false);
+  const [activeTab, setActiveTab] = useState('crear-ot');
 
   // Load status and pesajes on mount
   useEffect(() => {
@@ -128,14 +131,17 @@ function App() {
       const { data } = await pesajesApi.parseQr(qrString);
       if (data.status === 'ok') {
         const moldeNombre = data.data.molde || '';
+        const todayStr = new Date().toLocaleDateString('en-CA'); // Formato YYYY-MM-DD local
+        
         setFormData(prev => ({
           ...prev,
           molde: moldeNombre,
           maquina: data.data.maquina || '',
           nro_op: data.data.nro_op || '',
           turno: data.data.turno || '',
-          fecha_orden_trabajo: data.data.fecha_orden_trabajo || '',
+          fecha_orden_trabajo: data.data.fecha_orden_trabajo || todayStr,
           nro_orden_trabajo: data.data.nro_orden_trabajo || '',
+          peso_unitario_teorico: data.data.peso_unitario_teorico || '',
           pieza_sku: '',
           pieza_nombre: ''
         }));
@@ -288,10 +294,49 @@ function App() {
       turno: '',
       fecha_orden_trabajo: '',
       nro_orden_trabajo: '',
+      peso_unitario_teorico: '',
       operador: '',
       color: ''
     });
     setStickerPreview(null);
+  };
+
+  // Generar e imprimir sticker de OT directamente desde el formulario
+  const handleGenerarOT = async () => {
+    if (!formData.nro_orden_trabajo || !formData.nro_orden_trabajo.trim()) {
+      showToast('⚠️ Ingresa un Nro de Orden de Trabajo', 'error');
+      return;
+    }
+    if (!formData.nro_op) {
+      showToast('⚠️ Escanea una OP primero', 'error');
+      return;
+    }
+    
+    setGenerandoOT(true);
+    try {
+      const payload = {
+        correlativo_manual: formData.nro_orden_trabajo.trim(),
+        nro_op: formData.nro_op,
+        molde: formData.molde,
+        maquina: formData.maquina,
+        turno: formData.turno,
+        fecha_ot: formData.fecha_orden_trabajo,
+        operador: formData.operador,
+        color: formData.color
+      };
+
+      const { data } = await rdpApi.generar(payload);
+      if (data.impreso) {
+        showToast(`✅ Sticker de OT "${formData.nro_orden_trabajo}" impreso`);
+      } else {
+        showToast(`✅ OT "${formData.nro_orden_trabajo}" generada (sin impresora)`);
+      }
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Error al generar OT';
+      showToast(`❌ ${msg}`, 'error');
+    } finally {
+      setGenerandoOT(false);
+    }
   };
 
   const formatDate = (isoDate) => {
@@ -313,11 +358,12 @@ function App() {
         <div className="header-right">
           <button 
             className="btn btn-secondary"
-            onClick={() => setShowRdpModal(true)}
+            onClick={() => setShowExcelModal(true)}
             style={{ marginRight: '12px' }}
           >
-            📋 Generar RDP
+            📊 Exportar Excel
           </button>
+
           <div 
             className={`connection-badge ${connected ? 'connected' : 'disconnected'}`}
             onClick={handleConnect}
@@ -329,245 +375,306 @@ function App() {
         </div>
       </header>
 
-      {/* Status Banner - Workflow Guidance */}
-      {!connected && (
-        <div className="status-banner warning">
-          <span className="banner-icon">⚠️</span>
-          <span className="banner-text">
-            <strong>Paso 1:</strong> Conecta la balanza haciendo clic en el botón "Balanza Desconectada" arriba
-          </span>
-          <button className="btn btn-sm btn-primary" onClick={handleConnect}>
-            🔌 Conectar Balanza
-          </button>
-        </div>
-      )}
-      
-      {connected && !formData.nro_op && (
-        <div className="status-banner info">
-          <span className="banner-icon">📷</span>
-          <span className="banner-text">
-            <strong>Paso 2:</strong> Escanea el código QR de una Orden de Producción para comenzar a registrar pesos
-          </span>
-        </div>
-      )}
-      
-      {connected && formData.nro_op && (
-        <div className="status-banner success">
-          <span className="banner-icon">✅</span>
-          <span className="banner-text">
-            <strong>Listo:</strong> OP {formData.nro_op} cargada. Coloca productos en la balanza para registrar automáticamente.
-          </span>
-        </div>
+      {/* Tab Navigation */}
+      <div className="tab-nav">
+        <button 
+          className={`tab-btn ${activeTab === 'crear-ot' ? 'active' : ''}`}
+          onClick={() => setActiveTab('crear-ot')}
+        >
+          📋 Crear OT
+        </button>
+        <button 
+          className={`tab-btn ${activeTab === 'pesar' ? 'active' : ''}`}
+          onClick={() => setActiveTab('pesar')}
+        >
+          ⚖️ Pesar
+        </button>
+      </div>
+
+      {/* ========== TAB 1: CREAR OT ========== */}
+      {activeTab === 'crear-ot' && (
+        <main className="main-content">
+          <div className="panel">
+            <div className="panel-header">📋 CREAR ORDEN DE TRABAJO</div>
+            <div className="panel-body">
+              
+              {/* QR Input - Escanear OP */}
+              <div className="qr-section">
+                <div className="qr-input-group">
+                  <label>📷 Escanear QR de Orden de Producción</label>
+                  <input
+                    type="text"
+                    value={qrInput}
+                    onChange={(e) => handleQrInput(e.target.value)}
+                    onKeyDown={handleQrKeyDown}
+                    placeholder={formData.nro_op ? "✅ QR escaneado - Escanear otra OP..." : "⏳ Esperando escaneo de QR..."}
+                    autoFocus
+                    className={!formData.nro_op ? 'input-highlight' : ''}
+                  />
+                  {!formData.nro_op && (
+                    <small className="input-hint">👆 Escanea el QR de la hoja de OP aquí</small>
+                  )}
+                </div>
+              </div>
+
+              {/* Form Fields para OT */}
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>N° OP</label>
+                  <input type="text" name="nro_op" value={formData.nro_op} disabled />
+                </div>
+                <div className="form-group">
+                  <label>Molde</label>
+                  <input type="text" name="molde" value={formData.molde} disabled />
+                </div>
+                <div className="form-group">
+                  <label>Máquina</label>
+                  <input type="text" name="maquina" value={formData.maquina} disabled />
+                </div>
+                <div className="form-group">
+                  <label>Turno</label>
+                  <select name="turno" value={formData.turno} onChange={handleInputChange}>
+                    <option value="">Seleccionar...</option>
+                    <option value="DIURNO">DIURNO</option>
+                    <option value="NOCTURNO">NOCTURNO</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Fecha</label>
+                  <input
+                    type="date"
+                    name="fecha_orden_trabajo"
+                    value={formData.fecha_orden_trabajo}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Nro Orden de Trabajo (Correlativo)</label>
+                  <input
+                    type="text"
+                    name="nro_orden_trabajo"
+                    value={formData.nro_orden_trabajo}
+                    onChange={handleInputChange}
+                    placeholder="Ej: 054231"
+                    className="highlight"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="actions-row">
+                <button 
+                  className="btn btn-primary"
+                  onClick={handleGenerarOT}
+                  disabled={generandoOT || !formData.nro_orden_trabajo || !formData.nro_op}
+                  style={{ marginRight: '12px' }}
+                >
+                  {generandoOT ? '⏳ Generando...' : '🖨️ Imprimir Sticker de OT'}
+                </button>
+                <button className="btn btn-secondary" onClick={handleLimpiar}>
+                  🔄 Limpiar formulario
+                </button>
+              </div>
+
+              {/* Sticker Preview */}
+              {stickerPreview && (
+                <div className="sticker-preview">
+                  {stickerPreview}
+                  <div className="qr-placeholder">[QR CODE]</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
       )}
 
-      {/* Main Content */}
-      <main className="main-content">
-        {/* Left Panel - Form */}
-        <div className="panel">
-          <div className="panel-header">📋 ASIGNACIÓN DE TAREAS</div>
-          <div className="panel-body">
-            
-            {/* QR Input */}
-            <div className="qr-section">
-              <div className="qr-input-group">
-                <label>📷 Escanear QR de Orden de Producción</label>
-                <input
-                  type="text"
-                  value={qrInput}
-                  onChange={(e) => handleQrInput(e.target.value)}
-                  onKeyDown={handleQrKeyDown}
-                  placeholder={formData.nro_op ? "✅ QR escaneado - Escanear otra OP..." : "⏳ Esperando escaneo de QR..."}
-                  autoFocus
-                  className={!formData.nro_op ? 'input-highlight' : ''}
-                />
-                {!formData.nro_op && (
-                  <small className="input-hint">👆 Escanea el QR de la hoja de OP aquí</small>
+      {/* ========== TAB 2: PESAR ========== */}
+      {activeTab === 'pesar' && (
+        <main className="main-content">
+          {/* Left Panel - Pesaje Form */}
+          <div className="panel">
+            <div className="panel-header">⚖️ REGISTRO DE PESAJE</div>
+            <div className="panel-body">
+
+              {/* Status Banner */}
+              {!connected && (
+                <div className="status-banner warning" style={{ margin: '0 0 16px 0', borderRadius: '8px' }}>
+                  <span className="banner-icon">⚠️</span>
+                  <span className="banner-text">
+                    <strong>Paso 1:</strong> Conecta la balanza
+                  </span>
+                  <button className="btn btn-sm btn-primary" onClick={handleConnect}>
+                    🔌 Conectar
+                  </button>
+                </div>
+              )}
+
+              {/* QR Input - Escanear OT ya impresa */}
+              <div className="qr-section">
+                <div className="qr-input-group">
+                  <label>📷 Escanear QR de Orden de Trabajo (OT impresa)</label>
+                  <input
+                    type="text"
+                    value={qrInput}
+                    onChange={(e) => handleQrInput(e.target.value)}
+                    onKeyDown={handleQrKeyDown}
+                    placeholder={formData.nro_orden_trabajo ? `✅ OT ${formData.nro_orden_trabajo} cargada` : "⏳ Escanear QR de la OT..."}
+                    autoFocus
+                    className={!formData.nro_orden_trabajo ? 'input-highlight' : ''}
+                  />
+                  {!formData.nro_orden_trabajo && (
+                    <small className="input-hint">👆 Escanea el sticker QR de la OT impresa para cargar los datos</small>
+                  )}
+                </div>
+              </div>
+
+              {/* Datos heredados de la OT (solo lectura) */}
+              {formData.nro_op && (
+                <div style={{ background: 'var(--bg-secondary, #f0f4f8)', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px', fontSize: '0.9rem', color: 'var(--text-secondary, #666)' }}>
+                  <strong>OT:</strong> {formData.nro_orden_trabajo || '—'} &nbsp;|&nbsp;
+                  <strong>OP:</strong> {formData.nro_op} &nbsp;|&nbsp;
+                  <strong>Molde:</strong> {formData.molde} &nbsp;|&nbsp;
+                  <strong>Máquina:</strong> {formData.maquina} &nbsp;|&nbsp;
+                  <strong>Turno:</strong> {formData.turno || '—'}
+                </div>
+              )}
+
+              {/* Form Fields exclusivos del pesaje */}
+              <div className="form-grid">
+                <div className="form-group">
+                  <label>Operador</label>
+                  <input
+                    type="text"
+                    name="operador"
+                    value={formData.operador}
+                    onChange={handleInputChange}
+                    placeholder="Nombre del operador"
+                    list="operadores-list"
+                  />
+                  <datalist id="operadores-list">
+                    <option value="Almea Zapata Maria Jose" />
+                    <option value="Pinedo Nelson" />
+                    <option value="Cedeño Cedeño Juan Carlos" />
+                    <option value="Sulca Cahuana Carlos" />
+                    <option value="Pinedo Cruces Jose Luis" />
+                    <option value="Rengifo Chumbe Jose Luis" />
+                    <option value="Zapata Guatarama Crisalida" />
+                    <option value="Villamizar Said" />
+                    <option value="Malaver Nestor" />
+                    <option value="Henriquez Silfredo" />
+                    <option value="Vilchez Marjorie" />
+                    <option value="Cruces Juana" />
+                    <option value="Linariz Yerica Isabel" />
+                    <option value="Casablanca Jair" />
+                    <option value="Gonzalez Perez Josder Johan" />
+                    <option value="Requena Gabriel Armando" />
+                    <option value="Calderas Algimiro" />
+                    <option value="Luna Jheoriannys" />
+                    <option value="Murga Cynthia" />
+                  </datalist>
+                </div>
+                <div className="form-group">
+                  <label>Color</label>
+                  <input
+                    type="text"
+                    name="color"
+                    value={formData.color}
+                    onChange={handleInputChange}
+                    placeholder="Color del producto"
+                  />
+                </div>
+                
+                {/* Selector de Pieza/Componente */}
+                {piezasDisponibles.length > 0 && (
+                  <div className="form-group">
+                    <label>Pieza / Componente</label>
+                    <select
+                      value={formData.pieza_sku}
+                      onChange={(e) => {
+                        const selectedPieza = piezasDisponibles.find(p => p.pieza_sku === e.target.value);
+                        setFormData(prev => ({
+                          ...prev,
+                          pieza_sku: e.target.value,
+                          pieza_nombre: selectedPieza?.pieza_nombre || ''
+                        }));
+                      }}
+                      style={{ borderColor: formData.pieza_sku ? 'var(--success)' : 'var(--warning)' }}
+                    >
+                      <option value="">Pieza Completa (Kit)</option>
+                      {piezasDisponibles.map(p => (
+                        <option key={p.pieza_sku} value={p.pieza_sku}>
+                          {p.pieza_nombre} ({p.tipo})
+                        </option>
+                      ))}
+                    </select>
+                    <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                      Selecciona qué componente estás pesando
+                    </small>
+                  </div>
                 )}
               </div>
-            </div>
 
-            {/* Form Fields */}
-            <div className="form-grid">
-              <div className="form-group">
-                <label>Molde</label>
-                <input
-                  type="text"
-                  name="molde"
-                  value={formData.molde}
-                  onChange={handleInputChange}
-                  disabled
-                />
-              </div>
-              <div className="form-group">
-                <label>Nro Orden de Trabajo</label>
-                <input
-                  type="text"
-                  name="nro_orden_trabajo"
-                  value={formData.nro_orden_trabajo}
-                  onChange={handleInputChange}
-                  className="highlight"
-                />
-              </div>
-              <div className="form-group">
-                <label>Máquina</label>
-                <input
-                  type="text"
-                  name="maquina"
-                  value={formData.maquina}
-                  onChange={handleInputChange}
-                  disabled
-                />
-              </div>
-              <div className="form-group">
-                <label>Fecha Orden de Trabajo</label>
-                <input
-                  type="date"
-                  name="fecha_orden_trabajo"
-                  value={formData.fecha_orden_trabajo}
-                  onChange={handleInputChange}
-                />
-              </div>
-              <div className="form-group">
-                <label>Nro OP</label>
-                <input
-                  type="text"
-                  name="nro_op"
-                  value={formData.nro_op}
-                  onChange={handleInputChange}
-                  disabled
-                />
-              </div>
-              <div className="form-group">
-                <label>Operador</label>
-                <input
-                  type="text"
-                  name="operador"
-                  value={formData.operador}
-                  onChange={handleInputChange}
-                  placeholder="Nombre del operador"
-                />
-              </div>
-              <div className="form-group">
-                <label>Turno</label>
-                <select
-                  name="turno"
-                  value={formData.turno}
-                  onChange={handleInputChange}
-                >
-                  <option value="">Seleccionar...</option>
-                  <option value="DIURNO">DIURNO</option>
-                  <option value="NOCTURNO">NOCTURNO</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Color</label>
-                <input
-                  type="text"
-                  name="color"
-                  value={formData.color}
-                  onChange={handleInputChange}
-                  placeholder="Color del producto"
-                />
-              </div>
-              
-              {/* Selector de Pieza/Componente */}
-              {piezasDisponibles.length > 0 && (
-                <div className="form-group">
-                  <label>Pieza / Componente</label>
-                  <select
-                    value={formData.pieza_sku}
-                    onChange={(e) => {
-                      const selectedPieza = piezasDisponibles.find(p => p.pieza_sku === e.target.value);
-                      setFormData(prev => ({
-                        ...prev,
-                        pieza_sku: e.target.value,
-                        pieza_nombre: selectedPieza?.pieza_nombre || ''
-                      }));
-                    }}
-                    style={{ borderColor: formData.pieza_sku ? 'var(--success)' : 'var(--warning)' }}
-                  >
-                    <option value="">Pieza Completa (Kit)</option>
-                    {piezasDisponibles.map(p => (
-                      <option key={p.pieza_sku} value={p.pieza_sku}>
-                        {p.pieza_nombre} ({p.tipo})
-                      </option>
-                    ))}
-                  </select>
-                  <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                    Selecciona qué componente estás pesando
-                  </small>
-                </div>
-              )}
-            </div>
-
-            {/* Weight Display */}
-            <div className="weight-display-container">
-              <div className="weight-display">
-                <span className="weight-value">{peso.toFixed(1)}</span>
-                <span className="weight-unit">kg</span>
-                <div className="weight-status">
-                  {listening ? '📡 Escuchando balanza...' : 'Conectar balanza para capturar peso'}
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="actions-row">
-              <button className="btn btn-secondary" onClick={handleLimpiar}>
-                🔄 Limpiar formulario
-              </button>
-            </div>
-
-            {/* Sticker Preview */}
-            {stickerPreview && (
-              <div className="sticker-preview">
-                {stickerPreview}
-                <div className="qr-placeholder">[QR CODE]</div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Panel - Recent Pesajes */}
-        <div className="panel">
-          <div className="panel-header">📋 Pesajes Recientes</div>
-          <div className="panel-body">
-            <div className="pesajes-list">
-              {pesajes.length === 0 && (
-                <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
-                  No hay pesajes registrados
-                </p>
-              )}
-              {pesajes.map((p) => (
-                <div key={p.id} className="pesaje-item">
-                  <div className="pesaje-info">
-                    <span className="peso">{p.peso_kg.toFixed(1)} kg</span>
-                    <span className="meta">
-                      {p.molde || 'Sin molde'} • {p.nro_op || ''} • {formatDate(p.fecha_hora)}
-                    </span>
-                  </div>
-                  <div className="pesaje-actions">
-                    <button 
-                      className="btn btn-icon btn-secondary"
-                      onClick={() => handleImprimir(p.id)}
-                      title="Imprimir sticker"
-                    >
-                      🖨️
-                    </button>
-                    <button 
-                      className="btn btn-icon btn-danger"
-                      onClick={() => handleEliminar(p.id)}
-                      title="Eliminar pesaje"
-                    >
-                      🗑️
-                    </button>
+              {/* Weight Display */}
+              <div className="weight-display-container">
+                <div className="weight-display">
+                  <span className="weight-value">{peso.toFixed(1)}</span>
+                  <span className="weight-unit">kg</span>
+                  <div className="weight-status">
+                    {listening ? '📡 Escuchando balanza...' : 'Conectar balanza para capturar peso'}
                   </div>
                 </div>
-              ))}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="actions-row">
+                <button className="btn btn-secondary" onClick={handleLimpiar}>
+                  🔄 Limpiar formulario
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </main>
+
+          {/* Right Panel - Recent Pesajes */}
+          <div className="panel">
+            <div className="panel-header">📋 Pesajes Recientes</div>
+            <div className="panel-body">
+              <div className="pesajes-list">
+                {pesajes.length === 0 && (
+                  <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+                    No hay pesajes registrados
+                  </p>
+                )}
+                {pesajes.map((p) => (
+                  <div key={p.id} className="pesaje-item">
+                    <div className="pesaje-info">
+                      <span className="peso">{p.peso_kg.toFixed(1)} kg</span>
+                      <span className="meta">
+                        {p.molde || 'Sin molde'} • {p.nro_op || ''} • {formatDate(p.fecha_hora)}
+                      </span>
+                    </div>
+                    <div className="pesaje-actions">
+                      <button 
+                        className="btn btn-icon btn-secondary"
+                        onClick={() => handleImprimir(p.id)}
+                        title="Imprimir sticker"
+                      >
+                        🖨️
+                      </button>
+                      <button 
+                        className="btn btn-icon btn-danger"
+                        onClick={() => handleEliminar(p.id)}
+                        title="Eliminar pesaje"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </main>
+      )}
 
       {/* Toast */}
       {toast && (
@@ -576,11 +683,12 @@ function App() {
         </div>
       )}
       
-      {/* Modal Generar RDP */}
-      {showRdpModal && (
-        <GenerarRDP 
-          formData={formData}
-          onClose={() => setShowRdpModal(false)}
+
+
+      {/* Modal Exportar Excel */}
+      {showExcelModal && (
+        <ExportarExcel 
+          onClose={() => setShowExcelModal(false)}
         />
       )}
     </div>

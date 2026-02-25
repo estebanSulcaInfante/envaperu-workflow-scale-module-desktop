@@ -109,8 +109,11 @@ class PrinterService:
                 win32print.ClosePrinter(handle)
                 
         except ImportError:
-            print("[PRINTER] ❌ win32print no instalado. Ejecuta: pip install pywin32")
-            return False
+            print("[PRINTER] 🖥️ Simulando impresión en Linux/OSX (win32print no disponible)")
+            print("-" * 40)
+            print(tspl_code)
+            print("-" * 40)
+            return True
         except Exception as e:
             print(f"[PRINTER] ❌ Error: {e}")
             return False

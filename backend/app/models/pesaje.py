@@ -20,6 +20,7 @@ class Pesaje(db.Model):
     turno = db.Column(db.String(20), nullable=True)  # TUR: Diurno/Nocturno
     fecha_orden_trabajo = db.Column(db.Date, nullable=True)  # F.OT: 2026-01-03
     nro_orden_trabajo = db.Column(db.String(20), nullable=True)  # NºOT: 0000
+    peso_unitario_teorico = db.Column(db.Float, nullable=True) # Del QR entry.885430358
     
     # Datos adicionales
     operador = db.Column(db.String(100), nullable=True)  # OPE: Admin
@@ -53,6 +54,7 @@ class Pesaje(db.Model):
             'turno': self.turno,
             'fecha_orden_trabajo': self.fecha_orden_trabajo.isoformat() if self.fecha_orden_trabajo else None,
             'nro_orden_trabajo': self.nro_orden_trabajo,
+            'peso_unitario_teorico': self.peso_unitario_teorico,
             'operador': self.operador,
             'color': self.color,
             'pieza_sku': self.pieza_sku,
@@ -101,7 +103,7 @@ class Pesaje(db.Model):
                 entry_map = {
                     'entry.374896580': 'nro_op',      # numero_op
                     'entry.1779940712': 'molde',       # molde
-                    'entry.885430358': 'peso_unitario', # peso_unitario
+                    'entry.885430358': 'peso_unitario_teorico', # peso_unitario
                     'entry.873760233': 'maquina',      # maquina
                 }
                 

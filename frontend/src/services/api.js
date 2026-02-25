@@ -40,7 +40,19 @@ export const pesajesApi = {
     api.get('/pesajes/sin-sincronizar'),
   
   marcarSincronizado: (ids) => 
-    api.post('/pesajes/marcar-sincronizado', { ids })
+    api.post('/pesajes/marcar-sincronizado', { ids }),
+    
+  exportarExcel: (fechaInicio, fechaFin) => {
+    let url = '/pesajes/exportar';
+    const params = new URLSearchParams();
+    if (fechaInicio) params.append('fecha_inicio', fechaInicio);
+    if (fechaFin) params.append('fecha_fin', fechaFin);
+    
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+    
+    return api.get(url, { responseType: 'blob' });
+  }
 };
 
 // ===== Balanza =====

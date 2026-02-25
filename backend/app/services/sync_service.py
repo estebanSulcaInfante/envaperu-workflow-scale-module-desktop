@@ -71,6 +71,8 @@ class SyncService:
             'molde': pesaje.molde,
             'color': pesaje.color,
             'operador': pesaje.operador,
+            'pieza_sku': pesaje.pieza_sku,
+            'pieza_nombre': pesaje.pieza_nombre,
             'qr_data': pesaje.qr_data_original
         }
     

@@ -121,8 +121,6 @@ class ScaleService:
             if weight is not None:
                 callback(weight)
             time.sleep(0.1)
-        
-        self.disconnect()
     
     def get_status(self) -> dict:
         """Retorna el estado de la conexión"""

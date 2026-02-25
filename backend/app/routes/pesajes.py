@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from flask import Blueprint, request, jsonify
 from app import db
 from app.models.pesaje import Pesaje
@@ -167,7 +167,7 @@ def imprimir_sticker(id):
     
     if success:
         pesaje.sticker_impreso = True
-        pesaje.fecha_impresion = datetime.utcnow()
+        pesaje.fecha_impresion = datetime.now(timezone.utc)
         db.session.commit()
         log.info(f"✅ Sticker enviado a impresión para pesaje {id}")
         return jsonify({'status': 'ok', 'message': 'Sticker enviado a impresión'})
@@ -208,7 +208,7 @@ def marcar_sincronizado():
     
     Pesaje.query.filter(Pesaje.id.in_(ids)).update({
         'sincronizado': True,
-        'fecha_sincronizacion': datetime.utcnow()
+        'fecha_sincronizacion': datetime.now(timezone.utc)
     }, synchronize_session=False)
     
     db.session.commit()

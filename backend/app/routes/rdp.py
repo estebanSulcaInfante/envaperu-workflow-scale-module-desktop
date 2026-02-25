@@ -1,20 +1,17 @@
-"""
-Rutas para generación de Registros Diarios de Producción (RDP).
-Incluye cache local de correlativos para funcionamiento offline.
-"""
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 import requests
-import os
 from app import db
 
 rdp_bp = Blueprint('rdp', __name__, url_prefix='/api/rdp')
 
-# URL del backend central
-CENTRAL_API = os.getenv('CENTRAL_API_URL', 'http://127.0.0.1:5000')
 
-# Constantes de cache
-CACHE_THRESHOLD = 50  # Reponer cuando quedan <= 50
-CACHE_BATCH_SIZE = 100  # Cuántos pedir al reponer
+def _get_central_api():
+    """Obtiene la URL base del API central (sin /api al final)."""
+    url = current_app.config.get('CENTRAL_API_URL', 'http://127.0.0.1:5000/api')
+    # Si termina en /api, quitarlo porque los endpoints de talonarios lo agregan
+    return url.rstrip('/api') if url.endswith('/api') else url
+
+
 
 
 @rdp_bp.route('/siguiente', methods=['GET'])
@@ -37,7 +34,7 @@ def obtener_siguiente_correlativo():
     
     # Si no hay local, intentar del central
     try:
-        res = requests.get(f'{CENTRAL_API}/api/talonarios/siguiente', timeout=5)
+        res = requests.get(f'{_get_central_api()}/api/talonarios/siguiente', timeout=5)
         if res.ok:
             data = res.json()
             data['fuente'] = 'central'
@@ -215,7 +212,7 @@ def reponer_cache():
     
     try:
         res = requests.post(
-            f'{CENTRAL_API}/api/talonarios/reservar',
+            f'{_get_central_api()}/api/talonarios/reservar',
             json={'cantidad': CACHE_BATCH_SIZE},
             timeout=10
         )

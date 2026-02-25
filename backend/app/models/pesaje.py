@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from app import db
 
 
@@ -11,7 +11,7 @@ class Pesaje(db.Model):
     
     # Datos del pesaje
     peso_kg = db.Column(db.Float, nullable=False)
-    fecha_hora = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    fecha_hora = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     
     # Datos de la Orden de Producción (del QR escaneado)
     molde = db.Column(db.String(100), nullable=True)  # MOL: CERNIDOR ROMANO

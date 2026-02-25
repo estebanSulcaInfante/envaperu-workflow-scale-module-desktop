@@ -68,7 +68,7 @@ def sync_moldes():
     Sincroniza el catálogo de moldes desde el backend central.
     Descarga moldes y piezas, y los guarda en cache local.
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
     import requests
     from app import db
     from app.models.molde_cache import MoldePiezasCache
@@ -80,7 +80,7 @@ def sync_moldes():
     
     try:
         # Descargar moldes del API central
-        response = requests.get(f"{central_url}/api/moldes/exportar", timeout=10)
+        response = requests.get(f"{central_url}/moldes/exportar", timeout=10)
         response.raise_for_status()
         moldes = response.json()
         
@@ -101,7 +101,7 @@ def sync_moldes():
                     tipo=pieza.get('tipo', 'SIMPLE'),
                     cavidades=pieza.get('cavidades'),
                     peso_unitario_gr=pieza.get('peso_unitario_gr'),
-                    updated_at=datetime.utcnow()
+                    updated_at=datetime.now(timezone.utc)
                 )
                 db.session.add(cache_entry)
                 count += 1

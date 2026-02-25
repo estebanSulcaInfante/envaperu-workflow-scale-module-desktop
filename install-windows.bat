@@ -35,7 +35,7 @@ echo Instalando librerias de Python...
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 echo Inicializando Base de Datos...
-python -c "from app import db, create_app; app=create_app(); with app.app_context(): db.create_all()"
+python -c "from app import create_app; create_app()"
 cd ..
 
 :: 4. Preparar Frontend

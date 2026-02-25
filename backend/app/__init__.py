@@ -74,7 +74,8 @@ def create_app():
     
     # Initialize extensions
     db.init_app(app)
-    CORS(app)
+    # Configure CORS - Permissive for dev
+    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
     
     # Register blueprints
     from app.routes.pesajes import pesajes_bp

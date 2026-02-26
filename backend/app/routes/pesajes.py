@@ -57,6 +57,7 @@ def crear_pesaje():
         turno=data.get('turno'),
         fecha_orden_trabajo=fecha_ot,
         nro_orden_trabajo=data.get('nro_orden_trabajo'),
+        peso_unitario_teorico=data.get('peso_unitario_teorico'),
         operador=data.get('operador'),
         color=data.get('color'),
         pieza_sku=data.get('pieza_sku'),
@@ -124,6 +125,8 @@ def actualizar_pesaje(id):
         pesaje.turno = data['turno']
     if 'nro_orden_trabajo' in data:
         pesaje.nro_orden_trabajo = data['nro_orden_trabajo']
+    if 'peso_unitario_teorico' in data:
+        pesaje.peso_unitario_teorico = data['peso_unitario_teorico']
     if 'color' in data:
         pesaje.color = data['color']
     if 'pieza_sku' in data:

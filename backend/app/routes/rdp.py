@@ -329,11 +329,11 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
         lines.append(f'BAR {x}, {y}, 360, 2')
         y += 5
 
-        # QR Code centrado dentro del sticker
-        lines.append(f'QRCODE {x + 120}, {y}, L, 3, A, 0, "{qr_data}"')
-        y += 125
+        # QR Code centrado dentro del sticker (nivel 5 para mayor tamaño)
+        lines.append(f'QRCODE {x + 90}, {y}, L, 5, A, 0, "{qr_data}"')
+        y += 155
 
-        # Barra final gruesa
+        # Barra final gruesa (alineada con sticker pesaje ~y=350)
         lines.append(f'BAR {x}, {y}, 360, 3')
 
         return '\n'.join(lines)

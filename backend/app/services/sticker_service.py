@@ -100,9 +100,11 @@ class StickerService:
         
         # Generar comando completo
         tspl = f"""
-SIZE 105 mm, 50 mm
-GAP 2 mm, 0 mm
+SIZE 109 mm, 50 mm
+GAP 3 mm, 0 mm
+SET REFERENCE 0,0
 DIRECTION 1
+HOME
 CLS
 
 ; === STICKER IZQUIERDO ===

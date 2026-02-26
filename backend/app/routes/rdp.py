@@ -277,43 +277,80 @@ def print_rdp_sticker(data: dict) -> bool:
 def generate_rdp_tspl(data: dict, qr_data: str) -> str:
     """
     Genera TSPL para sticker de Registro Diario de Producción.
-    Sticker individual más grande que el de pesaje.
+    Formato 2-up en papel de 105mm x 50mm (2 stickers de 5x5cm).
+    Mismo layout que el sticker de pesaje.
     """
     nro_ot = data.get('nro_orden_trabajo', '')
     nro_op = data.get('nro_op', '')
-    molde = data.get('molde', '')[:20]
+    molde = data.get('molde', '')[:25]
     turno = data.get('turno', '')
     fecha = data.get('fecha_ot', '')
-    operador = data.get('operador', '')[:15]
+    operador = data.get('operador', '')[:25]
     maquina = data.get('maquina', '')
-    
+
+    LEFT_X = 40
+    RIGHT_X = 456
+    LINE_HEIGHT = 18
+
+    def gen_sticker(x: int) -> str:
+        """Genera TSPL para un sticker RDP en posición x."""
+        y = 20
+        lines = []
+
+        # Barra superior gruesa
+        lines.append(f'BAR {x}, {y}, 360, 3')
+        y += 8
+
+        # Título
+        lines.append(f'TEXT {x + 4}, {y}, "2", 0, 1, 1, "REG. DIARIO PROD."')
+        y += 28
+
+        # Separador
+        lines.append(f'BAR {x}, {y}, 360, 2')
+        y += 5
+
+        # Campos
+        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "NrOT: {nro_ot}"')
+        y += LINE_HEIGHT
+        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "NrOP: {nro_op}"')
+        y += LINE_HEIGHT
+        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "MOL: {molde}"')
+        y += LINE_HEIGHT
+        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "MAQ: {maquina}"')
+        y += LINE_HEIGHT
+        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "TUR: {turno}"')
+        y += LINE_HEIGHT
+        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "FECHA: {fecha}"')
+        y += LINE_HEIGHT
+        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "OPE: {operador}"')
+        y += LINE_HEIGHT
+
+        # Separador QR
+        lines.append(f'BAR {x}, {y}, 360, 2')
+        y += 5
+
+        # QR Code centrado dentro del sticker
+        lines.append(f'QRCODE {x + 120}, {y}, L, 3, A, 0, "{qr_data}"')
+        y += 125
+
+        # Barra final gruesa
+        lines.append(f'BAR {x}, {y}, 360, 3')
+
+        return '\n'.join(lines)
+
     tspl = f"""
-SIZE 70 mm, 50 mm
-GAP 2 mm, 0 mm
+SIZE 109 mm, 50 mm
+GAP 3 mm, 0 mm
+SET REFERENCE 0,0
 DIRECTION 1
+HOME
 CLS
 
-; === STICKER RDP ===
-BAR 20, 15, 520, 4
-TEXT 25, 25, "2", 0, 1, 1, "REGISTRO DIARIO PROD."
-BAR 20, 55, 520, 2
+; === STICKER IZQUIERDO ===
+{gen_sticker(LEFT_X)}
 
-TEXT 25, 65, "1", 0, 1, 1, "NrOT: {nro_ot}"
-TEXT 280, 65, "1", 0, 1, 1, "OP: {nro_op}"
-
-TEXT 25, 90, "1", 0, 1, 1, "MOLDE: {molde}"
-TEXT 25, 115, "1", 0, 1, 1, "MAQ: {maquina}"
-TEXT 280, 115, "1", 0, 1, 1, "TURNO: {turno}"
-
-TEXT 25, 140, "1", 0, 1, 1, "FECHA: {fecha}"
-TEXT 25, 165, "1", 0, 1, 1, "OPERADOR: {operador}"
-
-BAR 20, 190, 520, 2
-
-; QR Code centrado
-QRCODE 200, 200, L, 5, A, 0, "{qr_data}"
-
-BAR 20, 370, 520, 4
+; === STICKER DERECHO ===
+{gen_sticker(RIGHT_X)}
 
 PRINT 1,1
 """

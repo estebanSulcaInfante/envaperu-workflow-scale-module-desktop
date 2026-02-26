@@ -124,7 +124,7 @@ class Pesaje(db.Model):
         # Fallback: formato legacy con punto y coma
         parts = qr_string.split(';')
         if len(parts) >= 7:
-            return {
+            result = {
                 'id_registro': parts[0].strip(),
                 'molde': parts[1].strip(),
                 'maquina': parts[2].strip(),
@@ -133,6 +133,10 @@ class Pesaje(db.Model):
                 'fecha_orden_trabajo': parts[5].strip(),
                 'nro_orden_trabajo': parts[6].strip() if len(parts) > 6 else None,
             }
+            # Campo 8: peso_unitario_teorico (agregado en OT QR)
+            if len(parts) > 7 and parts[7].strip():
+                result['peso_unitario_teorico'] = parts[7].strip()
+            return result
         
         return {}
     

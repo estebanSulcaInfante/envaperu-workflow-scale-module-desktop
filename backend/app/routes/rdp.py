@@ -93,7 +93,8 @@ def generar_rdp():
         'maquina': data.get('maquina', ''),
         'turno': data.get('turno', ''),
         'fecha_ot': data.get('fecha_ot', ''),
-        'operador': data.get('operador', '')
+        'operador': data.get('operador', ''),
+        'peso_unitario_teorico': data.get('peso_unitario_teorico', '')
     }
     
     # 3. Generar QR data
@@ -244,8 +245,8 @@ def reponer_cache():
 def build_rdp_qr(data: dict, rdp_id: int = 0) -> str:
     """
     Construye el contenido del QR para RDP.
-    Formato real: id;molde;maquina;nro_op;turno;fecha;correlativo
-    Ejemplo: 367;BALDE REAL;HT-320A;OP1353;Diurno;2025-12-22;023455
+    Formato: id;molde;maquina;nro_op;turno;fecha;correlativo;peso_unitario
+    Ejemplo: 367;BALDE REAL;HT-320A;OP1353;Diurno;2025-12-22;023455;450.0
     """
     return ';'.join([
         str(rdp_id),
@@ -254,7 +255,8 @@ def build_rdp_qr(data: dict, rdp_id: int = 0) -> str:
         data.get('nro_op', ''),
         data.get('turno', ''),
         data.get('fecha_ot', ''),
-        data.get('nro_orden_trabajo', '')
+        data.get('nro_orden_trabajo', ''),
+        str(data.get('peso_unitario_teorico', ''))
     ])
 
 
@@ -288,8 +290,8 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
     operador = data.get('operador', '')[:25]
     maquina = data.get('maquina', '')
 
-    LEFT_X = 40
-    RIGHT_X = 456
+    LEFT_X = 24
+    RIGHT_X = 448
     LINE_HEIGHT = 18
 
     def gen_sticker(x: int) -> str:
@@ -298,7 +300,7 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
         lines = []
 
         # Barra superior gruesa
-        lines.append(f'BAR {x}, {y}, 360, 3')
+        lines.append(f'BAR {x}, {y}, 400, 3')
         y += 8
 
         # Título
@@ -306,7 +308,7 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
         y += 28
 
         # Separador
-        lines.append(f'BAR {x}, {y}, 360, 2')
+        lines.append(f'BAR {x}, {y}, 400, 2')
         y += 5
 
         # Campos
@@ -322,11 +324,9 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
         y += LINE_HEIGHT
         lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "FECHA: {fecha}"')
         y += LINE_HEIGHT
-        lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "OPE: {operador}"')
-        y += LINE_HEIGHT
 
         # Separador QR
-        lines.append(f'BAR {x}, {y}, 360, 2')
+        lines.append(f'BAR {x}, {y}, 400, 2')
         y += 5
 
         # QR Code centrado dentro del sticker (nivel 5 para mayor tamaño)
@@ -334,7 +334,7 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
         y += 155
 
         # Barra final gruesa (alineada con sticker pesaje ~y=350)
-        lines.append(f'BAR {x}, {y}, 360, 3')
+        lines.append(f'BAR {x}, {y}, 400, 3')
 
         return '\n'.join(lines)
 
@@ -343,7 +343,8 @@ SIZE 109 mm, 50 mm
 GAP 3 mm, 0 mm
 SET REFERENCE 0,0
 DIRECTION 1
-HOME
+SET TEAR ON
+OFFSET 0 mm
 CLS
 
 ; === STICKER IZQUIERDO ===

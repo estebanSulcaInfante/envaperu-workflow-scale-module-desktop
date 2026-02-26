@@ -49,6 +49,15 @@ def crear_pesaje():
         except ValueError:
             pass
     
+    # Parse peso_unitario_teorico (puede venir como string vacío)
+    peso_unit = None
+    raw_peso_unit = data.get('peso_unitario_teorico')
+    if raw_peso_unit is not None and str(raw_peso_unit).strip() != '':
+        try:
+            peso_unit = float(raw_peso_unit)
+        except (ValueError, TypeError):
+            pass
+    
     pesaje = Pesaje(
         peso_kg=data['peso_kg'],
         molde=data.get('molde'),
@@ -57,7 +66,7 @@ def crear_pesaje():
         turno=data.get('turno'),
         fecha_orden_trabajo=fecha_ot,
         nro_orden_trabajo=data.get('nro_orden_trabajo'),
-        peso_unitario_teorico=data.get('peso_unitario_teorico'),
+        peso_unitario_teorico=peso_unit,
         operador=data.get('operador'),
         color=data.get('color'),
         pieza_sku=data.get('pieza_sku'),
@@ -126,7 +135,14 @@ def actualizar_pesaje(id):
     if 'nro_orden_trabajo' in data:
         pesaje.nro_orden_trabajo = data['nro_orden_trabajo']
     if 'peso_unitario_teorico' in data:
-        pesaje.peso_unitario_teorico = data['peso_unitario_teorico']
+        raw_val = data['peso_unitario_teorico']
+        if raw_val is not None and str(raw_val).strip() != '':
+            try:
+                pesaje.peso_unitario_teorico = float(raw_val)
+            except (ValueError, TypeError):
+                pass
+        else:
+            pesaje.peso_unitario_teorico = None
     if 'color' in data:
         pesaje.color = data['color']
     if 'pieza_sku' in data:

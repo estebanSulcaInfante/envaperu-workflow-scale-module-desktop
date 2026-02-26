@@ -18,9 +18,10 @@ class StickerService:
     
     # Configuración TSPL
     MAX_CHARS_PER_LINE = 25  # Máximo caracteres por línea
-    LEFT_X = 40              # Posición X sticker izquierdo
-    RIGHT_X = 456            # Posición X sticker derecho
+    LEFT_X = 24              # Posición X sticker izquierdo (3mm margen)
+    RIGHT_X = 448            # Posición X sticker derecho (24+400+24)
     LINE_HEIGHT = 18         # Altura entre líneas
+    STICKER_WIDTH = 400      # Ancho de cada sticker en dots (50mm)
     
     def _wrap_text(self, text: str, max_len: int = None) -> list:
         """Divide texto largo en múltiples líneas."""
@@ -46,7 +47,7 @@ class StickerService:
             """Genera TSPL para un sticker en posición x."""
             y = 25  # Y inicial
             lines = []
-            lines.append(f'BAR {x}, 20, 360, 3')  # Barra superior gruesa
+            lines.append(f'BAR {x}, 20, 400, 3')  # Barra superior gruesa
             
             # MOL (puede ser 1 o 2 líneas)
             lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "MOL: {mol_lines[0]}"')
@@ -78,13 +79,13 @@ class StickerService:
             y += self.LINE_HEIGHT
             
             # Separador F/H
-            lines.append(f'BAR {x}, {y}, 360, 2')
+            lines.append(f'BAR {x}, {y}, 400, 2')
             y += 5
             lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "F/H: {fecha_hora}"')
             y += self.LINE_HEIGHT
             
             # Separador PESO
-            lines.append(f'BAR {x}, {y}, 360, 2')
+            lines.append(f'BAR {x}, {y}, 400, 2')
             y += 5
             lines.append(f'TEXT {x + 4}, {y}, "2", 0, 1, 1, "PESO: {pesaje.peso_kg:.1f}"')
             y += 28
@@ -94,7 +95,7 @@ class StickerService:
             y += 125
             
             # Barra final gruesa
-            lines.append(f'BAR {x}, {y}, 360, 3')
+            lines.append(f'BAR {x}, {y}, 400, 3')
             
             return '\n'.join(lines)
         
@@ -104,7 +105,8 @@ SIZE 109 mm, 50 mm
 GAP 3 mm, 0 mm
 SET REFERENCE 0,0
 DIRECTION 1
-HOME
+SET TEAR ON
+OFFSET 0 mm
 CLS
 
 ; === STICKER IZQUIERDO ===

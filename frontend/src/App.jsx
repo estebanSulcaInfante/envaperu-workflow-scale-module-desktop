@@ -322,7 +322,8 @@ function App() {
         turno: formData.turno,
         fecha_ot: formData.fecha_orden_trabajo,
         operador: formData.operador,
-        color: formData.color
+        color: formData.color,
+        peso_unitario_teorico: formData.peso_unitario_teorico
       };
 
       const { data } = await rdpApi.generar(payload);

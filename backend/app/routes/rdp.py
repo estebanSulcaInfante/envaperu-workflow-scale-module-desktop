@@ -69,7 +69,12 @@ def generar_rdp():
         # 1. Consumir del cache local
         correlativo = consumir_local(
             nro_op=data.get('nro_op'),
-            molde=data.get('molde')
+            molde=data.get('molde'),
+            maquina=data.get('maquina'),
+            turno=data.get('turno'),
+            fecha_ot=data.get('fecha_ot'),
+            operador=data.get('operador'),
+            color=data.get('color')
         )
         
         # Si no hay correlativos locales, intentar reponer y reintentar
@@ -77,7 +82,12 @@ def generar_rdp():
             reponer_cache()
             correlativo = consumir_local(
                 nro_op=data.get('nro_op'),
-                molde=data.get('molde')
+                molde=data.get('molde'),
+                maquina=data.get('maquina'),
+                turno=data.get('turno'),
+                fecha_ot=data.get('fecha_ot'),
+                operador=data.get('operador'),
+                color=data.get('color')
             )
         
         if correlativo is None:
@@ -212,6 +222,57 @@ def listar_anulados():
     ).all()
     
     return jsonify([c.to_dict() for c in anulados])
+
+
+@rdp_bp.route('/reimprimir', methods=['POST'])
+def reimprimir_rdp():
+    """
+    Reimprime el sticker de un RDP existente.
+    Busca los datos guardados por correlativo.
+    No consume correlativos, solo reimprime.
+    """
+    from app.models.correlativo_cache import CorrelativoCache
+    
+    data = request.get_json()
+    correlativo = data.get('correlativo') if data else None
+    
+    if not correlativo:
+        return jsonify({'error': 'correlativo es requerido'}), 400
+    
+    # Buscar en cache local
+    try:
+        corr_num = int(correlativo)
+        registro = db.session.get(CorrelativoCache, corr_num)
+    except (ValueError, TypeError):
+        registro = None
+    
+    if not registro:
+        return jsonify({'error': f'Correlativo {correlativo} no encontrado'}), 404
+    
+    if not registro.usado:
+        return jsonify({'error': f'Correlativo {correlativo} a\u00fan no ha sido usado'}), 400
+    
+    rdp_data = {
+        'nro_orden_trabajo': str(registro.correlativo),
+        'nro_op': registro.nro_op or '',
+        'molde': registro.molde or '',
+        'maquina': registro.maquina or '',
+        'turno': registro.turno or '',
+        'fecha_ot': registro.fecha_ot or '',
+        'operador': registro.operador or '',
+    }
+    
+    try:
+        impreso = print_rdp_sticker(rdp_data)
+        return jsonify({
+            'success': True,
+            'impreso': impreso,
+            'correlativo': registro.correlativo,
+            'data': rdp_data
+        })
+    except Exception as e:
+        print(f"Error reimprimiendo sticker RDP: {e}")
+        return jsonify({'error': f'Error al reimprimir: {str(e)}'}), 500
 
 
 def reponer_cache():

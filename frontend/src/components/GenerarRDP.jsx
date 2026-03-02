@@ -9,11 +9,14 @@ function GenerarRDP({ formData, onClose }) {
   const [error, setError] = useState(null);
   const [resultado, setResultado] = useState(null);
   const [modoOffline, setModoOffline] = useState(false);
+  const [modoReimprimir, setModoReimprimir] = useState(false);
   
   // Estado para anular
   const [showAnular, setShowAnular] = useState(false);
   const [motivoAnular, setMotivoAnular] = useState('');
   const [anulando, setAnulando] = useState(false);
+  const [reimprimiendo, setReimprimiendo] = useState(false);
+  const [correlativoReimprimir, setCorrelativoReimprimir] = useState('');
   
   // Campos del RDP
   const [rdpData, setRdpData] = useState({
@@ -113,17 +116,96 @@ function GenerarRDP({ formData, onClose }) {
     }));
   };
 
+  const handleReimprimir = async () => {
+    const corr = modoReimprimir ? correlativoReimprimir : resultado?.correlativo;
+    if (!corr) return;
+    
+    setReimprimiendo(true);
+    setError(null);
+    
+    try {
+      const { data } = await rdpApi.reimprimir(String(corr));
+      setResultado({
+        correlativo: data.correlativo,
+        impreso: data.impreso,
+        reimprimir: true
+      });
+    } catch (err) {
+      console.error('Error reimprimiendo:', err);
+      setError(err.response?.data?.error || 'Error reimprimiendo sticker');
+    } finally {
+      setReimprimiendo(false);
+    }
+  };
+
   return (
     <div className="generar-rdp-overlay">
       <div className="generar-rdp-modal">
         <div className="rdp-header">
-          <h2>📋 Generar Registro Diario</h2>
+          <h2>📋 Registro Diario</h2>
           <button className="rdp-close" onClick={onClose}>×</button>
+        </div>
+        
+        {/* Toggle modo */}
+        <div style={{ display: 'flex', borderBottom: '2px solid var(--border, #333)', marginBottom: '12px' }}>
+          <button
+            onClick={() => { setModoReimprimir(false); setError(null); setResultado(null); }}
+            style={{
+              flex: 1, padding: '8px', border: 'none', cursor: 'pointer',
+              background: !modoReimprimir ? 'var(--primary, #4f8cff)' : 'transparent',
+              color: !modoReimprimir ? '#fff' : 'var(--text-secondary, #aaa)',
+              fontWeight: !modoReimprimir ? 700 : 400,
+              borderRadius: '6px 6px 0 0', fontSize: '0.9rem'
+            }}
+          >
+            📝 Generar Nuevo
+          </button>
+          <button
+            onClick={() => { setModoReimprimir(true); setError(null); setResultado(null); }}
+            style={{
+              flex: 1, padding: '8px', border: 'none', cursor: 'pointer',
+              background: modoReimprimir ? 'var(--primary, #4f8cff)' : 'transparent',
+              color: modoReimprimir ? '#fff' : 'var(--text-secondary, #aaa)',
+              fontWeight: modoReimprimir ? 700 : 400,
+              borderRadius: '6px 6px 0 0', fontSize: '0.9rem'
+            }}
+          >
+            🖨️ Reimprimir
+          </button>
         </div>
         
         {error && <div className="rdp-error">{error}</div>}
         
         <div className="rdp-content">
+          {modoReimprimir ? (
+            /* === MODO REIMPRIMIR === */
+            <>
+              <div className="rdp-correlativo" style={{ textAlign: 'center', padding: '16px 0' }}>
+                <span className="rdp-label" style={{ display: 'block', marginBottom: '8px' }}>Número de Correlativo:</span>
+                <input
+                  type="number"
+                  value={correlativoReimprimir}
+                  onChange={(e) => setCorrelativoReimprimir(e.target.value)}
+                  placeholder="Ej: 30001"
+                  style={{ fontSize: '1.4rem', padding: '8px 12px', width: '200px', textAlign: 'center' }}
+                />
+              </div>
+              
+              {resultado && (
+                <div className="rdp-resultado">
+                  {resultado.impreso ? (
+                    <div className="rdp-success">
+                      ✅ Sticker del RDP <strong>{resultado.correlativo}</strong> reimpreso
+                    </div>
+                  ) : (
+                    <div className="rdp-error">❌ Error al reimprimir</div>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            /* === MODO GENERAR === */
+            <>
           <div className="rdp-correlativo">
             <div className="rdp-corr-info" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span className="rdp-label">Correlativo:</span>
@@ -271,7 +353,7 @@ function GenerarRDP({ formData, onClose }) {
             </div>
           )}
           
-          {resultado && (
+          {resultado && !modoReimprimir && (
             <div className={`rdp-resultado ${resultado.anulado ? 'anulado' : ''}`}>
               {resultado.anulado ? (
                 <div className="rdp-anulado">
@@ -286,27 +368,50 @@ function GenerarRDP({ formData, onClose }) {
                   {resultado.impreso && (
                     <div className="rdp-impreso">🖨️ Sticker impreso</div>
                   )}
+                  <button 
+                    className="rdp-btn rdp-btn-secondary" 
+                    onClick={handleReimprimir}
+                    disabled={reimprimiendo}
+                    style={{ marginTop: '8px', width: '100%' }}
+                  >
+                    {reimprimiendo ? '⏳ Reimprimiendo...' : '🖨️ Reimprimir Sticker'}
+                  </button>
                 </>
               )}
             </div>
           )}
+            </>
+          )}
         </div>
         
         <div className="rdp-actions">
-          <button 
-            className="rdp-btn rdp-btn-secondary"
-            onClick={() => setShowAnular(true)}
-            disabled={loading || !siguiente || showAnular}
-          >
-            ❌ Anular Hoja
-          </button>
-          <button 
-            className="rdp-btn rdp-btn-primary"
-            onClick={handleGenerar}
-            disabled={loading || !siguiente}
-          >
-            {loading ? '⏳ Generando...' : '🖨️ Generar e Imprimir'}
-          </button>
+          {modoReimprimir ? (
+            <button
+              className="rdp-btn rdp-btn-primary"
+              onClick={handleReimprimir}
+              disabled={reimprimiendo || !correlativoReimprimir.trim()}
+              style={{ width: '100%' }}
+            >
+              {reimprimiendo ? '⏳ Reimprimiendo...' : '🖨️ Reimprimir Sticker'}
+            </button>
+          ) : (
+            <>
+              <button 
+                className="rdp-btn rdp-btn-secondary"
+                onClick={() => setShowAnular(true)}
+                disabled={loading || !siguiente || showAnular}
+              >
+                ❌ Anular Hoja
+              </button>
+              <button 
+                className="rdp-btn rdp-btn-primary"
+                onClick={handleGenerar}
+                disabled={loading || !siguiente}
+              >
+                {loading ? '⏳ Generando...' : '🖨️ Generar e Imprimir'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

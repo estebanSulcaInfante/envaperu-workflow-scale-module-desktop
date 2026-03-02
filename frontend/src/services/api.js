@@ -106,7 +106,10 @@ export const rdpApi = {
     api.get('/rdp/cache/status'),
   
   cacheReponer: () =>
-    api.post('/rdp/cache/reponer')
+    api.post('/rdp/cache/reponer'),
+  
+  reimprimir: (correlativo) =>
+    api.post('/rdp/reimprimir', { correlativo })
 };
 
 // ===== Avance Local =====

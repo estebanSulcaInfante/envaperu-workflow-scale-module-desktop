@@ -68,6 +68,25 @@ def stop_background_sync():
         _sync_thread = None
 
 
+def _migrate_correlativo_cache(database):
+    """Add new columns to correlativo_cache if they don't exist (safe to run multiple times)."""
+    new_columns = [
+        ('maquina', 'VARCHAR(50)'),
+        ('turno', 'VARCHAR(20)'),
+        ('fecha_ot', 'VARCHAR(20)'),
+        ('operador', 'VARCHAR(100)'),
+        ('color', 'VARCHAR(50)'),
+    ]
+    for col_name, col_type in new_columns:
+        try:
+            database.session.execute(
+                database.text(f'ALTER TABLE correlativo_cache ADD COLUMN {col_name} {col_type}')
+            )
+        except Exception:
+            pass  # Column already exists
+    database.session.commit()
+
+
 def create_app():
     app = Flask(__name__)
     
@@ -97,6 +116,8 @@ def create_app():
     # Create tables
     with app.app_context():
         db.create_all()
+        # Migrate: add new columns to correlativo_cache if they don't exist
+        _migrate_correlativo_cache(db)
     
     # Start background sync (solo si está habilitado)
     if app.config.get('SYNC_ENABLED', True):

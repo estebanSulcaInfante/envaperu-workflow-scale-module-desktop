@@ -17,21 +17,31 @@ class CorrelativoCache(db.Model):
     usado = db.Column(db.Boolean, default=False)
     fecha_uso = db.Column(db.DateTime, nullable=True)
     
-    # Datos del RDP generado (para reconciliación)
+    # Datos del RDP generado (para reconciliación y reimpresión)
     nro_op = db.Column(db.String(50), nullable=True)
     molde = db.Column(db.String(100), nullable=True)
+    maquina = db.Column(db.String(50), nullable=True)
+    turno = db.Column(db.String(20), nullable=True)
+    fecha_ot = db.Column(db.String(20), nullable=True)
+    operador = db.Column(db.String(100), nullable=True)
+    color = db.Column(db.String(50), nullable=True)
     
     # Campos de anulación
     anulado = db.Column(db.Boolean, default=False)
     fecha_anulacion = db.Column(db.DateTime, nullable=True)
     motivo_anulacion = db.Column(db.String(200), nullable=True)
     
-    def marcar_usado(self, nro_op=None, molde=None):
-        """Marca el correlativo como usado."""
+    def marcar_usado(self, nro_op=None, molde=None, maquina=None, turno=None, fecha_ot=None, operador=None, color=None):
+        """Marca el correlativo como usado y guarda datos del RDP."""
         self.usado = True
         self.fecha_uso = datetime.now(timezone.utc)
         self.nro_op = nro_op
         self.molde = molde
+        self.maquina = maquina
+        self.turno = turno
+        self.fecha_ot = fecha_ot
+        self.operador = operador
+        self.color = color
     
     def anular(self, motivo: str):
         """Anula el correlativo (hoja destruida/perdida)."""
@@ -48,6 +58,11 @@ class CorrelativoCache(db.Model):
             'fecha_uso': self.fecha_uso.isoformat() if self.fecha_uso else None,
             'nro_op': self.nro_op,
             'molde': self.molde,
+            'maquina': self.maquina,
+            'turno': self.turno,
+            'fecha_ot': self.fecha_ot,
+            'operador': self.operador,
+            'color': self.color,
             'anulado': self.anulado,
             'fecha_anulacion': self.fecha_anulacion.isoformat() if self.fecha_anulacion else None,
             'motivo_anulacion': self.motivo_anulacion
@@ -80,7 +95,7 @@ def get_siguiente_local():
     return siguiente
 
 
-def consumir_local(nro_op=None, molde=None):
+def consumir_local(nro_op=None, molde=None, maquina=None, turno=None, fecha_ot=None, operador=None, color=None):
     """
     Consume el siguiente correlativo del cache local.
     Retorna el número de correlativo o None si no hay disponibles.
@@ -89,7 +104,10 @@ def consumir_local(nro_op=None, molde=None):
     if siguiente is None:
         return None
     
-    siguiente.marcar_usado(nro_op=nro_op, molde=molde)
+    siguiente.marcar_usado(
+        nro_op=nro_op, molde=molde, maquina=maquina,
+        turno=turno, fecha_ot=fecha_ot, operador=operador, color=color
+    )
     db.session.commit()
     
     return siguiente.correlativo

@@ -172,3 +172,8 @@ dist/
 # Electron
 release/
 *.asar
+
+# SQLite databases
+*.db
+*.sqlite3
+backend/instance/

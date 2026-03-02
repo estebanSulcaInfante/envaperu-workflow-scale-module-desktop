@@ -273,6 +273,8 @@ def print_rdp_sticker(data: dict) -> bool:
     tspl = generate_rdp_tspl(data, qr_data)
     
     printer = get_printer_service()
+    # Asegurar que la config esté cargada (fix: primer F2 no imprimía)
+    printer._get_config()
     return printer.print_tspl(tspl)
 
 
@@ -291,7 +293,7 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
     maquina = data.get('maquina', '')
 
     LEFT_X = 24
-    RIGHT_X = 448
+    RIGHT_X = 456            # (24+400+32 = 4mm gap)
     LINE_HEIGHT = 18
 
     def gen_sticker(x: int) -> str:

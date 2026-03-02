@@ -19,7 +19,7 @@ class StickerService:
     # Configuración TSPL
     MAX_CHARS_PER_LINE = 25  # Máximo caracteres por línea
     LEFT_X = 24              # Posición X sticker izquierdo (3mm margen)
-    RIGHT_X = 448            # Posición X sticker derecho (24+400+24)
+    RIGHT_X = 472            # Posición X sticker derecho (24+400+48 = 6mm gap)
     LINE_HEIGHT = 18         # Altura entre líneas
     STICKER_WIDTH = 400      # Ancho de cada sticker en dots (50mm)
     
@@ -222,6 +222,8 @@ PRINT 1,1
         """Genera e imprime un sticker para el pesaje dado."""
         log.info(f"Iniciando impresión para pesaje {pesaje.id}")
         printer = get_printer_service()
+        # Asegurar que la config esté cargada (fix: primer F2 no imprimía)
+        printer._get_config()
         ptype = printer_type or printer.printer_type
         log.debug(f"Tipo de impresora: {ptype}, Nombre: {printer.printer_name}")
         

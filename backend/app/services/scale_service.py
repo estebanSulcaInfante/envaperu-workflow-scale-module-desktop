@@ -48,10 +48,10 @@ class ScaleService:
             self.serial_connection.close()
     
     def read_weight(self) -> Optional[float]:
-        """Lee un peso de la balanza (lectura única)"""
+        """Lee un peso de la balanza (lectura única).
+        Raises serial.SerialException si el puerto está desconectado."""
         if not self.serial_connection or not self.serial_connection.is_open:
-            if not self.connect():
-                return None
+            raise serial.SerialException("Puerto serial no disponible")
         
         try:
             if self.serial_connection.in_waiting > 0:
@@ -84,12 +84,14 @@ class ScaleService:
                 
                 log.warning(f"No se pudo parsear: '{line}'")
                 
+        except serial.SerialException:
+            raise  # Propagar para que _listen_loop la maneje
         except Exception as e:
             log.error(f"Error leyendo peso: {e}")
         
         return None
     
-    def start_listening(self, callback: Callable[[float], None]):
+    def start_listening(self, callback: Callable[[float], None], socketio=None):
         """Inicia escucha continua de la balanza en un hilo separado"""
         if self.is_listening:
             return
@@ -97,7 +99,7 @@ class ScaleService:
         self.is_listening = True
         self._listener_thread = threading.Thread(
             target=self._listen_loop,
-            args=(callback,),
+            args=(callback, socketio),
             daemon=True
         )
         self._listener_thread.start()
@@ -108,19 +110,51 @@ class ScaleService:
         if self._listener_thread:
             self._listener_thread.join(timeout=2)
     
-    def _listen_loop(self, callback: Callable[[float], None]):
-        """Loop interno de escucha"""
+    def _emit_status(self, socketio, connected: bool):
+        """Emite estado de conexión vía WebSocket"""
+        if socketio:
+            socketio.emit('balanza_status', {
+                'connected': connected,
+                'listening': self.is_listening,
+                'port': self.port
+            })
+    
+    def _listen_loop(self, callback: Callable[[float], None], socketio=None):
+        """Loop interno de escucha con auto-reconexión"""
         # Reutilizar conexión existente, solo conectar si no está abierta
         if not self.serial_connection or not self.serial_connection.is_open:
             if not self.connect():
                 log.error("No se pudo conectar en listen_loop")
+                self._emit_status(socketio, False)
                 return
         
         while self.is_listening:
-            weight = self.read_weight()
-            if weight is not None:
-                callback(weight)
-            time.sleep(0.1)
+            try:
+                weight = self.read_weight()
+                if weight is not None:
+                    callback(weight)
+                time.sleep(0.1)
+            except serial.SerialException:
+                log.warning("⚠️ Balanza desconectada físicamente")
+                self._emit_status(socketio, False)
+                
+                # Cerrar conexión rota
+                try:
+                    if self.serial_connection:
+                        self.serial_connection.close()
+                except Exception:
+                    pass
+                self.serial_connection = None
+                
+                # Auto-reconexión
+                while self.is_listening:
+                    log.info("🔄 Intentando reconectar...")
+                    time.sleep(3)
+                    if self.connect():
+                        log.info("✅ Balanza reconectada")
+                        self._emit_status(socketio, True)
+                        break
+                    log.warning("❌ Reconexión fallida, reintentando en 3s...")
     
     def get_status(self) -> dict:
         """Retorna el estado de la conexión"""

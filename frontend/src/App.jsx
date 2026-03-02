@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { pesajesApi, balanzaApi, syncApi, rdpApi } from './services/api';
+import socket from './services/socket';
 import ExportarExcel from './components/ExportarExcel';
+import AvanceDashboard from './components/AvanceDashboard';
 
 function App() {
   // Connection state
@@ -38,6 +40,7 @@ function App() {
   const [showExcelModal, setShowExcelModal] = useState(false);
   const [generandoOT, setGenerandoOT] = useState(false);
   const [activeTab, setActiveTab] = useState('crear-ot');
+  const [cooldown, setCooldown] = useState(false);
 
   // Load status and pesajes on mount
   useEffect(() => {
@@ -52,36 +55,56 @@ function App() {
     }));
   }, []);
 
-  // Poll for weight when listening - AUTO GRABAR cuando llega peso nuevo
+  // WebSocket: escuchar peso en vivo desde la balanza
   useEffect(() => {
-    let interval;
-    if (listening) {
-      interval = setInterval(async () => {
-        try {
-          const { data } = await balanzaApi.ultimoPeso();
-          // Si hay peso nuevo y válido (>= 1kg), auto-grabar e imprimir
-          if (data.peso_kg !== null && data.peso_kg !== peso) {
-            const nuevoPeso = data.peso_kg;
-            console.log(`[AUTO] Peso recibido: ${nuevoPeso} kg, nro_op: ${formData.nro_op || '(vacío)'}`);
-            setPeso(nuevoPeso);
-            
-            // Auto-grabar e imprimir si el peso es válido (>= 1kg) y hay QR escaneado
-            if (nuevoPeso >= 1.0 && formData.nro_op) {
-              console.log('[AUTO] ✅ Condiciones cumplidas, auto-grabando...');
-              await autoGrabarEImprimir(nuevoPeso);
-            } else if (nuevoPeso >= 1.0 && !formData.nro_op) {
-              showToast('⚠️ Escanea el QR primero para auto-imprimir', 'error');
-            } else if (nuevoPeso > 0 && nuevoPeso < 1.0) {
-              showToast('⚠️ Peso muy bajo (< 1kg), no se imprimirá', 'error');
-            }
-          }
-        } catch (err) {
-          console.error('Error polling peso:', err);
-        }
-      }, 500);
-    }
-    return () => clearInterval(interval);
-  }, [listening, peso, formData]);
+    const handlePeso = (data) => {
+      if (data.peso_kg !== null) {
+        setPeso(data.peso_kg);
+      }
+    };
+    socket.on('peso', handlePeso);
+    return () => socket.off('peso', handlePeso);
+  }, []);
+
+  // WebSocket: escuchar actualizaciones de pesajes
+  useEffect(() => {
+    const handlePesajesUpdated = () => {
+      loadPesajes();
+    };
+    socket.on('pesajes_updated', handlePesajesUpdated);
+    return () => socket.off('pesajes_updated', handlePesajesUpdated);
+  }, []);
+
+  // WebSocket: escuchar estado de conexión de la balanza en tiempo real
+  useEffect(() => {
+    const handleBalanzaStatus = (data) => {
+      const wasConnected = connected;
+      setConnected(data.connected);
+      if (data.listening !== undefined) {
+        setListening(data.listening);
+      }
+      // Mostrar toast solo cuando hay un cambio de estado
+      if (data.connected && !wasConnected) {
+        showToast('✅ Balanza reconectada');
+      } else if (!data.connected && wasConnected) {
+        showToast('⚠️ Balanza desconectada', 'error');
+      }
+    };
+    socket.on('balanza_status', handleBalanzaStatus);
+    return () => socket.off('balanza_status', handleBalanzaStatus);
+  }, [connected]);
+
+  // F2 key listener para aceptar peso
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'F2' && activeTab === 'pesar') {
+        e.preventDefault();
+        handleAceptarPeso();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [peso, formData, cooldown, activeTab]);
 
   const checkStatus = async () => {
     try {
@@ -190,35 +213,49 @@ function App() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  // Auto grabar e imprimir (flujo de 1 botón)
-  const autoGrabarEImprimir = async (pesoValue) => {
-    console.log('[AUTO] autoGrabarEImprimir llamado con:', { pesoValue, formData });
-    
+  // Aceptar peso con F2 (reemplaza al auto-grab)
+  const handleAceptarPeso = async () => {
+    if (cooldown) {
+      showToast('⏳ Espera unos segundos...', 'error');
+      return;
+    }
+    if (peso < 1.0) {
+      showToast('⚠️ Peso inválido (mínimo 1 kg)', 'error');
+      return;
+    }
+    if (!formData.nro_op) {
+      showToast('⚠️ Escanea un QR primero', 'error');
+      return;
+    }
+
+    // Activar cooldown
+    setCooldown(true);
+    setTimeout(() => setCooldown(false), 3000);
+
     try {
       const pesajeData = {
-        peso_kg: pesoValue,
+        peso_kg: peso,
         ...formData,
         qr_data_original: qrInput
       };
-      console.log('[AUTO] Creando pesaje:', pesajeData);
-      
+      console.log('[F2] Creando pesaje:', pesajeData);
+
       const { data } = await pesajesApi.crear(pesajeData);
-      console.log('[AUTO] Pesaje creado con ID:', data.id);
-      
+      console.log('[F2] Pesaje creado con ID:', data.id);
+
       // Imprimir automáticamente
-      console.log('[AUTO] Enviando a imprimir ID:', data.id);
       await pesajesApi.imprimir(data.id);
-      console.log('[AUTO] ✅ Impresión completada');
-      
-      showToast('✅ Guardado e impreso automáticamente');
+      console.log('[F2] ✅ Impresión completada');
+
+      showToast(`✅ Pesaje #${data.id} guardado e impreso (${peso.toFixed(1)} kg)`);
       loadPesajes();
-      
+
       // Show sticker preview
       const preview = await pesajesApi.previewSticker(data.id);
       setStickerPreview(preview.data.preview);
-      
+
     } catch (err) {
-      console.error('[AUTO] ❌ Error en autoGrabarEImprimir:', err);
+      console.error('[F2] ❌ Error:', err);
       showToast('❌ Error al guardar/imprimir', 'error');
     }
   };
@@ -384,13 +421,19 @@ function App() {
         >
           📋 Crear OT
         </button>
-        <button 
-          className={`tab-btn ${activeTab === 'pesar' ? 'active' : ''}`}
-          onClick={() => setActiveTab('pesar')}
-        >
-          ⚖️ Pesar
-        </button>
-      </div>
+            <button 
+              className={`tab-btn ${activeTab === 'pesar' ? 'active' : ''}`}
+              onClick={() => setActiveTab('pesar')}
+            >
+              2. Pesar OPs
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'avance' ? 'active' : ''}`}
+              onClick={() => setActiveTab('avance')}
+            >
+              3. 📈 Avance
+            </button>
+          </div>
 
       {/* ========== TAB 1: CREAR OT ========== */}
       {activeTab === 'crear-ot' && (
@@ -486,6 +529,13 @@ function App() {
               )}
             </div>
           </div>
+        </main>
+      )}
+
+      {/* TAB 3: AVANCE DASHBOARD */}
+      {activeTab === 'avance' && (
+        <main className="main-content">
+          <AvanceDashboard />
         </main>
       )}
 
@@ -621,9 +671,23 @@ function App() {
                   <span className="weight-value">{peso.toFixed(1)}</span>
                   <span className="weight-unit">kg</span>
                   <div className="weight-status">
-                    {listening ? '📡 Escuchando balanza...' : 'Conectar balanza para capturar peso'}
+                    {!listening
+                      ? 'Conectar balanza para capturar peso'
+                      : cooldown
+                        ? '⏳ Cooldown... espera'
+                        : '📡 En vivo — Presiona F2 para aceptar'
+                    }
                   </div>
                 </div>
+                {activeTab === 'pesar' && listening && !cooldown && peso >= 1.0 && formData.nro_op && (
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleAceptarPeso}
+                    style={{ marginTop: '12px', fontSize: '1.1rem', padding: '12px 32px' }}
+                  >
+                    ⏎ Aceptar Peso (F2)
+                  </button>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -650,7 +714,7 @@ function App() {
                     <div className="pesaje-info">
                       <span className="peso">{p.peso_kg.toFixed(1)} kg</span>
                       <span className="meta">
-                        {p.molde || 'Sin molde'} • {p.nro_op || ''} • {formatDate(p.fecha_hora)}
+                        {p.nro_orden_trabajo ? `OT ${p.nro_orden_trabajo} • ` : ''}{p.molde || 'Sin molde'} • {p.nro_op || ''} • {formatDate(p.fecha_hora)}
                       </span>
                     </div>
                     <div className="pesaje-actions">

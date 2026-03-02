@@ -1,16 +1,18 @@
 from flask import Blueprint, jsonify
-from collections import deque
 from app.services.scale_service import get_scale_service
+from app import socketio
 
 balanza_bp = Blueprint('balanza', __name__)
 
-# Cola de pesos capturados en tiempo real (thread-safe con deque)
-_weight_queue = deque(maxlen=10)
+# Último peso recibido (para endpoint HTTP de fallback)
+_last_weight = {'peso_kg': None}
 
 
 def _on_weight_received(weight: float):
-    """Callback cuando se recibe un peso de la balanza"""
-    _weight_queue.append(weight)
+    """Callback cuando se recibe un peso de la balanza - emite via WebSocket"""
+    _last_weight['peso_kg'] = weight
+    # Emitir instantáneamente a todos los clientes conectados
+    socketio.emit('peso', {'peso_kg': weight})
 
 
 @balanza_bp.route('/status', methods=['GET'])
@@ -27,12 +29,14 @@ def conectar():
     success = service.connect()
     
     if not success:
+        socketio.emit('balanza_status', {'connected': False, 'listening': False, 'port': service.port})
         return jsonify({
             'status': 'error',
             'connected': False,
             'error': f'No se pudo conectar a {service.port}. Verifica que el puerto esté disponible.'
         }), 500
     
+    socketio.emit('balanza_status', {'connected': True, 'listening': False, 'port': service.port})
     return jsonify({
         'status': 'ok',
         'connected': True,
@@ -45,13 +49,15 @@ def desconectar():
     """Desconecta de la balanza"""
     service = get_scale_service()
     service.disconnect()
+    _last_weight['peso_kg'] = None
+    socketio.emit('balanza_status', {'connected': False, 'listening': False, 'port': service.port})
     return jsonify({'status': 'ok', 'connected': False})
 
 
 @balanza_bp.route('/iniciar-escucha', methods=['POST'])
 def iniciar_escucha():
     """Inicia la escucha continua de la balanza"""
-    _weight_queue.clear()
+    _last_weight['peso_kg'] = None
     
     service = get_scale_service()
     
@@ -64,7 +70,7 @@ def iniciar_escucha():
                 'error': f'No se pudo conectar a {service.port}'
             }), 500
     
-    service.start_listening(_on_weight_received)
+    service.start_listening(_on_weight_received, socketio=socketio)
     
     return jsonify({
         'status': 'ok',
@@ -86,28 +92,8 @@ def detener_escucha():
 
 @balanza_bp.route('/ultimo-peso', methods=['GET'])
 def ultimo_peso():
-    """Obtiene el último peso capturado"""
-
-    
-    if _weight_queue:
-        return jsonify({
-            'peso_kg': _weight_queue[-1],
-            'queue_length': len(_weight_queue)
-        })
-    else:
-        return jsonify({
-            'peso_kg': None,
-            'queue_length': 0
-        })
-
-
-@balanza_bp.route('/pesos-pendientes', methods=['GET'])
-def pesos_pendientes():
-    """Obtiene todos los pesos pendientes en la cola"""
-    pesos = list(_weight_queue)
-    _weight_queue.clear()
-    
+    """Obtiene el último peso capturado (fallback HTTP)"""
     return jsonify({
-        'pesos': pesos,
-        'count': len(pesos)
+        'peso_kg': _last_weight['peso_kg']
     })
+

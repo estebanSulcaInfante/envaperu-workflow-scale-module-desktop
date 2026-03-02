@@ -2,7 +2,7 @@ from datetime import datetime, date, timezone
 import io
 import openpyxl
 from flask import Blueprint, request, jsonify, send_file
-from app import db
+from app import db, socketio
 from app.models.pesaje import Pesaje
 from app.services.sticker_service import get_sticker_service
 from app.utils.logger import get_pesaje_logger
@@ -78,6 +78,9 @@ def crear_pesaje():
     db.session.add(pesaje)
     db.session.commit()
     log.info(f"✅ Pesaje creado con ID: {pesaje.id}")
+    
+    # Notificar a clientes WebSocket
+    socketio.emit('pesajes_updated')
     
     return jsonify(pesaje.to_dict()), 201
 
@@ -173,6 +176,10 @@ def eliminar_pesaje(id):
     db.session.delete(pesaje)
     db.session.commit()
     log.info(f"✅ Pesaje {id} eliminado")
+    
+    # Notificar a clientes WebSocket
+    socketio.emit('pesajes_updated')
+    
     return '', 204
 
 

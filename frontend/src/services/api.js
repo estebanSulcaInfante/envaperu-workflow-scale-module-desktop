@@ -109,4 +109,10 @@ export const rdpApi = {
     api.post('/rdp/cache/reponer')
 };
 
+// ===== Avance Local =====
+export const avanceApi = {
+  resumen: () =>
+    api.get('/avance/resumen')
+};
+
 export default api;

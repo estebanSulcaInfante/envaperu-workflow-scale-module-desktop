@@ -1,10 +1,12 @@
 from flask import Flask
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from flask_socketio import SocketIO
 import threading
 import time
 
 db = SQLAlchemy()
+socketio = SocketIO()
 
 # Background sync thread
 _sync_thread = None
@@ -76,17 +78,21 @@ def create_app():
     db.init_app(app)
     # Configure CORS - Permissive for dev
     CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+    # Initialize SocketIO
+    socketio.init_app(app, cors_allowed_origins="*", async_mode='threading')
     
     # Register blueprints
     from app.routes.pesajes import pesajes_bp
     from app.routes.balanza import balanza_bp
     from app.routes.sync import sync_bp
     from app.routes.rdp import rdp_bp
+    from app.routes.avance import avance_bp
     
     app.register_blueprint(pesajes_bp, url_prefix='/api/pesajes')
     app.register_blueprint(balanza_bp, url_prefix='/api/balanza')
     app.register_blueprint(sync_bp)
     app.register_blueprint(rdp_bp)
+    app.register_blueprint(avance_bp, url_prefix='/api/avance')
     
     # Create tables
     with app.app_context():

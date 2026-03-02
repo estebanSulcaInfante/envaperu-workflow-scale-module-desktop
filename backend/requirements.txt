@@ -38,3 +38,4 @@ urllib3==2.6.2
 usb==0.0.83.dev0
 Werkzeug==3.1.4
 openpyxl==3.1.5
+flask-socketio==5.3.6

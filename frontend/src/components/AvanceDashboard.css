@@ -1,0 +1,294 @@
+.avance-loading, .avance-error, .avance-empty {
+  padding: 3rem;
+  text-align: center;
+  color: var(--text-secondary);
+  background-color: var(--bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  margin-top: 1rem;
+}
+
+.avance-error {
+  color: var(--danger-color);
+}
+
+.avance-container {
+  padding: 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  height: 100%;
+}
+
+.avance-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.avance-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.total-global {
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+}
+
+.total-global strong {
+  color: var(--success-color);
+  font-size: 1.25rem;
+}
+
+/* =========================================
+   STANDARD MODE - DETAILED CARDS
+   ========================================= */
+.avance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.5rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.avance-card {
+  background-color: var(--bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ac-header {
+  padding: 1rem;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ac-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ac-ot {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--primary-color);
+}
+
+.ac-op {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.ac-turno {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+}
+
+.ac-body {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: var(--text-primary);
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.95rem;
+}
+
+.ac-stats {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-flow: column;
+  border-top: 1px solid var(--border-color);
+}
+
+.ac-stats .stat-box.accent {
+  grid-column: span 2;
+  border-top: 1px solid var(--border-color);
+  background-color: rgba(var(--accent-rgb), 0.05); /* Assuming this variable exists, else transparent */
+}
+
+.stat-box {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  text-align: center;
+}
+
+.stat-box:not(:last-child) {
+  border-right: 1px solid var(--border-color);
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.stat-box.primary .stat-value {
+  color: var(--success-color);
+}
+.stat-box.secondary .stat-value {
+  color: var(--primary-color);
+}
+.stat-box.accent .stat-value {
+  color: var(--danger-color); /* Or another highlight color */
+}
+
+/* =========================================
+   BIG MODE - TV/DASHBOARD FOCUS
+   ========================================= */
+.avance-container.big-mode {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  background-color: var(--bg-body);
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.big-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 2rem;
+  flex: 1;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.big-card {
+  background: linear-gradient(135deg, var(--bg-surface) 0%, rgba(255,255,255,0.05) 100%);
+  border: 2px solid var(--border-color);
+  border-radius: 1rem;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+}
+
+.bc-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.bc-ot {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--primary-color);
+}
+
+.bc-op {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.bc-molde {
+  font-size: 1.5rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.bc-weight-container {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: rgba(39, 174, 96, 0.1); /* light green tint */
+  border: 2px solid var(--success-color);
+  padding: 1.5rem 3rem;
+  border-radius: 1rem;
+  margin-bottom: 2rem;
+  width: 100%;
+}
+
+.bc-weight-value {
+  font-size: 6rem;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--success-color);
+  font-variant-numeric: tabular-nums;
+}
+
+.bc-weight-unit {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--success-color);
+  opacity: 0.8;
+}
+
+.bc-footer {
+  display: flex;
+  width: 100%;
+  justify-content: space-around;
+  background-color: var(--bg-body);
+  padding: 1.5rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border-color);
+}
+
+.bc-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.bc-stat .label {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.bc-stat .value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.bc-stat.highlight .value {
+  color: var(--primary-color);
+}

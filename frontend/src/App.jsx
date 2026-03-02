@@ -632,7 +632,31 @@ function App() {
                     value={formData.color}
                     onChange={handleInputChange}
                     placeholder="Color del producto"
+                    list="colores-list"
                   />
+                  <datalist id="colores-list">
+                    <option value="AMARILLO" />
+                    <option value="ANARANJADO" />
+                    <option value="AZUL" />
+                    <option value="AZURE" />
+                    <option value="BLANCO" />
+                    <option value="CARNE" />
+                    <option value="CELESTE" />
+                    <option value="CREMA" />
+                    <option value="FUCSIA" />
+                    <option value="LILA" />
+                    <option value="LILA BEBE" />
+                    <option value="MARRON" />
+                    <option value="MELON" />
+                    <option value="NEGRO" />
+                    <option value="PLOMO" />
+                    <option value="ROJO" />
+                    <option value="ROSADO" />
+                    <option value="SANDIA" />
+                    <option value="TRANSPARENTE" />
+                    <option value="TURQUESA" />
+                    <option value="VERDE" />
+                  </datalist>
                 </div>
                 
                 {/* Selector de Pieza/Componente */}

@@ -534,7 +534,7 @@ function App() {
 
       {/* TAB 3: AVANCE DASHBOARD */}
       {activeTab === 'avance' && (
-        <main className="main-content">
+        <main className="main-content avance-full">
           <AvanceDashboard />
         </main>
       )}

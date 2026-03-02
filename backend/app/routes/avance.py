@@ -12,66 +12,59 @@ avance_bp = Blueprint('avance', __name__)
 @avance_bp.route('/resumen', methods=['GET'])
 def resumen_avance():
     """
-    Retorna el peso total acumulado y conteo de pesajes hoy,
-    agrupado por nro_orden_trabajo o nro_op.
-    Solo considera pesajes creados hoy para el dashboard activo.
+    Retorna pesajes de hoy agrupados por molde+color.
+    Estructura: { grupos: [ { molde, color, total_kg, total_bolsas, pesajes: [...] }, ... ] }
     """
     today = date.today()
     
-    # Query para agrupar pesajes de hoy
-    results = db.session.query(
-        Pesaje.nro_orden_trabajo,
-        Pesaje.nro_op,
-        Pesaje.molde,
-        Pesaje.maquina,
-        Pesaje.turno,
-        Pesaje.peso_unitario_teorico,
-        func.count(Pesaje.id).label('total_pesajes'),
-        func.sum(Pesaje.peso_kg).label('total_peso_kg')
-    ).filter(
+    pesajes = Pesaje.query.filter(
         func.date(Pesaje.fecha_hora) == today
-    ).group_by(
-        Pesaje.nro_orden_trabajo,
-        Pesaje.nro_op,
-        Pesaje.molde,
-        Pesaje.maquina,
-        Pesaje.turno,
-        Pesaje.peso_unitario_teorico
-    ).order_by(
-        func.sum(Pesaje.peso_kg).desc()
-    ).all()
+    ).order_by(Pesaje.fecha_hora.desc()).all()
     
-    # Formatear la respuesta
-    avance_list = []
+    # Agrupar por molde + color
+    grupos_dict = {}
     total_global_kg = 0.0
+    total_registros = 0
     
-    for row in results:
-        # Calcular unidades estimadas si hay peso unitario (> 0)
-        unidades_estimadas = 0
-        peso_unit_kg = None
-        if row.peso_unitario_teorico and row.peso_unitario_teorico > 0:
-            peso_unit_kg = row.peso_unitario_teorico / 1000.0 if row.peso_unitario_teorico > 10 else row.peso_unitario_teorico
-            if row.total_peso_kg and peso_unit_kg > 0:
-                unidades_estimadas = int(row.total_peso_kg / peso_unit_kg)
+    for p in pesajes:
+        molde = p.molde or 'SIN MOLDE'
+        color = p.color or 'SIN COLOR'
+        key = f"{molde}|{color}"
         
-        peso_total = row.total_peso_kg if row.total_peso_kg else 0.0
-        total_global_kg += peso_total
+        if key not in grupos_dict:
+            grupos_dict[key] = {
+                'molde': molde,
+                'color': color,
+                'total_kg': 0.0,
+                'total_bolsas': 0,
+                'pesajes': []
+            }
         
-        avance_list.append({
-            'nro_orden_trabajo': row.nro_orden_trabajo,
-            'nro_op': row.nro_op,
-            'molde': row.molde,
-            'maquina': row.maquina,
-            'turno': row.turno,
-            'peso_unitario_teorico': row.peso_unitario_teorico,
-            'total_pesajes': row.total_pesajes,
-            'total_peso_kg': round(peso_total, 2),
-            'unidades_estimadas': unidades_estimadas
+        peso = p.peso_kg if p.peso_kg else 0.0
+        grupos_dict[key]['total_kg'] += peso
+        grupos_dict[key]['total_bolsas'] += 1
+        grupos_dict[key]['pesajes'].append({
+            'id': p.id,
+            'peso_kg': p.peso_kg,
+            'fecha_hora': p.fecha_hora.isoformat() if p.fecha_hora else None,
+            'nro_op': p.nro_op,
+            'nro_orden_trabajo': p.nro_orden_trabajo,
         })
         
+        total_global_kg += peso
+        total_registros += 1
+    
+    # Convertir a lista y redondear
+    grupos = list(grupos_dict.values())
+    for g in grupos:
+        g['total_kg'] = round(g['total_kg'], 2)
+    
+    # Ordenar por peso total descendente
+    grupos.sort(key=lambda x: x['total_kg'], reverse=True)
+    
     return jsonify({
         'fecha': today.isoformat(),
-        'items': avance_list,
+        'grupos': grupos,
         'total_global_kg': round(total_global_kg, 2),
-        'total_registros': sum(r['total_pesajes'] for r in avance_list)
+        'total_registros': total_registros
     })

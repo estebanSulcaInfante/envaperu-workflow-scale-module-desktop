@@ -68,22 +68,37 @@ def stop_background_sync():
         _sync_thread = None
 
 
-def _migrate_correlativo_cache(database):
-    """Add new columns to correlativo_cache if they don't exist (safe to run multiple times)."""
-    new_columns = [
-        ('maquina', 'VARCHAR(50)'),
-        ('turno', 'VARCHAR(20)'),
-        ('fecha_ot', 'VARCHAR(20)'),
-        ('operador', 'VARCHAR(100)'),
-        ('color', 'VARCHAR(50)'),
-    ]
-    for col_name, col_type in new_columns:
-        try:
-            database.session.execute(
-                database.text(f'ALTER TABLE correlativo_cache ADD COLUMN {col_name} {col_type}')
-            )
-        except Exception:
-            pass  # Column already exists
+def _run_migrations(database):
+    """Add missing columns to existing tables (safe to run multiple times)."""
+    migrations = {
+        'pesajes': [
+            ('peso_unitario_teorico', 'FLOAT'),
+            ('operador', 'VARCHAR(100)'),
+            ('color', 'VARCHAR(50)'),
+            ('pieza_sku', 'VARCHAR(50)'),
+            ('pieza_nombre', 'VARCHAR(100)'),
+            ('sticker_impreso', 'BOOLEAN DEFAULT 0'),
+            ('fecha_impresion', 'DATETIME'),
+            ('sincronizado', 'BOOLEAN DEFAULT 0'),
+            ('fecha_sincronizacion', 'DATETIME'),
+            ('qr_data_original', 'VARCHAR(500)'),
+        ],
+        'correlativo_cache': [
+            ('maquina', 'VARCHAR(50)'),
+            ('turno', 'VARCHAR(20)'),
+            ('fecha_ot', 'VARCHAR(20)'),
+            ('operador', 'VARCHAR(100)'),
+            ('color', 'VARCHAR(50)'),
+        ],
+    }
+    for table, columns in migrations.items():
+        for col_name, col_type in columns:
+            try:
+                database.session.execute(
+                    database.text(f'ALTER TABLE {table} ADD COLUMN {col_name} {col_type}')
+                )
+            except Exception:
+                pass  # Column already exists
     database.session.commit()
 
 
@@ -117,7 +132,7 @@ def create_app():
     with app.app_context():
         db.create_all()
         # Migrate: add new columns to correlativo_cache if they don't exist
-        _migrate_correlativo_cache(db)
+        _run_migrations(db)
     
     # Start background sync (solo si está habilitado)
     if app.config.get('SYNC_ENABLED', True):

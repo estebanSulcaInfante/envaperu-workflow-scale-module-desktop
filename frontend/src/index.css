@@ -109,6 +109,11 @@ body {
   background: var(--bg-main);
 }
 
+/* Avance tab: full width */
+.main-content.avance-full {
+  grid-template-columns: 1fr;
+}
+
 /* Tab Navigation */
 .tab-nav {
   display: flex;

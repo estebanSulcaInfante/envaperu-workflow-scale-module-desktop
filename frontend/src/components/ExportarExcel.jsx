@@ -64,19 +64,19 @@ export default function ExportarExcel({ onClose }) {
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content rdp-modal">
-        <div className="modal-header">
+    <div className="generar-rdp-overlay">
+      <div className="generar-rdp-modal">
+        <div className="rdp-header">
           <h2>📊 Exportar a Excel</h2>
-          <button className="btn-close" onClick={onClose}>&times;</button>
+          <button className="rdp-close" onClick={onClose}>&times;</button>
         </div>
         
-        <div className="modal-body">
+        <div className="rdp-content">
           <p>Seleccione el rango de fechas para exportar los pesajes.</p>
           
-          {error && <div className="alert-error" style={{ color: 'red', marginBottom: '1rem' }}>{error}</div>}
+          {error && <div className="rdp-error">{error}</div>}
           
-          <div className="form-group" style={{ marginTop: '1rem' }}>
+          <div className="rdp-field" style={{ marginTop: '1rem' }}>
             <label>Fecha Inicio:</label>
             <input 
               type="date" 
@@ -87,7 +87,7 @@ export default function ExportarExcel({ onClose }) {
             />
           </div>
           
-          <div className="form-group">
+          <div className="rdp-field" style={{ marginTop: '0.75rem' }}>
             <label>Fecha Fin:</label>
             <input 
               type="date" 
@@ -99,16 +99,16 @@ export default function ExportarExcel({ onClose }) {
           </div>
         </div>
         
-        <div className="modal-footer">
+        <div className="rdp-actions">
           <button 
-            className="btn btn-secondary" 
+            className="rdp-btn rdp-btn-cancel" 
             onClick={onClose}
             disabled={loading}
           >
             Cancelar
           </button>
           <button 
-            className="btn btn-primary" 
+            className="rdp-btn rdp-btn-primary" 
             onClick={handleExportar}
             disabled={loading}
           >

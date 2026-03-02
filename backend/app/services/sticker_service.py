@@ -19,7 +19,7 @@ class StickerService:
     # Configuración TSPL
     MAX_CHARS_PER_LINE = 25  # Máximo caracteres por línea
     LEFT_X = 24              # Posición X sticker izquierdo (3mm margen)
-    RIGHT_X = 472            # Posición X sticker derecho (24+400+48 = 6mm gap)
+    RIGHT_X = 464            # Posición X sticker derecho (24+400+40 = 5mm gap)
     LINE_HEIGHT = 18         # Altura entre líneas
     STICKER_WIDTH = 400      # Ancho de cada sticker en dots (50mm)
     
@@ -91,11 +91,7 @@ class StickerService:
             y += 28
             
             # QR
-            lines.append(f'QRCODE {x + 120}, {y}, L, 3, A, 0, "{qr_data}"')
-            y += 125
-            
-            # Barra final gruesa
-            lines.append(f'BAR {x}, {y}, 400, 3')
+            lines.append(f'QRCODE {x + 120}, {y}, L, 4, A, 0, "{qr_data}"')
             
             return '\n'.join(lines)
         

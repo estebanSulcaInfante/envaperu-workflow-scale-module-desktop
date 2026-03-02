@@ -354,7 +354,7 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
     maquina = data.get('maquina', '')
 
     LEFT_X = 24
-    RIGHT_X = 456            # (24+400+32 = 4mm gap)
+    RIGHT_X = 464            # (24+400+40 = 5mm gap)
     LINE_HEIGHT = 18
 
     def gen_sticker(x: int) -> str:
@@ -394,10 +394,6 @@ def generate_rdp_tspl(data: dict, qr_data: str) -> str:
 
         # QR Code centrado dentro del sticker (nivel 5 para mayor tamaño)
         lines.append(f'QRCODE {x + 90}, {y}, L, 5, A, 0, "{qr_data}"')
-        y += 155
-
-        # Barra final gruesa (alineada con sticker pesaje ~y=350)
-        lines.append(f'BAR {x}, {y}, 400, 3')
 
         return '\n'.join(lines)
 

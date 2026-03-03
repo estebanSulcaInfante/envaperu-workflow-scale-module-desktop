@@ -26,6 +26,10 @@ class Pesaje(db.Model):
     operador = db.Column(db.String(100), nullable=True)  # OPE: Admin
     color = db.Column(db.String(50), nullable=True)  # COL:
     
+    # Factor de corrección (%) para productos mezclados
+    # Ej: si un balde pesa 10kg pero incluye asa (20% del peso), el factor sería 80
+    factor_correccion = db.Column(db.Float, default=100.0, nullable=False)
+    
     # Pieza/componente seleccionado (del dropdown)
     pieza_sku = db.Column(db.String(50), nullable=True)
     pieza_nombre = db.Column(db.String(100), nullable=True)
@@ -43,10 +47,18 @@ class Pesaje(db.Model):
     # QR original escaneado
     qr_data_original = db.Column(db.String(500), nullable=True)
     
+    @property
+    def peso_corregido(self):
+        """Peso ajustado por el factor de corrección"""
+        factor = self.factor_correccion if self.factor_correccion is not None else 100.0
+        return (self.peso_kg or 0.0) * factor / 100.0
+
     def to_dict(self):
         return {
             'id': self.id,
             'peso_kg': self.peso_kg,
+            'factor_correccion': self.factor_correccion,
+            'peso_corregido': round(self.peso_corregido, 2),
             'fecha_hora': self.fecha_hora.isoformat() if self.fecha_hora else None,
             'molde': self.molde,
             'maquina': self.maquina,

@@ -175,7 +175,12 @@ function AvanceDashboard() {
                                 <span className="bolsa-num">#{colorGroup.pesajes.length - i}</span>
                                 <span className="bolsa-time">{formatTime(p.fecha_hora)}</span>
                                 <span className="bolsa-ot">OT {p.nro_orden_trabajo || '—'}</span>
-                                <span className="bolsa-peso">{p.peso_kg?.toFixed(1)} kg</span>
+                                <span className="bolsa-peso">
+                                  {(p.peso_corregido ?? p.peso_kg)?.toFixed(1)} kg
+                                  {p.factor_correccion && p.factor_correccion !== 100 && (
+                                    <small style={{ color: 'var(--warning)', marginLeft: '4px', fontSize: '0.75em' }}>({p.factor_correccion}%)</small>
+                                  )}
+                                </span>
                               </div>
                             ))}
                           </div>

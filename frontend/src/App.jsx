@@ -23,6 +23,7 @@ function App() {
     nro_orden_trabajo: '',
     operador: '',
     color: '',
+    factor_correccion: '100',
     pieza_sku: '',
     pieza_nombre: '',
     peso_unitario_teorico: ''
@@ -333,7 +334,8 @@ function App() {
       nro_orden_trabajo: '',
       peso_unitario_teorico: '',
       operador: '',
-      color: ''
+      color: '',
+      factor_correccion: '100'
     });
     setStickerPreview(null);
   };
@@ -657,6 +659,26 @@ function App() {
                     <option value="TURQUESA" />
                     <option value="VERDE" />
                   </datalist>
+                </div>
+                
+                {/* Factor de Corrección */}
+                <div className="form-group">
+                  <label>Factor de Corrección (%)</label>
+                  <input
+                    type="number"
+                    name="factor_correccion"
+                    value={formData.factor_correccion}
+                    onChange={handleInputChange}
+                    min="1"
+                    max="100"
+                    step="1"
+                    placeholder="100"
+                  />
+                  {formData.factor_correccion !== '100' && (
+                    <small style={{ color: 'var(--warning)', fontSize: '0.8rem' }}>
+                      ⚠️ Se guardará {formData.factor_correccion}% del peso ({(peso * parseFloat(formData.factor_correccion || '100') / 100).toFixed(1)} kg)
+                    </small>
+                  )}
                 </div>
                 
                 {/* Selector de Pieza/Componente */}

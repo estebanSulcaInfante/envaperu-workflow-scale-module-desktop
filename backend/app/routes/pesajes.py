@@ -58,6 +58,15 @@ def crear_pesaje():
         except (ValueError, TypeError):
             pass
     
+    # Parse factor_correccion (porcentaje, default 100)
+    factor = 100.0
+    raw_factor = data.get('factor_correccion')
+    if raw_factor is not None and str(raw_factor).strip() != '':
+        try:
+            factor = float(raw_factor)
+        except (ValueError, TypeError):
+            pass
+    
     pesaje = Pesaje(
         peso_kg=data['peso_kg'],
         molde=data.get('molde'),
@@ -69,6 +78,7 @@ def crear_pesaje():
         peso_unitario_teorico=peso_unit,
         operador=data.get('operador'),
         color=data.get('color'),
+        factor_correccion=factor,
         pieza_sku=data.get('pieza_sku'),
         pieza_nombre=data.get('pieza_nombre'),
         observaciones=data.get('observaciones'),
@@ -156,6 +166,15 @@ def actualizar_pesaje(id):
         pesaje.operador = data['operador']
     if 'observaciones' in data:
         pesaje.observaciones = data['observaciones']
+    if 'factor_correccion' in data:
+        raw_factor = data['factor_correccion']
+        if raw_factor is not None and str(raw_factor).strip() != '':
+            try:
+                pesaje.factor_correccion = float(raw_factor)
+            except (ValueError, TypeError):
+                pass
+        else:
+            pesaje.factor_correccion = 100.0
     if 'fecha_orden_trabajo' in data and data['fecha_orden_trabajo']:
         try:
             pesaje.fecha_orden_trabajo = datetime.strptime(

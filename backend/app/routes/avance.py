@@ -42,13 +42,15 @@ def resumen_avance():
                 'pesajes': []
             }
         
-        peso = p.peso_kg if p.peso_kg else 0.0
+        peso = p.peso_corregido
         color_group = molde_group['colores_dict'][color]
         color_group['total_kg'] += peso
         color_group['total_bolsas'] += 1
         color_group['pesajes'].append({
             'id': p.id,
             'peso_kg': p.peso_kg,
+            'factor_correccion': p.factor_correccion,
+            'peso_corregido': round(p.peso_corregido, 2),
             'fecha_hora': p.fecha_hora.isoformat() if p.fecha_hora else None,
             'nro_op': p.nro_op,
             'nro_orden_trabajo': p.nro_orden_trabajo,

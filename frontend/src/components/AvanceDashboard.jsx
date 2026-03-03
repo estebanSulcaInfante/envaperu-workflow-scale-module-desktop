@@ -21,6 +21,7 @@ const COLOR_MAP = {
   'ROSADO':       '#F48FB1',
   'TURQUESA':     '#00897B',
   'VERDE':        '#2E7D32',
+  'CARAMELO':     '#AF6E28',
   // Colores abstractos → patrón checkered
   'NATURAL':      'pattern',
   'TRANSPARENTE': 'pattern',
@@ -50,19 +51,30 @@ function AvanceDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [bigMode, setBigMode] = useState(false);
-  const [expanded, setExpanded] = useState({});
+  // expanded: { molde: bool } para nivel 1, { "molde|color": bool } para nivel 2
+  const [expandedMoldes, setExpandedMoldes] = useState({});
+  const [expandedColors, setExpandedColors] = useState({});
 
   const loadData = async () => {
     try {
       const { data } = await avanceApi.resumen();
       setResumen(data);
       setError(null);
-      if (data.grupos) {
-        setExpanded(prev => {
+      if (data.grupos_por_molde) {
+        setExpandedMoldes(prev => {
           const merged = {};
-          data.grupos.forEach((g, i) => {
-            const key = `${g.molde}|${g.color}`;
-            merged[key] = prev[key] !== undefined ? prev[key] : true;
+          data.grupos_por_molde.forEach((m) => {
+            merged[m.molde] = prev[m.molde] !== undefined ? prev[m.molde] : true;
+          });
+          return merged;
+        });
+        setExpandedColors(prev => {
+          const merged = {};
+          data.grupos_por_molde.forEach((m) => {
+            m.colores.forEach((c) => {
+              const key = `${m.molde}|${c.color}`;
+              merged[key] = prev[key] !== undefined ? prev[key] : false;
+            });
           });
           return merged;
         });
@@ -82,11 +94,19 @@ function AvanceDashboard() {
     return () => socket.off('pesajes_updated', handler);
   }, []);
 
-  const toggle = (key) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+  const toggleMolde = (molde) => setExpandedMoldes(prev => ({ ...prev, [molde]: !prev[molde] }));
+  const toggleColor = (key) => setExpandedColors(prev => ({ ...prev, [key]: !prev[key] }));
+
   const setAll = (val) => {
-    const all = {};
-    resumen.grupos.forEach(g => { all[`${g.molde}|${g.color}`] = val; });
-    setExpanded(all);
+    if (!resumen?.grupos_por_molde) return;
+    const moldes = {};
+    const colors = {};
+    resumen.grupos_por_molde.forEach(m => {
+      moldes[m.molde] = val;
+      m.colores.forEach(c => { colors[`${m.molde}|${c.color}`] = val; });
+    });
+    setExpandedMoldes(moldes);
+    setExpandedColors(colors);
   };
 
   const formatTime = (iso) => {
@@ -96,7 +116,7 @@ function AvanceDashboard() {
 
   if (loading) return <div className="avance-loading">Cargando avance...</div>;
   if (error) return <div className="avance-error">{error}</div>;
-  if (!resumen || !resumen.grupos || resumen.grupos.length === 0) {
+  if (!resumen || !resumen.grupos_por_molde || resumen.grupos_por_molde.length === 0) {
     return (
       <div className="avance-empty">
         <h3>📊 No hay pesajes registrados hoy</h3>
@@ -107,39 +127,63 @@ function AvanceDashboard() {
 
   const renderTree = () => (
     <div className="avance-tree">
-      {resumen.grupos.map((group) => {
-        const key = `${group.molde}|${group.color}`;
-        const isOpen = expanded[key];
+      {resumen.grupos_por_molde.map((moldeGroup) => {
+        const isMoldeOpen = expandedMoldes[moldeGroup.molde];
 
         return (
-          <div key={key} className={`color-group ${isOpen ? 'open' : ''}`}>
-            <div className="color-header" onClick={() => toggle(key)}>
-              <div className="color-left">
-                <span className="expand-icon">{isOpen ? '▼' : '▶'}</span>
-                <ColorDot color={group.color} />
-                <span className="group-name">
-                  <span className="molde-name">{group.molde}</span>
-                  <span className="color-tag">{group.color}</span>
-                </span>
+          <div key={moldeGroup.molde} className={`molde-group ${isMoldeOpen ? 'open' : ''}`}>
+            {/* Nivel 1: Header del molde */}
+            <div className="molde-header" onClick={() => toggleMolde(moldeGroup.molde)}>
+              <div className="molde-left">
+                <span className="expand-icon">{isMoldeOpen ? '▼' : '▶'}</span>
+                <span className="molde-name">{moldeGroup.molde}</span>
+                <span className="molde-colors-count">{moldeGroup.colores.length} color{moldeGroup.colores.length !== 1 ? 'es' : ''}</span>
               </div>
-              <div className="color-stats">
-                <span className="stat-kg">{group.total_kg.toFixed(1)} kg</span>
-                <span className="stat-bolsas">{group.total_bolsas} bolsa{group.total_bolsas !== 1 ? 's' : ''}</span>
+              <div className="molde-stats">
+                <span className="stat-kg">{moldeGroup.total_kg.toFixed(1)} kg</span>
+                <span className="stat-bolsas">{moldeGroup.total_bolsas} bolsa{moldeGroup.total_bolsas !== 1 ? 's' : ''}</span>
               </div>
             </div>
 
-            {isOpen && (
-              <div className="color-body">
-                <div className="bolsas-list">
-                  {group.pesajes.map((p, i) => (
-                    <div key={p.id} className="bolsa-row">
-                      <span className="bolsa-num">#{group.pesajes.length - i}</span>
-                      <span className="bolsa-time">{formatTime(p.fecha_hora)}</span>
-                      <span className="bolsa-ot">OT {p.nro_orden_trabajo || '—'}</span>
-                      <span className="bolsa-peso">{p.peso_kg?.toFixed(1)} kg</span>
+            {/* Nivel 2: Colores dentro del molde */}
+            {isMoldeOpen && (
+              <div className="molde-body">
+                {moldeGroup.colores.map((colorGroup) => {
+                  const colorKey = `${moldeGroup.molde}|${colorGroup.color}`;
+                  const isColorOpen = expandedColors[colorKey];
+
+                  return (
+                    <div key={colorKey} className={`color-group ${isColorOpen ? 'open' : ''}`}>
+                      <div className="color-header" onClick={() => toggleColor(colorKey)}>
+                        <div className="color-left">
+                          <span className="expand-icon">{isColorOpen ? '▼' : '▶'}</span>
+                          <ColorDot color={colorGroup.color} />
+                          <span className="color-tag">{colorGroup.color}</span>
+                        </div>
+                        <div className="color-stats">
+                          <span className="stat-kg">{colorGroup.total_kg.toFixed(1)} kg</span>
+                          <span className="stat-bolsas">{colorGroup.total_bolsas} bolsa{colorGroup.total_bolsas !== 1 ? 's' : ''}</span>
+                        </div>
+                      </div>
+
+                      {/* Nivel 3: Pesajes individuales */}
+                      {isColorOpen && (
+                        <div className="color-body">
+                          <div className="bolsas-list">
+                            {colorGroup.pesajes.map((p, i) => (
+                              <div key={p.id} className="bolsa-row">
+                                <span className="bolsa-num">#{colorGroup.pesajes.length - i}</span>
+                                <span className="bolsa-time">{formatTime(p.fecha_hora)}</span>
+                                <span className="bolsa-ot">OT {p.nro_orden_trabajo || '—'}</span>
+                                <span className="bolsa-peso">{p.peso_kg?.toFixed(1)} kg</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -172,7 +216,7 @@ function AvanceDashboard() {
   return (
     <div className="avance-container">
       <div className="avance-header">
-        <h2>📊 Avance ({resumen.fecha})</h2>
+        <h2>📊 Avance</h2>
         <div className="header-actions">
           <span className="total-global">
             Total: <strong>{resumen.total_global_kg.toFixed(1)} kg</strong> ({resumen.total_registros} bolsas)

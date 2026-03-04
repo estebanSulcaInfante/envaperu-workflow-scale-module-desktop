@@ -171,8 +171,8 @@ function AvanceDashboard() {
                         <div className="color-body">
                           <div className="bolsas-list">
                             {colorGroup.pesajes.map((p, i) => (
-                              <div key={p.id} className="bolsa-row">
-                                <span className="bolsa-num">#{colorGroup.pesajes.length - i}</span>
+                              <div key={p.id} className="bolsa-row" style={p.tipo === 'PUCHO' ? { opacity: 0.8, fontStyle: 'italic' } : {}}>
+                                <span className="bolsa-num">{p.tipo === 'PUCHO' ? '📎' : `#${colorGroup.pesajes.length - i}`}</span>
                                 <span className="bolsa-time">{formatTime(p.fecha_hora)}</span>
                                 <span className="bolsa-ot">OT {p.nro_orden_trabajo || '—'}</span>
                                 <span className="bolsa-peso">

@@ -47,6 +47,13 @@ class Pesaje(db.Model):
     # QR original escaneado
     qr_data_original = db.Column(db.String(500), nullable=True)
     
+    # Tipo de pesaje: BOLSA (default) o PUCHO (parcial)
+    tipo = db.Column(db.String(10), default='BOLSA', nullable=False)
+    # Estado del pucho: ABIERTO (pendiente) o COMPLETADO (consumido por una bolsa)
+    estado_pucho = db.Column(db.String(15), nullable=True)
+    # FK: si esta bolsa completó un pucho, apunta al pucho consumido
+    pucho_origen_id = db.Column(db.Integer, db.ForeignKey('pesajes.id'), nullable=True)
+    
     @property
     def peso_corregido(self):
         """Peso ajustado por el factor de corrección"""
@@ -77,6 +84,9 @@ class Pesaje(db.Model):
             'sincronizado': self.sincronizado,
             'fecha_sincronizacion': self.fecha_sincronizacion.isoformat() if self.fecha_sincronizacion else None,
             'qr_data_original': self.qr_data_original,
+            'tipo': self.tipo or 'BOLSA',
+            'estado_pucho': self.estado_pucho,
+            'pucho_origen_id': self.pucho_origen_id,
         }
     
     @staticmethod

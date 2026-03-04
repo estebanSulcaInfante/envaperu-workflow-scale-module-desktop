@@ -67,8 +67,29 @@ def crear_pesaje():
         except (ValueError, TypeError):
             pass
     
+    # Determinar tipo de pesaje
+    tipo = data.get('tipo', 'BOLSA').upper()
+    if tipo not in ('BOLSA', 'PUCHO'):
+        tipo = 'BOLSA'
+    
+    # Si se completa un pucho, calcular delta
+    pucho_origen_id = data.get('pucho_origen_id')
+    peso_final = data['peso_kg']
+    
+    if pucho_origen_id:
+        pucho = Pesaje.query.get(pucho_origen_id)
+        if not pucho or pucho.estado_pucho != 'ABIERTO':
+            return jsonify({'error': 'Pucho no encontrado o ya completado'}), 400
+        # Delta: peso total de la bolsa - peso del pucho
+        peso_final = data['peso_kg'] - pucho.peso_corregido
+        if peso_final < 0:
+            peso_final = 0
+        # Marcar pucho como completado
+        pucho.estado_pucho = 'COMPLETADO'
+        tipo = 'BOLSA'  # Forzar tipo BOLSA al completar
+    
     pesaje = Pesaje(
-        peso_kg=data['peso_kg'],
+        peso_kg=peso_final,
         molde=data.get('molde'),
         maquina=data.get('maquina'),
         nro_op=data.get('nro_op'),
@@ -82,17 +103,37 @@ def crear_pesaje():
         pieza_sku=data.get('pieza_sku'),
         pieza_nombre=data.get('pieza_nombre'),
         observaciones=data.get('observaciones'),
-        qr_data_original=data.get('qr_data_original')
+        qr_data_original=data.get('qr_data_original'),
+        tipo=tipo,
+        estado_pucho='ABIERTO' if tipo == 'PUCHO' else None,
+        pucho_origen_id=pucho_origen_id,
     )
     
     db.session.add(pesaje)
     db.session.commit()
-    log.info(f"✅ Pesaje creado con ID: {pesaje.id}")
+    log.info(f"✅ Pesaje creado con ID: {pesaje.id}, tipo: {tipo}")
     
     # Notificar a clientes WebSocket
     socketio.emit('pesajes_updated')
     
     return jsonify(pesaje.to_dict()), 201
+
+
+@pesajes_bp.route('/puchos-abiertos', methods=['GET'])
+def puchos_abiertos():
+    """Retorna puchos abiertos, filtrados opcionalmente por molde y color"""
+    molde = request.args.get('molde')
+    color = request.args.get('color')
+    
+    query = Pesaje.query.filter_by(tipo='PUCHO', estado_pucho='ABIERTO')
+    
+    if molde:
+        query = query.filter_by(molde=molde)
+    if color:
+        query = query.filter_by(color=color)
+    
+    puchos = query.order_by(Pesaje.fecha_hora.desc()).all()
+    return jsonify([p.to_dict() for p in puchos])
 
 
 @pesajes_bp.route('/parse-qr', methods=['POST'])

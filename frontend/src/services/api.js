@@ -39,6 +39,14 @@ export const pesajesApi = {
   sinSincronizar: () => 
     api.get('/pesajes/sin-sincronizar'),
   
+  puchosAbiertos: (molde, color) => {
+    const params = new URLSearchParams();
+    if (molde) params.append('molde', molde);
+    if (color) params.append('color', color);
+    const qs = params.toString();
+    return api.get(`/pesajes/puchos-abiertos${qs ? '?' + qs : ''}`);
+  },
+  
   marcarSincronizado: (ids) => 
     api.post('/pesajes/marcar-sincronizado', { ids }),
     

@@ -45,7 +45,9 @@ def resumen_avance():
         peso = p.peso_corregido
         color_group = molde_group['colores_dict'][color]
         color_group['total_kg'] += peso
-        color_group['total_bolsas'] += 1
+        # Solo BOLSA cuenta como bolsa
+        if (p.tipo or 'BOLSA') == 'BOLSA':
+            color_group['total_bolsas'] += 1
         color_group['pesajes'].append({
             'id': p.id,
             'peso_kg': p.peso_kg,
@@ -54,10 +56,13 @@ def resumen_avance():
             'fecha_hora': p.fecha_hora.isoformat() if p.fecha_hora else None,
             'nro_op': p.nro_op,
             'nro_orden_trabajo': p.nro_orden_trabajo,
+            'tipo': p.tipo or 'BOLSA',
+            'estado_pucho': p.estado_pucho,
         })
         
         molde_group['total_kg'] += peso
-        molde_group['total_bolsas'] += 1
+        if (p.tipo or 'BOLSA') == 'BOLSA':
+            molde_group['total_bolsas'] += 1
         total_global_kg += peso
         total_registros += 1
     

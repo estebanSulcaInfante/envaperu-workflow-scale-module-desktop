@@ -82,6 +82,10 @@ def _run_migrations(database):
             ('sincronizado', 'BOOLEAN DEFAULT 0'),
             ('fecha_sincronizacion', 'DATETIME'),
             ('qr_data_original', 'VARCHAR(500)'),
+            ('factor_correccion', 'FLOAT DEFAULT 100.0'),
+            ('tipo', "VARCHAR(10) DEFAULT 'BOLSA'"),
+            ('estado_pucho', 'VARCHAR(15)'),
+            ('pucho_origen_id', 'INTEGER REFERENCES pesajes(id)'),
         ],
         'correlativo_cache': [
             ('maquina', 'VARCHAR(50)'),

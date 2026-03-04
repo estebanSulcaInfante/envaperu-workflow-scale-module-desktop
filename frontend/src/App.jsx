@@ -32,6 +32,11 @@ function App() {
   // Piezas disponibles para el molde actual (del cache)
   const [piezasDisponibles, setPiezasDisponibles] = useState([]);
   
+  // Pucho state
+  const [esPucho, setEsPucho] = useState(false);
+  const [puchosAbiertos, setPuchosAbiertos] = useState([]);
+  const [selectedPucho, setSelectedPucho] = useState(null);
+  
   // Pesajes list
   const [pesajes, setPesajes] = useState([]);
   
@@ -183,6 +188,17 @@ function App() {
         
         showToast('✅ QR escaneado correctamente');
         setQrInput('');
+        
+        // Buscar puchos abiertos para este molde/color
+        if (moldeNombre) {
+          try {
+            const { data: puchosData } = await pesajesApi.puchosAbiertos(moldeNombre);
+            setPuchosAbiertos(puchosData || []);
+            setSelectedPucho(null);
+          } catch (err) {
+            setPuchosAbiertos([]);
+          }
+        }
       }
     } catch (err) {
       console.error('Error parsing QR:', err);
@@ -237,6 +253,8 @@ function App() {
       const pesajeData = {
         peso_kg: peso,
         ...formData,
+        tipo: esPucho ? 'PUCHO' : 'BOLSA',
+        pucho_origen_id: selectedPucho?.id || null,
         qr_data_original: qrInput
       };
       console.log('[F2] Creando pesaje:', pesajeData);
@@ -244,16 +262,24 @@ function App() {
       const { data } = await pesajesApi.crear(pesajeData);
       console.log('[F2] Pesaje creado con ID:', data.id);
 
-      // Imprimir automáticamente
-      await pesajesApi.imprimir(data.id);
-      console.log('[F2] ✅ Impresión completada');
+      // Imprimir automáticamente (solo bolsas)
+      if (!esPucho) {
+        await pesajesApi.imprimir(data.id);
+        console.log('[F2] ✅ Impresión completada');
+      }
 
-      showToast(`✅ Pesaje #${data.id} guardado e impreso (${peso.toFixed(1)} kg)`);
+      const tipoLabel = esPucho ? 'Pucho' : (selectedPucho ? 'Bolsa (completó pucho)' : 'Bolsa');
+      showToast(`✅ ${tipoLabel} #${data.id} guardado (${data.peso_kg.toFixed(1)} kg)`);
       loadPesajes();
+      setEsPucho(false);
+      setSelectedPucho(null);
+      setPuchosAbiertos([]);
 
       // Show sticker preview
-      const preview = await pesajesApi.previewSticker(data.id);
-      setStickerPreview(preview.data.preview);
+      if (!esPucho) {
+        const preview = await pesajesApi.previewSticker(data.id);
+        setStickerPreview(preview.data.preview);
+      }
 
     } catch (err) {
       console.error('[F2] ❌ Error:', err);
@@ -278,17 +304,27 @@ function App() {
       const { data } = await pesajesApi.crear({
         peso_kg: peso,
         ...formData,
+        tipo: esPucho ? 'PUCHO' : 'BOLSA',
+        pucho_origen_id: selectedPucho?.id || null,
         qr_data_original: qrInput
       });
       
-      // Imprimir automáticamente
-      await pesajesApi.imprimir(data.id);
-      showToast('✅ Guardado e impreso correctamente');
+      // Imprimir automáticamente (solo bolsas)
+      if (!esPucho) {
+        await pesajesApi.imprimir(data.id);
+      }
+      const tipoLabel = esPucho ? 'Pucho guardado' : 'Guardado e impreso';
+      showToast(`✅ ${tipoLabel}`);
       loadPesajes();
+      setEsPucho(false);
+      setSelectedPucho(null);
+      setPuchosAbiertos([]);
       
       // Show sticker preview
-      const preview = await pesajesApi.previewSticker(data.id);
-      setStickerPreview(preview.data.preview);
+      if (!esPucho) {
+        const preview = await pesajesApi.previewSticker(data.id);
+        setStickerPreview(preview.data.preview);
+      }
       
     } catch (err) {
       showToast('❌ Error al guardar', 'error');
@@ -338,6 +374,9 @@ function App() {
       factor_correccion: '100'
     });
     setStickerPreview(null);
+    setEsPucho(false);
+    setSelectedPucho(null);
+    setPuchosAbiertos([]);
   };
 
   // Generar e imprimir sticker de OT directamente desde el formulario
@@ -711,6 +750,82 @@ function App() {
                 )}
               </div>
 
+              {/* Pucho Controls */}
+              <div style={{ margin: '12px 0' }}>
+                {/* Toggle Es Pucho */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.95rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={esPucho}
+                    onChange={(e) => {
+                      setEsPucho(e.target.checked);
+                      if (e.target.checked) setSelectedPucho(null);
+                    }}
+                    style={{ width: '18px', height: '18px' }}
+                  />
+                  📎 Es pucho (bolsa parcial)
+                  {esPucho && (
+                    <span style={{ color: 'var(--warning)', fontWeight: 'bold' }}>
+                      — No se imprimirá sticker
+                    </span>
+                  )}
+                </label>
+
+                {/* Banner: Puchos abiertos detectados */}
+                {!esPucho && puchosAbiertos.length > 0 && (
+                  <div style={{
+                    background: 'var(--bg-secondary, #f0f4f8)',
+                    border: '1px solid var(--warning, #f59e0b)',
+                    borderRadius: '8px',
+                    padding: '10px 14px',
+                    marginTop: '8px',
+                    fontSize: '0.9rem'
+                  }}>
+                    <div style={{ marginBottom: '6px', fontWeight: 'bold', color: 'var(--warning)' }}>
+                      📎 {puchosAbiertos.length} pucho(s) abierto(s) para este molde
+                    </div>
+                    {puchosAbiertos.map(pucho => (
+                      <label
+                        key={pucho.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '4px 0',
+                          cursor: 'pointer',
+                          color: selectedPucho?.id === pucho.id ? 'var(--primary)' : 'inherit'
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="pucho_select"
+                          checked={selectedPucho?.id === pucho.id}
+                          onChange={() => setSelectedPucho(
+                            selectedPucho?.id === pucho.id ? null : pucho
+                          )}
+                        />
+                        {pucho.peso_kg.toFixed(1)} kg — {pucho.color || 'sin color'} — {
+                          pucho.fecha_hora
+                            ? new Date(pucho.fecha_hora).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                            : ''
+                        }
+                        {pucho.nro_orden_trabajo && ` — OT ${pucho.nro_orden_trabajo}`}
+                      </label>
+                    ))}
+                    {selectedPucho && peso > 0 && (
+                      <div style={{ marginTop: '6px', padding: '6px 10px', background: '#e0f7e9', borderRadius: '6px', fontWeight: 'bold' }}>
+                        ✅ Delta: {peso.toFixed(1)} - {selectedPucho.peso_kg.toFixed(1)} = {(peso - selectedPucho.peso_kg).toFixed(1)} kg (se guardará solo el delta)
+                      </div>
+                    )}
+                    {!selectedPucho && (
+                      <div style={{ marginTop: '4px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        Selecciona un pucho si esta bolsa lo completa, o déjalo sin seleccionar para bolsa nueva.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Weight Display */}
               <div className="weight-display-container">
                 <div className="weight-display">
@@ -758,7 +873,14 @@ function App() {
                 {pesajes.map((p) => (
                   <div key={p.id} className="pesaje-item">
                     <div className="pesaje-info">
-                      <span className="peso">{p.peso_kg.toFixed(1)} kg</span>
+                      <span className="peso">
+                        {p.peso_kg.toFixed(1)} kg
+                        {p.tipo === 'PUCHO' && (
+                          <span style={{ fontSize: '0.75em', marginLeft: '6px', padding: '1px 6px', background: 'var(--warning)', color: '#fff', borderRadius: '4px' }}>
+                            📎 PUCHO {p.estado_pucho === 'COMPLETADO' ? '✓' : ''}
+                          </span>
+                        )}
+                      </span>
                       <span className="meta">
                         {p.nro_orden_trabajo ? `OT ${p.nro_orden_trabajo} • ` : ''}{p.molde || 'Sin molde'} • {p.nro_op || ''} • {formatDate(p.fecha_hora)}
                       </span>

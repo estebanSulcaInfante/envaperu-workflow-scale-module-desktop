@@ -1,0 +1,212 @@
+.ops-container {
+  padding: 1rem;
+}
+
+.ops-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+  color: var(--text-secondary);
+  font-size: 1rem;
+}
+
+/* Sections */
+.ops-section {
+  margin-bottom: 1.5rem;
+}
+
+.ops-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.ops-section-header h2 {
+  font-size: 1.3rem;
+  color: var(--accent);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ops-section-header.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.ops-section-header.clickable:hover h2 {
+  color: var(--accent-hover);
+}
+
+.expand-icon {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ops-count {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.ops-empty {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+/* Table */
+.ops-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.ops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.ops-table thead {
+  background: var(--accent);
+  color: white;
+}
+
+.ops-table th {
+  padding: 0.65rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.ops-table td {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.ops-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.ops-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.col-action {
+  width: 100px;
+  text-align: center;
+}
+
+.td-op {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 1rem;
+}
+
+.td-op.cerrada {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.td-peso {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.td-bolsas {
+  font-weight: 600;
+}
+
+.td-date {
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.td-motivo {
+  font-style: italic;
+  color: var(--text-secondary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Cerradas section */
+.ops-section.cerradas .ops-table thead {
+  background: #757575;
+}
+
+.cerradas-table tbody tr:hover {
+  background: #FAFAFA;
+}
+
+/* Custom Modal */
+.custom-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.custom-modal {
+  background: var(--bg-card);
+  padding: 1.5rem;
+  border-radius: var(--radius);
+  width: 90%;
+  max-width: 400px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  border: 1px solid var(--border);
+}
+
+.custom-modal h3 {
+  margin-top: 0;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+.custom-modal p {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.custom-modal input {
+  width: 100%;
+  padding: 0.6rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  background: var(--bg-input);
+  box-sizing: border-box;
+}
+
+.custom-modal input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(30,58,95,0.1);
+}
+
+.custom-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

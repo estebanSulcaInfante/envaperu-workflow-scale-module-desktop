@@ -15,6 +15,18 @@ export const pesajesApi = {
   listar: (page = 1, perPage = 20) => 
     api.get(`/pesajes?page=${page}&per_page=${perPage}`),
   
+  buscar: (filters = {}) => {
+    const params = new URLSearchParams();
+    if (filters.nro_op) params.append('nro_op', filters.nro_op);
+    if (filters.molde) params.append('molde', filters.molde);
+    if (filters.nro_ot) params.append('nro_ot', filters.nro_ot);
+    if (filters.fecha_inicio) params.append('fecha_inicio', filters.fecha_inicio);
+    if (filters.fecha_fin) params.append('fecha_fin', filters.fecha_fin);
+    if (filters.page) params.append('page', filters.page);
+    if (filters.per_page) params.append('per_page', filters.per_page);
+    return api.get(`/pesajes/buscar?${params.toString()}`);
+  },
+
   crear: (data) => 
     api.post('/pesajes', data),
   
@@ -26,6 +38,9 @@ export const pesajesApi = {
   
   eliminar: (id) => 
     api.delete(`/pesajes/${id}`),
+  
+  eliminarBulk: (ids) =>
+    api.post('/pesajes/bulk-delete', { ids }),
   
   imprimir: (id) => 
     api.post(`/pesajes/${id}/imprimir`),
@@ -118,4 +133,20 @@ export const avanceApi = {
     api.get('/avance/resumen')
 };
 
+// ===== OPs (Cerrar/Reabrir) =====
+export const opsApi = {
+  activas: () =>
+    api.get('/ops/activas'),
+  
+  cerradas: () =>
+    api.get('/ops/cerradas'),
+  
+  cerrar: (data) =>
+    api.post('/ops/cerrar', data),
+  
+  reabrir: (data) =>
+    api.post('/ops/reabrir', data)
+};
+
 export default api;
+

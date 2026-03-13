@@ -121,12 +121,14 @@ def create_app():
     from app.routes.sync import sync_bp
     from app.routes.rdp import rdp_bp
     from app.routes.avance import avance_bp
+    from app.routes.ops import ops_bp
     
     app.register_blueprint(pesajes_bp, url_prefix='/api/pesajes')
     app.register_blueprint(balanza_bp, url_prefix='/api/balanza')
     app.register_blueprint(sync_bp)
     app.register_blueprint(rdp_bp)
     app.register_blueprint(avance_bp, url_prefix='/api/avance')
+    app.register_blueprint(ops_bp, url_prefix='/api/ops')
     
     # Create tables
     with app.app_context():

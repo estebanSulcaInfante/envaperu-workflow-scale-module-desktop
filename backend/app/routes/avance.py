@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify
 from app import db
 from app.models.pesaje import Pesaje
+from app.models.op_cerrada import OpCerrada
 from app.utils.logger import get_pesaje_logger
 
 log = get_pesaje_logger()
@@ -10,10 +11,23 @@ avance_bp = Blueprint('avance', __name__)
 @avance_bp.route('/resumen', methods=['GET'])
 def resumen_avance():
     """
-    Retorna TODOS los pesajes agrupados por molde → color (dos niveles).
-    Sin filtro de fecha.
+    Retorna pesajes agrupados por molde → color (dos niveles).
+    Excluye pesajes de OPs cerradas.
     """
-    pesajes = Pesaje.query.order_by(Pesaje.fecha_hora.desc()).all()
+    # Obtener OPs cerradas para excluirlas
+    ops_cerradas = db.session.query(OpCerrada.nro_op).all()
+    ops_cerradas_set = {op.nro_op for op in ops_cerradas}
+    
+    query = Pesaje.query.order_by(Pesaje.fecha_hora.desc())
+    if ops_cerradas_set:
+        query = query.filter(
+            db.or_(
+                Pesaje.nro_op.is_(None),
+                Pesaje.nro_op == '',
+                Pesaje.nro_op.notin_(ops_cerradas_set)
+            )
+        )
+    pesajes = query.all()
     
     # Agrupar: molde → color → pesajes
     moldes_dict = {}

@@ -183,6 +183,76 @@ def eliminar_pesaje(id):
     return '', 204
 
 
+@pesajes_bp.route('/buscar', methods=['GET'])
+def buscar_pesajes():
+    """Busca pesajes con filtros opcionales."""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    
+    query = Pesaje.query
+    
+    # Filtro por nro_op
+    nro_op = request.args.get('nro_op', '').strip()
+    if nro_op:
+        query = query.filter(Pesaje.nro_op.ilike(f'%{nro_op}%'))
+    
+    # Filtro por molde
+    molde = request.args.get('molde', '').strip()
+    if molde:
+        query = query.filter(Pesaje.molde.ilike(f'%{molde}%'))
+    
+    # Filtro por nro_orden_trabajo
+    nro_ot = request.args.get('nro_ot', '').strip()
+    if nro_ot:
+        query = query.filter(Pesaje.nro_orden_trabajo.ilike(f'%{nro_ot}%'))
+    
+    # Filtro por rango de fechas
+    fecha_inicio = request.args.get('fecha_inicio', '').strip()
+    if fecha_inicio:
+        try:
+            fi = datetime.strptime(fecha_inicio, '%Y-%m-%d')
+            query = query.filter(Pesaje.fecha_hora >= fi)
+        except ValueError:
+            pass
+    
+    fecha_fin = request.args.get('fecha_fin', '').strip()
+    if fecha_fin:
+        try:
+            ff = datetime.strptime(fecha_fin, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+            query = query.filter(Pesaje.fecha_hora <= ff)
+        except ValueError:
+            pass
+    
+    resultados = query.order_by(Pesaje.fecha_hora.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    
+    return jsonify({
+        'items': [p.to_dict() for p in resultados.items],
+        'total': resultados.total,
+        'page': resultados.page,
+        'pages': resultados.pages
+    })
+
+
+@pesajes_bp.route('/bulk-delete', methods=['POST'])
+def eliminar_pesajes_bulk():
+    """Elimina múltiples pesajes por IDs."""
+    data = request.get_json()
+    ids = data.get('ids', [])
+    
+    if not ids:
+        return jsonify({'error': 'ids es requerido'}), 400
+    
+    count = Pesaje.query.filter(Pesaje.id.in_(ids)).delete(synchronize_session=False)
+    db.session.commit()
+    
+    log.info(f"✅ {count} pesajes eliminados en bulk")
+    socketio.emit('pesajes_updated')
+    
+    return jsonify({'status': 'ok', 'eliminados': count})
+
+
 @pesajes_bp.route('/<int:id>/imprimir', methods=['POST'])
 def imprimir_sticker(id):
     """Imprime el sticker de un pesaje"""

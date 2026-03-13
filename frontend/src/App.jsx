@@ -3,6 +3,8 @@ import { pesajesApi, balanzaApi, syncApi, rdpApi } from './services/api';
 import socket from './services/socket';
 import ExportarExcel from './components/ExportarExcel';
 import AvanceDashboard from './components/AvanceDashboard';
+import GestionPesajes from './components/GestionPesajes';
+import CerrarOps from './components/CerrarOps';
 
 function App() {
   // Connection state
@@ -433,6 +435,18 @@ function App() {
             >
               3. 📈 Avance
             </button>
+            <button 
+              className={`tab-btn ${activeTab === 'gestion' ? 'active' : ''}`}
+              onClick={() => setActiveTab('gestion')}
+            >
+              📦 Gestión
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'cerrar-ops' ? 'active' : ''}`}
+              onClick={() => setActiveTab('cerrar-ops')}
+            >
+              🔒 Cerrar OPs
+            </button>
           </div>
 
       {/* ========== TAB 1: CREAR OT ========== */}
@@ -536,6 +550,20 @@ function App() {
       {activeTab === 'avance' && (
         <main className="main-content avance-full">
           <AvanceDashboard />
+        </main>
+      )}
+
+      {/* TAB 4: GESTIÓN PESAJES */}
+      {activeTab === 'gestion' && (
+        <main className="main-content avance-full">
+          <GestionPesajes />
+        </main>
+      )}
+
+      {/* TAB 5: CERRAR OPs */}
+      {activeTab === 'cerrar-ops' && (
+        <main className="main-content avance-full">
+          <CerrarOps />
         </main>
       )}
 

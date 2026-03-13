@@ -26,7 +26,8 @@ def listar_ops_activas():
     ).filter(
         Pesaje.nro_op.isnot(None),
         Pesaje.nro_op != '',
-        Pesaje.nro_op.notin_(cerradas_subq)
+        Pesaje.nro_op.notin_(cerradas_subq),
+        Pesaje.deleted_at.is_(None)
     ).group_by(Pesaje.nro_op).order_by(func.max(Pesaje.fecha_hora).desc()).all()
     
     ops = []
@@ -53,7 +54,7 @@ def listar_ops_cerradas():
         stats = db.session.query(
             func.sum(Pesaje.peso_kg).label('total_kg'),
             func.count(Pesaje.id).label('total_bolsas')
-        ).filter(Pesaje.nro_op == op.nro_op).first()
+        ).filter(Pesaje.nro_op == op.nro_op, Pesaje.deleted_at.is_(None)).first()
         
         resultado.append({
             **op.to_dict(),

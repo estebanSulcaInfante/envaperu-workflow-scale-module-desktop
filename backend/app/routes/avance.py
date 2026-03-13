@@ -18,7 +18,7 @@ def resumen_avance():
     ops_cerradas = db.session.query(OpCerrada.nro_op).all()
     ops_cerradas_set = {op.nro_op for op in ops_cerradas}
     
-    query = Pesaje.query.order_by(Pesaje.fecha_hora.desc())
+    query = Pesaje.active().order_by(Pesaje.fecha_hora.desc())
     if ops_cerradas_set:
         query = query.filter(
             db.or_(

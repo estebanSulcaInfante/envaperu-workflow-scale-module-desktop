@@ -19,7 +19,7 @@ def listar_pesajes():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
     
-    pesajes = Pesaje.query.order_by(Pesaje.fecha_hora.desc()).paginate(
+    pesajes = Pesaje.active().order_by(Pesaje.fecha_hora.desc()).paginate(
         page=page, per_page=per_page, error_out=False
     )
     
@@ -170,12 +170,12 @@ def actualizar_pesaje(id):
 
 @pesajes_bp.route('/<int:id>', methods=['DELETE'])
 def eliminar_pesaje(id):
-    """Elimina un pesaje"""
-    log.info(f"DELETE /pesajes/{id}")
+    """Soft delete de un pesaje"""
+    log.info(f"DELETE /pesajes/{id} (soft)")
     pesaje = Pesaje.query.get_or_404(id)
-    db.session.delete(pesaje)
+    pesaje.soft_delete()
     db.session.commit()
-    log.info(f"✅ Pesaje {id} eliminado")
+    log.info(f"✅ Pesaje {id} soft-deleted")
     
     # Notificar a clientes WebSocket
     socketio.emit('pesajes_updated')
@@ -189,7 +189,7 @@ def buscar_pesajes():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     
-    query = Pesaje.query
+    query = Pesaje.active()
     
     # Filtro por nro_op
     nro_op = request.args.get('nro_op', '').strip()
@@ -237,17 +237,20 @@ def buscar_pesajes():
 
 @pesajes_bp.route('/bulk-delete', methods=['POST'])
 def eliminar_pesajes_bulk():
-    """Elimina múltiples pesajes por IDs."""
+    """Soft delete de múltiples pesajes por IDs."""
     data = request.get_json()
     ids = data.get('ids', [])
     
     if not ids:
         return jsonify({'error': 'ids es requerido'}), 400
     
-    count = Pesaje.query.filter(Pesaje.id.in_(ids)).delete(synchronize_session=False)
+    now = datetime.now(timezone.utc)
+    count = Pesaje.query.filter(Pesaje.id.in_(ids)).update(
+        {'deleted_at': now}, synchronize_session=False
+    )
     db.session.commit()
     
-    log.info(f"✅ {count} pesajes eliminados en bulk")
+    log.info(f"✅ {count} pesajes soft-deleted en bulk")
     socketio.emit('pesajes_updated')
     
     return jsonify({'status': 'ok', 'eliminados': count})
@@ -291,7 +294,7 @@ def preview_sticker(id):
 @pesajes_bp.route('/sin-sincronizar', methods=['GET'])
 def pesajes_sin_sincronizar():
     """Obtiene pesajes pendientes de sincronización con API central"""
-    pesajes = Pesaje.query.filter_by(sincronizado=False).all()
+    pesajes = Pesaje.active().filter_by(sincronizado=False).all()
     return jsonify([p.to_dict() for p in pesajes])
 
 
@@ -319,7 +322,7 @@ def exportar_pesajes():
     fecha_inicio_str = request.args.get('fecha_inicio')
     fecha_fin_str = request.args.get('fecha_fin')
     
-    query = Pesaje.query
+    query = Pesaje.active()
     
     # Validar y aplicar filtros de fecha
     try:

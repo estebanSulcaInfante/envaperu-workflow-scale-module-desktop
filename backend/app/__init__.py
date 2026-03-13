@@ -82,6 +82,7 @@ def _run_migrations(database):
             ('sincronizado', 'BOOLEAN DEFAULT 0'),
             ('fecha_sincronizacion', 'DATETIME'),
             ('qr_data_original', 'VARCHAR(500)'),
+            ('deleted_at', 'DATETIME'),
         ],
         'correlativo_cache': [
             ('maquina', 'VARCHAR(50)'),

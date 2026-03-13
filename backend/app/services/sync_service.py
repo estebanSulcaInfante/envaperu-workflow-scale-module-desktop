@@ -53,7 +53,7 @@ class SyncService:
         Returns:
             Lista de Pesajes con sincronizado=False
         """
-        return Pesaje.query.filter_by(sincronizado=False).all()
+        return Pesaje.active().filter_by(sincronizado=False).all()
     
     def _pesaje_to_sync_payload(self, pesaje: Pesaje) -> Dict[str, Any]:
         """
@@ -160,8 +160,8 @@ class SyncService:
         """
         Retorna el estado actual de la sincronización.
         """
-        pending_count = Pesaje.query.filter_by(sincronizado=False).count()
-        synced_count = Pesaje.query.filter_by(sincronizado=True).count()
+        pending_count = Pesaje.active().filter_by(sincronizado=False).count()
+        synced_count = Pesaje.active().filter_by(sincronizado=True).count()
         
         return {
             'connected': self._connected,

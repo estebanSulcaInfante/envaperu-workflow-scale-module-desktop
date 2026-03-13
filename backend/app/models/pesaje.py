@@ -43,6 +43,18 @@ class Pesaje(db.Model):
     # QR original escaneado
     qr_data_original = db.Column(db.String(500), nullable=True)
     
+    # Soft delete
+    deleted_at = db.Column(db.DateTime, nullable=True, default=None)
+    
+    @classmethod
+    def active(cls):
+        """Retorna query filtrada solo a registros NO eliminados."""
+        return cls.query.filter(cls.deleted_at.is_(None))
+    
+    def soft_delete(self):
+        """Marca este pesaje como eliminado (soft delete)."""
+        self.deleted_at = datetime.now(timezone.utc)
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -65,6 +77,7 @@ class Pesaje(db.Model):
             'sincronizado': self.sincronizado,
             'fecha_sincronizacion': self.fecha_sincronizacion.isoformat() if self.fecha_sincronizacion else None,
             'qr_data_original': self.qr_data_original,
+            'deleted_at': self.deleted_at.isoformat() if self.deleted_at else None,
         }
     
     @staticmethod

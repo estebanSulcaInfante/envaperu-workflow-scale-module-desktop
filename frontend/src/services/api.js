@@ -17,6 +17,7 @@ export const pesajesApi = {
   
   buscar: (filters = {}) => {
     const params = new URLSearchParams();
+    if (filters.id) params.append('id', filters.id);
     if (filters.nro_op) params.append('nro_op', filters.nro_op);
     if (filters.molde) params.append('molde', filters.molde);
     if (filters.nro_ot) params.append('nro_ot', filters.nro_ot);

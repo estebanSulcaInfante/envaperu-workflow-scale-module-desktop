@@ -6,6 +6,7 @@ function GestionPesajes() {
   const [pesajes, setPesajes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({
+    id: '',
     nro_op: '',
     molde: '',
     nro_ot: '',
@@ -54,7 +55,7 @@ function GestionPesajes() {
   };
 
   const handleLimpiar = () => {
-    setFilters({ nro_op: '', molde: '', nro_ot: '', fecha_inicio: '', fecha_fin: '' });
+    setFilters({ id: '', nro_op: '', molde: '', nro_ot: '', fecha_inicio: '', fecha_fin: '' });
   };
 
   const toggleSelect = (id) => {
@@ -153,6 +154,16 @@ function GestionPesajes() {
 
       {/* Filtros */}
       <form className="gestion-filters" onSubmit={handleBuscar}>
+        <div className="filter-field">
+          <label>ID</label>
+          <input
+            type="number"
+            name="id"
+            value={filters.id}
+            onChange={handleFilterChange}
+            placeholder="Ej: 154"
+          />
+        </div>
         <div className="filter-field">
           <label>N° OP</label>
           <input

@@ -57,6 +57,8 @@ class StickerService:
                 y += self.LINE_HEIGHT
             
             # Campos fijos
+            lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "ID : {pesaje.id}"')
+            y += self.LINE_HEIGHT
             lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "MAQ: {pesaje.maquina or ""}"')
             y += self.LINE_HEIGHT
             lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "NrOP: {pesaje.nro_op or ""}"')
@@ -118,21 +120,25 @@ PRINT 1,1
     def _build_qr_data(self, pesaje: Pesaje) -> str:
         """Construye el contenido del QR para el sticker."""
         fecha_ot = pesaje.fecha_orden_trabajo.strftime('%Y-%m-%d') if pesaje.fecha_orden_trabajo else ''
-        hora = pesaje.fecha_hora.strftime('%H:%M:%S') if pesaje.fecha_hora else ''
+        fecha_hora = pesaje.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if pesaje.fecha_hora else ''
         
         return ';'.join([
-            str(pesaje.id or ''),
-            pesaje.molde or '',
-            pesaje.maquina or '',
-            pesaje.nro_op or '',
-            pesaje.turno or '',
-            fecha_ot,
-            pesaje.nro_orden_trabajo or '',
-            pesaje.operador or '',
-            pesaje.color or '',
-            f'{pesaje.peso_kg:.1f}',
-            fecha_ot,
-            hora
+            str(pesaje.id) if pesaje.id else '',     # 0: mangaId
+            pesaje.molde or '',                      # 1: molde
+            pesaje.maquina or '',                    # 2: maquina
+            pesaje.nro_op or '',                     # 3: nro_op
+            pesaje.turno or '',                      # 4: turno
+            fecha_ot,                                # 5: fecha_ot_str
+            pesaje.nro_orden_trabajo or '',          # 6: nro_orden_trabajo
+            pesaje.operador or '',                   # 7: operador
+            pesaje.color or '',                      # 8: color
+            fecha_hora,                              # 9: fecha_hora_str
+            f'{pesaje.peso_kg:.1f}' if pesaje.peso_kg is not None else '', # 10: peso_kg
+            '',                                      # 11: (Sin uso)
+            pesaje.pieza_nombre or '',               # 12: pieza_nombre
+            '',                                      # 13: extra1
+            '',                                      # 14: extra2
+            ''                                       # 15: extra3
         ])
     
     def generate_zpl(self, pesaje: Pesaje) -> str:
@@ -144,11 +150,13 @@ PRINT 1,1
         zpl = f"""
 ^XA
 ^CF0,25
-^FO20,20^FDMOL : {pesaje.molde or ''}^FS
-^FO20,50^FDMAQ : {pesaje.maquina or ''}^FS
-^FO20,80^FDN°OP: {pesaje.nro_op or ''}^FS
-^FO20,110^FDTUR : {pesaje.turno or ''}^FS
-^FO20,140^FDF.OT: {fecha_ot}^FS
+^FO20,20^FDID  : {pesaje.id}^FS
+^FO20,50^FDMOL : {pesaje.molde or ''}^FS
+^FO20,80^FDMAQ : {pesaje.maquina or ''}^FS
+^FO20,110^FDN°OP: {pesaje.nro_op or ''}^FS
+^FO20,140^FDTUR : {pesaje.turno or ''}^FS
+^FO20,170^FDF.OT: {fecha_ot}^FS
+
 ^FO20,170^FDN°OT: {pesaje.nro_orden_trabajo or ''}^FS
 ^FO20,200^FDOPE.: {pesaje.operador or ''}^FS
 ^FO20,230^FDCOL : {pesaje.color or ''}^FS
@@ -173,6 +181,7 @@ PRINT 1,1
         commands = b''
         commands += ESC + b'@'  # Initialize
         commands += b'--------------------------------\n'
+        commands += f"ID  : {pesaje.id}\n".encode('utf-8')
         commands += f"MOL : {pesaje.molde or ''}\n".encode('utf-8')
         commands += f"MAQ : {pesaje.maquina or ''}\n".encode('utf-8')
         commands += f"N°OP: {pesaje.nro_op or ''}\n".encode('utf-8')
@@ -198,6 +207,7 @@ PRINT 1,1
         
         lines = [
             '─' * 32,
+            f"ID  : {pesaje.id}",
             f"MOL : {pesaje.molde or ''}",
             f"MÁQ : {pesaje.maquina or ''}",
             f"N°OP: {pesaje.nro_op or ''}",

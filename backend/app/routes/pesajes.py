@@ -1,4 +1,4 @@
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 import io
 import openpyxl
 from flask import Blueprint, request, jsonify, send_file
@@ -191,6 +191,11 @@ def buscar_pesajes():
     
     query = Pesaje.active()
     
+    # Filtro por ID exacto
+    id_pesaje = request.args.get('id', '').strip()
+    if id_pesaje and id_pesaje.isdigit():
+        query = query.filter(Pesaje.id == int(id_pesaje))
+    
     # Filtro por nro_op
     nro_op = request.args.get('nro_op', '').strip()
     if nro_op:
@@ -244,7 +249,7 @@ def eliminar_pesajes_bulk():
     if not ids:
         return jsonify({'error': 'ids es requerido'}), 400
     
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone(timedelta(hours=-5)))
     count = Pesaje.query.filter(Pesaje.id.in_(ids)).update(
         {'deleted_at': now}, synchronize_session=False
     )
@@ -268,7 +273,7 @@ def imprimir_sticker(id):
     
     if success:
         pesaje.sticker_impreso = True
-        pesaje.fecha_impresion = datetime.now(timezone.utc)
+        pesaje.fecha_impresion = datetime.now(timezone(timedelta(hours=-5)))
         db.session.commit()
         log.info(f"✅ Sticker enviado a impresión para pesaje {id}")
         return jsonify({'status': 'ok', 'message': 'Sticker enviado a impresión'})
@@ -309,7 +314,7 @@ def marcar_sincronizado():
     
     Pesaje.query.filter(Pesaje.id.in_(ids)).update({
         'sincronizado': True,
-        'fecha_sincronizacion': datetime.now(timezone.utc)
+        'fecha_sincronizacion': datetime.now(timezone(timedelta(hours=-5)))
     }, synchronize_session=False)
     
     db.session.commit()
@@ -328,14 +333,14 @@ def exportar_pesajes():
     try:
         if fecha_inicio_str:
             fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
-            # Inicio del día en UTC
-            inicio_dt = datetime.combine(fecha_inicio, datetime.min.time(), tzinfo=timezone.utc)
+            # Inicio del día en UTC-5
+            inicio_dt = datetime.combine(fecha_inicio, datetime.min.time(), tzinfo=timezone(timedelta(hours=-5)))
             query = query.filter(Pesaje.fecha_hora >= inicio_dt)
             
         if fecha_fin_str:
             fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
-            # Fin del día en UTC
-            fin_dt = datetime.combine(fecha_fin, datetime.max.time(), tzinfo=timezone.utc)
+            # Fin del día en UTC-5
+            fin_dt = datetime.combine(fecha_fin, datetime.max.time(), tzinfo=timezone(timedelta(hours=-5)))
             query = query.filter(Pesaje.fecha_hora <= fin_dt)
     except ValueError:
         return jsonify({'error': 'Formato de fecha inválido. Usar YYYY-MM-DD'}), 400

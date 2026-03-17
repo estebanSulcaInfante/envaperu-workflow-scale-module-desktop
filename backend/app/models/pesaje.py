@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app import db
 
 
@@ -11,7 +11,7 @@ class Pesaje(db.Model):
     
     # Datos del pesaje
     peso_kg = db.Column(db.Float, nullable=False)
-    fecha_hora = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    fecha_hora = db.Column(db.DateTime, default=lambda: datetime.now(timezone(timedelta(hours=-5))), nullable=False)
     
     # Datos de la Orden de Producción (del QR escaneado)
     molde = db.Column(db.String(100), nullable=True)  # MOL: CERNIDOR ROMANO
@@ -53,7 +53,7 @@ class Pesaje(db.Model):
     
     def soft_delete(self):
         """Marca este pesaje como eliminado (soft delete)."""
-        self.deleted_at = datetime.now(timezone.utc)
+        self.deleted_at = datetime.now(timezone(timedelta(hours=-5)))
     
     def to_dict(self):
         return {
@@ -134,8 +134,8 @@ class Pesaje(db.Model):
             except Exception as e:
                 print(f"Error parsing Google Forms URL: {e}")
         
-        # Fallback: formato legacy con punto y coma
-        parts = qr_string.split(';')
+        # Fallback: formato legacy con comma
+        parts = qr_string.split(',')
         if len(parts) >= 7:
             result = {
                 'id_registro': parts[0].strip(),
@@ -158,20 +158,26 @@ class Pesaje(db.Model):
         Genera el string para el QR del sticker.
         Incluye toda la información del pesaje.
         """
-        fecha_hora_str = self.fecha_hora.strftime('%Y-%m-%d/%H:%M:%S') if self.fecha_hora else ''
         fecha_ot_str = self.fecha_orden_trabajo.strftime('%Y-%m-%d') if self.fecha_orden_trabajo else ''
+        fecha_hora_str = self.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if self.fecha_hora else ''
         
-        return ';'.join([
-            self.molde or '',
-            self.maquina or '',
-            self.nro_op or '',
-            self.turno or '',
-            fecha_ot_str,
-            self.nro_orden_trabajo or '',
-            self.operador or '',
-            self.color or '',
-            fecha_hora_str,
-            f'{self.peso_kg:.1f}'
+        return ','.join([
+            str(self.id) if self.id else '',         # 0: mangaId
+            self.molde or '',                        # 1: molde
+            self.maquina or '',                      # 2: maquina
+            self.nro_op or '',                       # 3: nro_op
+            self.turno or '',                        # 4: turno
+            fecha_ot_str,                            # 5: fecha_ot_str
+            self.nro_orden_trabajo or '',            # 6: nro_orden_trabajo
+            self.operador or '',                     # 7: operador
+            self.color or '',                        # 8: color
+            fecha_hora_str,                          # 9: fecha_hora_str
+            f'{self.peso_kg:.1f}' if self.peso_kg is not None else '', # 10: peso_kg
+            '',                                      # 11: (Sin uso)
+            self.pieza_nombre or '',                 # 12: pieza_nombre
+            '',                                      # 13: extra1
+            '',                                      # 14: extra2
+            ''                                       # 15: extra3
         ])
     
     def __repr__(self):

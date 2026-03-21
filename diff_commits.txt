@@ -1,0 +1,344 @@
+﻿diff --git a/backend/app/models/pesaje.py b/backend/app/models/pesaje.py
+index 3ec485c..424455c 100644
+--- a/backend/app/models/pesaje.py
++++ b/backend/app/models/pesaje.py
+@@ -1,4 +1,4 @@
+-from datetime import datetime, timezone
++from datetime import datetime, timezone, timedelta
+ from app import db
+ 
+ 
+@@ -11,7 +11,7 @@ class Pesaje(db.Model):
+     
+     # Datos del pesaje
+     peso_kg = db.Column(db.Float, nullable=False)
+-    fecha_hora = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
++    fecha_hora = db.Column(db.DateTime, default=lambda: datetime.now(timezone(timedelta(hours=-5))), nullable=False)
+     
+     # Datos de la Orden de Producci├│n (del QR escaneado)
+     molde = db.Column(db.String(100), nullable=True)  # MOL: CERNIDOR ROMANO
+@@ -53,7 +53,7 @@ class Pesaje(db.Model):
+     
+     def soft_delete(self):
+         """Marca este pesaje como eliminado (soft delete)."""
+-        self.deleted_at = datetime.now(timezone.utc)
++        self.deleted_at = datetime.now(timezone(timedelta(hours=-5)))
+     
+     def to_dict(self):
+         return {
+@@ -134,8 +134,8 @@ class Pesaje(db.Model):
+             except Exception as e:
+                 print(f"Error parsing Google Forms URL: {e}")
+         
+-        # Fallback: formato legacy con punto y coma
+-        parts = qr_string.split(';')
++        # Fallback: formato legacy con comma
++        parts = qr_string.split(',')
+         if len(parts) >= 7:
+             result = {
+                 'id_registro': parts[0].strip(),
+@@ -158,20 +158,26 @@ class Pesaje(db.Model):
+         Genera el string para el QR del sticker.
+         Incluye toda la informaci├│n del pesaje.
+         """
+-        fecha_hora_str = self.fecha_hora.strftime('%Y-%m-%d/%H:%M:%S') if self.fecha_hora else ''
+         fecha_ot_str = self.fecha_orden_trabajo.strftime('%Y-%m-%d') if self.fecha_orden_trabajo else ''
++        fecha_hora_str = self.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if self.fecha_hora else ''
+         
+-        return ';'.join([
+-            self.molde or '',
+-            self.maquina or '',
+-            self.nro_op or '',
+-            self.turno or '',
+-            fecha_ot_str,
+-            self.nro_orden_trabajo or '',
+-            self.operador or '',
+-            self.color or '',
+-            fecha_hora_str,
+-            f'{self.peso_kg:.1f}'
++        return ','.join([
++            str(self.id) if self.id else '',         # 0: mangaId
++            self.molde or '',                        # 1: molde
++            self.maquina or '',                      # 2: maquina
++            self.nro_op or '',                       # 3: nro_op
++            self.turno or '',                        # 4: turno
++            fecha_ot_str,                            # 5: fecha_ot_str
++            self.nro_orden_trabajo or '',            # 6: nro_orden_trabajo
++            self.operador or '',                     # 7: operador
++            self.color or '',                        # 8: color
++            fecha_hora_str,                          # 9: fecha_hora_str
++            f'{self.peso_kg:.1f}' if self.peso_kg is not None else '', # 10: peso_kg
++            '',                                      # 11: (Sin uso)
++            self.pieza_nombre or '',                 # 12: pieza_nombre
++            '',                                      # 13: extra1
++            '',                                      # 14: extra2
++            ''                                       # 15: extra3
+         ])
+     
+     def __repr__(self):
+diff --git a/backend/app/routes/pesajes.py b/backend/app/routes/pesajes.py
+index 5630d39..4533e2f 100644
+--- a/backend/app/routes/pesajes.py
++++ b/backend/app/routes/pesajes.py
+@@ -1,4 +1,4 @@
+-from datetime import datetime, date, timezone
++from datetime import datetime, date, timezone, timedelta
+ import io
+ import openpyxl
+ from flask import Blueprint, request, jsonify, send_file
+@@ -191,6 +191,11 @@ def buscar_pesajes():
+     
+     query = Pesaje.active()
+     
++    # Filtro por ID exacto
++    id_pesaje = request.args.get('id', '').strip()
++    if id_pesaje and id_pesaje.isdigit():
++        query = query.filter(Pesaje.id == int(id_pesaje))
++    
+     # Filtro por nro_op
+     nro_op = request.args.get('nro_op', '').strip()
+     if nro_op:
+@@ -244,7 +249,7 @@ def eliminar_pesajes_bulk():
+     if not ids:
+         return jsonify({'error': 'ids es requerido'}), 400
+     
+-    now = datetime.now(timezone.utc)
++    now = datetime.now(timezone(timedelta(hours=-5)))
+     count = Pesaje.query.filter(Pesaje.id.in_(ids)).update(
+         {'deleted_at': now}, synchronize_session=False
+     )
+@@ -268,7 +273,7 @@ def imprimir_sticker(id):
+     
+     if success:
+         pesaje.sticker_impreso = True
+-        pesaje.fecha_impresion = datetime.now(timezone.utc)
++        pesaje.fecha_impresion = datetime.now(timezone(timedelta(hours=-5)))
+         db.session.commit()
+         log.info(f"Ô£à Sticker enviado a impresi├│n para pesaje {id}")
+         return jsonify({'status': 'ok', 'message': 'Sticker enviado a impresi├│n'})
+@@ -309,7 +314,7 @@ def marcar_sincronizado():
+     
+     Pesaje.query.filter(Pesaje.id.in_(ids)).update({
+         'sincronizado': True,
+-        'fecha_sincronizacion': datetime.now(timezone.utc)
++        'fecha_sincronizacion': datetime.now(timezone(timedelta(hours=-5)))
+     }, synchronize_session=False)
+     
+     db.session.commit()
+@@ -328,14 +333,14 @@ def exportar_pesajes():
+     try:
+         if fecha_inicio_str:
+             fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
+-            # Inicio del d├¡a en UTC
+-            inicio_dt = datetime.combine(fecha_inicio, datetime.min.time(), tzinfo=timezone.utc)
++            # Inicio del d├¡a en UTC-5
++            inicio_dt = datetime.combine(fecha_inicio, datetime.min.time(), tzinfo=timezone(timedelta(hours=-5)))
+             query = query.filter(Pesaje.fecha_hora >= inicio_dt)
+             
+         if fecha_fin_str:
+             fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+-            # Fin del d├¡a en UTC
+-            fin_dt = datetime.combine(fecha_fin, datetime.max.time(), tzinfo=timezone.utc)
++            # Fin del d├¡a en UTC-5
++            fin_dt = datetime.combine(fecha_fin, datetime.max.time(), tzinfo=timezone(timedelta(hours=-5)))
+             query = query.filter(Pesaje.fecha_hora <= fin_dt)
+     except ValueError:
+         return jsonify({'error': 'Formato de fecha inv├ílido. Usar YYYY-MM-DD'}), 400
+diff --git a/backend/app/services/sticker_service.py b/backend/app/services/sticker_service.py
+index d14c928..60b0035 100644
+--- a/backend/app/services/sticker_service.py
++++ b/backend/app/services/sticker_service.py
+@@ -57,6 +57,8 @@ class StickerService:
+                 y += self.LINE_HEIGHT
+             
+             # Campos fijos
++            lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "ID : {pesaje.id}"')
++            y += self.LINE_HEIGHT
+             lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "MAQ: {pesaje.maquina or ""}"')
+             y += self.LINE_HEIGHT
+             lines.append(f'TEXT {x + 4}, {y}, "1", 0, 1, 1, "NrOP: {pesaje.nro_op or ""}"')
+@@ -118,21 +120,25 @@ PRINT 1,1
+     def _build_qr_data(self, pesaje: Pesaje) -> str:
+         """Construye el contenido del QR para el sticker."""
+         fecha_ot = pesaje.fecha_orden_trabajo.strftime('%Y-%m-%d') if pesaje.fecha_orden_trabajo else ''
+-        hora = pesaje.fecha_hora.strftime('%H:%M:%S') if pesaje.fecha_hora else ''
++        fecha_hora = pesaje.fecha_hora.strftime('%Y-%m-%d %H:%M:%S') if pesaje.fecha_hora else ''
+         
+         return ';'.join([
+-            str(pesaje.id or ''),
+-            pesaje.molde or '',
+-            pesaje.maquina or '',
+-            pesaje.nro_op or '',
+-            pesaje.turno or '',
+-            fecha_ot,
+-            pesaje.nro_orden_trabajo or '',
+-            pesaje.operador or '',
+-            pesaje.color or '',
+-            f'{pesaje.peso_kg:.1f}',
+-            fecha_ot,
+-            hora
++            str(pesaje.id) if pesaje.id else '',     # 0: mangaId
++            pesaje.molde or '',                      # 1: molde
++            pesaje.maquina or '',                    # 2: maquina
++            pesaje.nro_op or '',                     # 3: nro_op
++            pesaje.turno or '',                      # 4: turno
++            fecha_ot,                                # 5: fecha_ot_str
++            pesaje.nro_orden_trabajo or '',          # 6: nro_orden_trabajo
++            pesaje.operador or '',                   # 7: operador
++            pesaje.color or '',                      # 8: color
++            fecha_hora,                              # 9: fecha_hora_str
++            f'{pesaje.peso_kg:.1f}' if pesaje.peso_kg is not None else '', # 10: peso_kg
++            '',                                      # 11: (Sin uso)
++            pesaje.pieza_nombre or '',               # 12: pieza_nombre
++            '',                                      # 13: extra1
++            '',                                      # 14: extra2
++            ''                                       # 15: extra3
+         ])
+     
+     def generate_zpl(self, pesaje: Pesaje) -> str:
+@@ -144,11 +150,13 @@ PRINT 1,1
+         zpl = f"""
+ ^XA
+ ^CF0,25
+-^FO20,20^FDMOL : {pesaje.molde or ''}^FS
+-^FO20,50^FDMAQ : {pesaje.maquina or ''}^FS
+-^FO20,80^FDN┬░OP: {pesaje.nro_op or ''}^FS
+-^FO20,110^FDTUR : {pesaje.turno or ''}^FS
+-^FO20,140^FDF.OT: {fecha_ot}^FS
++^FO20,20^FDID  : {pesaje.id}^FS
++^FO20,50^FDMOL : {pesaje.molde or ''}^FS
++^FO20,80^FDMAQ : {pesaje.maquina or ''}^FS
++^FO20,110^FDN┬░OP: {pesaje.nro_op or ''}^FS
++^FO20,140^FDTUR : {pesaje.turno or ''}^FS
++^FO20,170^FDF.OT: {fecha_ot}^FS
++
+ ^FO20,170^FDN┬░OT: {pesaje.nro_orden_trabajo or ''}^FS
+ ^FO20,200^FDOPE.: {pesaje.operador or ''}^FS
+ ^FO20,230^FDCOL : {pesaje.color or ''}^FS
+@@ -173,6 +181,7 @@ PRINT 1,1
+         commands = b''
+         commands += ESC + b'@'  # Initialize
+         commands += b'--------------------------------\n'
++        commands += f"ID  : {pesaje.id}\n".encode('utf-8')
+         commands += f"MOL : {pesaje.molde or ''}\n".encode('utf-8')
+         commands += f"MAQ : {pesaje.maquina or ''}\n".encode('utf-8')
+         commands += f"N┬░OP: {pesaje.nro_op or ''}\n".encode('utf-8')
+@@ -198,6 +207,7 @@ PRINT 1,1
+         
+         lines = [
+             'ÔöÇ' * 32,
++            f"ID  : {pesaje.id}",
+             f"MOL : {pesaje.molde or ''}",
+             f"M├üQ : {pesaje.maquina or ''}",
+             f"N┬░OP: {pesaje.nro_op or ''}",
+diff --git a/backend/migrate_utc_to_peru.py b/backend/migrate_utc_to_peru.py
+new file mode 100644
+index 0000000..f2e52fa
+--- /dev/null
++++ b/backend/migrate_utc_to_peru.py
+@@ -0,0 +1,55 @@
++import sqlite3
++import os
++
++def migrate_timestamps():
++    # La base de datos de Flask con SQLAlchemy suele estar en la carpeta instance/
++    base_dir = os.path.dirname(os.path.abspath(__file__))
++    db_path = os.path.join(base_dir, 'instance', 'app.db')
++    
++    # Fallback si por alguna razon esta en la raiz
++    if not os.path.exists(db_path):
++        db_path = os.path.join(base_dir, 'app.db')
++        
++    if not os.path.exists(db_path):
++        print(f"ÔØî Error: No se encontr├│ el archivo de base de datos SQLite en: {db_path}")
++        print("Aseg├║rate de ejecutar este script dentro de la carpeta 'backend'.")
++        return
++
++    print(f"­ƒôª Conectando a la BD: {db_path}")
++    conn = sqlite3.connect(db_path)
++    cursor = conn.cursor()
++
++    # Consultas SQL nativas de SQLite para restar 5 horas a las fechas
++    consultas = [
++        # Tabla: PESAJE
++        "UPDATE pesajes SET fecha_hora = datetime(fecha_hora, '-5 hours') WHERE fecha_hora IS NOT NULL;",
++        "UPDATE pesajes SET fecha_impresion = datetime(fecha_impresion, '-5 hours') WHERE fecha_impresion IS NOT NULL;",
++        "UPDATE pesajes SET fecha_sincronizacion = datetime(fecha_sincronizacion, '-5 hours') WHERE fecha_sincronizacion IS NOT NULL;",
++        "UPDATE pesajes SET deleted_at = datetime(deleted_at, '-5 hours') WHERE deleted_at IS NOT NULL;",
++        
++        # Tabla: OPS_CERRADAS
++        "UPDATE ops_cerradas SET fecha_cierre = datetime(fecha_cierre, '-5 hours') WHERE fecha_cierre IS NOT NULL;"
++    ]
++
++    print("ÔÅ│ Ejecutando conversi├│n de zonas horarias (UTC -> UTC-5)...")
++    
++    try:
++        total_afectadas = 0
++        for sql in consultas:
++            cursor.execute(sql)
++            afectadas = cursor.rowcount
++            total_afectadas += afectadas
++            print(f"  Ô£ô {sql.split('SET')[1].split('=')[0].strip().ljust(22)} -> {afectadas} filas ajustadas.")
++            
++        conn.commit()
++        print(f"Ô£à ┬í├ëxito! Migraci├│n completada. Un total de {total_afectadas} celdas de fecha/hora fueron convertidas a hora de Per├║.")
++        
++    except sqlite3.Error as e:
++        conn.rollback()
++        print(f"ÔØî Error durante la ejecuci├│n SQL: {e}")
++        
++    finally:
++        conn.close()
++
++if __name__ == '__main__':
++    migrate_timestamps()
+diff --git a/frontend/src/components/GestionPesajes.jsx b/frontend/src/components/GestionPesajes.jsx
+index 340b36d..3e476e7 100644
+--- a/frontend/src/components/GestionPesajes.jsx
++++ b/frontend/src/components/GestionPesajes.jsx
+@@ -6,6 +6,7 @@ function GestionPesajes() {
+   const [pesajes, setPesajes] = useState([]);
+   const [loading, setLoading] = useState(false);
+   const [filters, setFilters] = useState({
++    id: '',
+     nro_op: '',
+     molde: '',
+     nro_ot: '',
+@@ -54,7 +55,7 @@ function GestionPesajes() {
+   };
+ 
+   const handleLimpiar = () => {
+-    setFilters({ nro_op: '', molde: '', nro_ot: '', fecha_inicio: '', fecha_fin: '' });
++    setFilters({ id: '', nro_op: '', molde: '', nro_ot: '', fecha_inicio: '', fecha_fin: '' });
+   };
+ 
+   const toggleSelect = (id) => {
+@@ -153,6 +154,16 @@ function GestionPesajes() {
+ 
+       {/* Filtros */}
+       <form className="gestion-filters" onSubmit={handleBuscar}>
++        <div className="filter-field">
++          <label>ID</label>
++          <input
++            type="number"
++            name="id"
++            value={filters.id}
++            onChange={handleFilterChange}
++            placeholder="Ej: 154"
++          />
++        </div>
+         <div className="filter-field">
+           <label>N┬░ OP</label>
+           <input
+diff --git a/frontend/src/services/api.js b/frontend/src/services/api.js
+index a5e8a0f..1aade84 100644
+--- a/frontend/src/services/api.js
++++ b/frontend/src/services/api.js
+@@ -17,6 +17,7 @@ export const pesajesApi = {
+   
+   buscar: (filters = {}) => {
+     const params = new URLSearchParams();
++    if (filters.id) params.append('id', filters.id);
+     if (filters.nro_op) params.append('nro_op', filters.nro_op);
+     if (filters.molde) params.append('molde', filters.molde);
+     if (filters.nro_ot) params.append('nro_ot', filters.nro_ot);

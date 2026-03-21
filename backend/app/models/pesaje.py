@@ -134,8 +134,8 @@ class Pesaje(db.Model):
             except Exception as e:
                 print(f"Error parsing Google Forms URL: {e}")
         
-        # Fallback: formato legacy con comma
-        parts = qr_string.split(',')
+        # Fallback: formato legacy con punto y coma
+        parts = qr_string.split(';')
         if len(parts) >= 7:
             result = {
                 'id_registro': parts[0].strip(),

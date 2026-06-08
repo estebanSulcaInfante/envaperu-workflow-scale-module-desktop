@@ -118,6 +118,16 @@ function GestionPesajes() {
     setDeleteConfirm(null);
   };
 
+  const handleImprimir = async (id) => {
+    try {
+      await pesajesApi.imprimir(id);
+      showToast('🖨️ Sticker enviado a imprimir');
+    } catch (err) {
+      console.error('Error al imprimir:', err);
+      showToast('❌ Error al imprimir sticker', 'error');
+    }
+  };
+
   const formatDate = (isoDate) => {
     if (!isoDate) return '—';
     const date = new Date(isoDate);
@@ -276,6 +286,14 @@ function GestionPesajes() {
                 <td>{p.color || '—'}</td>
                 <td>{p.operador || '—'}</td>
                 <td className="col-actions">
+                  <button
+                    className="btn btn-icon"
+                    onClick={() => handleImprimir(p.id)}
+                    title="Imprimir sticker"
+                    style={{ background: 'var(--primary, #4f8cff)', color: 'white', marginRight: '5px' }}
+                  >
+                    🖨️
+                  </button>
                   <button
                     className="btn btn-icon btn-danger"
                     onClick={() => handleEliminarUno(p.id)}

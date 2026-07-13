@@ -24,7 +24,10 @@ class Pesaje(db.Model):
     
     # Datos adicionales
     operador = db.Column(db.String(100), nullable=True)  # OPE: Admin
-    color = db.Column(db.String(50), nullable=True)  # COL:
+    color = db.Column(db.String(100), nullable=True)  # Snapshot en texto plano (ej. "ROJO SÓLIDO")
+    
+    # Trazabilidad con la OP
+    lote_salida_pieza_color_id = db.Column(db.Integer, nullable=True)
     
     # Pieza/componente seleccionado (del dropdown)
     pieza_sku = db.Column(db.String(50), nullable=True)

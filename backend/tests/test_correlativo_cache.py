@@ -94,7 +94,7 @@ class TestAnularAPI:
         with app.app_context():
             agregar_a_cache([30001, 30002])
         
-        response = client.post('/api/rdp/cache/anular', json={
+        response = client.post('/api/orden-trabajo/cache/anular', json={
             'motivo': 'Hoja mojada'
         })
         
@@ -110,7 +110,7 @@ class TestAnularAPI:
         with app.app_context():
             agregar_a_cache([30001, 30002, 30003])
         
-        response = client.post('/api/rdp/cache/anular', json={
+        response = client.post('/api/orden-trabajo/cache/anular', json={
             'correlativo': 30002,
             'motivo': 'Roto accidentalmente'
         })
@@ -121,7 +121,7 @@ class TestAnularAPI:
     
     def test_anular_sin_disponibles(self, client):
         """Error si no hay correlativos disponibles"""
-        response = client.post('/api/rdp/cache/anular', json={
+        response = client.post('/api/orden-trabajo/cache/anular', json={
             'motivo': 'Test'
         })
         
@@ -137,7 +137,7 @@ class TestAnularAPI:
             c2.anular("Motivo 2")
             db.session.commit()
         
-        response = client.get('/api/rdp/cache/anulados')
+        response = client.get('/api/orden-trabajo/cache/anulados')
         
         assert response.status_code == 200
         data = response.get_json()

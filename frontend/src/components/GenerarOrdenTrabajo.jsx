@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { rdpApi } from '../services/api';
-import './GenerarRDP.css';
+import api from '../services/api';
+import './GenerarOrdenTrabajo.css';
 
-function GenerarRDP({ formData, onClose }) {
+function GenerarOrdenTrabajo({ formData, onClose }) {
   const [siguiente, setSiguiente] = useState(null);
   const [disponibles, setDisponibles] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -19,7 +19,7 @@ function GenerarRDP({ formData, onClose }) {
   const [correlativoReimprimir, setCorrelativoReimprimir] = useState('');
   
   // Campos del RDP
-  const [rdpData, setRdpData] = useState({
+  const [ordenData, setOrdenData] = useState({
     nro_op: formData?.nro_op || '',
     molde: formData?.molde || '',
     maquina: formData?.maquina || '',
@@ -35,7 +35,7 @@ function GenerarRDP({ formData, onClose }) {
 
   const fetchSiguiente = async () => {
     try {
-      const { data } = await rdpApi.getSiguiente();
+      const { data } = await api.get('/orden-trabajo/siguiente');
       setSiguiente(data.siguiente);
       setDisponibles(data.disponibles_local || data.disponibles || 0);
       setError(null);
@@ -60,12 +60,12 @@ function GenerarRDP({ formData, onClose }) {
     setError(null);
     
     try {
-      const payload = { ...rdpData };
+      const payload = { ...ordenData, nro_orden_trabajo: undefined };
       if (modoOffline) {
          payload.correlativo_manual = siguiente.trim();
       }
       
-      const { data } = await rdpApi.generar(payload);
+      const { data } = await api.post('/orden-trabajo/generar', payload);
       setResultado(data);
       if (!modoOffline) {
           setSiguiente(null);
@@ -76,8 +76,8 @@ function GenerarRDP({ formData, onClose }) {
           setSiguiente('');
       }
     } catch (err) {
-      console.error('Error generando RDP:', err);
-      setError(err.response?.data?.error || 'Error generando RDP');
+      console.error('Error generando Orden de Trabajo:', err);
+      setError(err.response?.data?.error || 'Error generando Orden de Trabajo');
     } finally {
       setLoading(false);
     }
@@ -93,7 +93,7 @@ function GenerarRDP({ formData, onClose }) {
     setError(null);
     
     try {
-      const { data } = await rdpApi.anular(siguiente, motivoAnular);
+      const { data } = await api.post(`/orden-trabajo/anular/${siguiente}`, { motivo: motivoAnular });
       setResultado({
         ...data,
         anulado: true
@@ -110,7 +110,7 @@ function GenerarRDP({ formData, onClose }) {
   };
 
   const handleChange = (e) => {
-    setRdpData(prev => ({
+    setOrdenData(prev => ({
       ...prev,
       [e.target.name]: e.target.value
     }));
@@ -124,7 +124,7 @@ function GenerarRDP({ formData, onClose }) {
     setError(null);
     
     try {
-      const { data } = await rdpApi.reimprimir(String(corr));
+      const { data } = await api.post(`/orden-trabajo/reimprimir/${String(corr)}`);
       setResultado({
         correlativo: data.correlativo,
         impreso: data.impreso,
@@ -139,11 +139,11 @@ function GenerarRDP({ formData, onClose }) {
   };
 
   return (
-    <div className="generar-rdp-overlay">
-      <div className="generar-rdp-modal">
-        <div className="rdp-header">
-          <h2>📋 Registro Diario</h2>
-          <button className="rdp-close" onClick={onClose}>×</button>
+    <div className="orden-trabajo-overlay">
+      <div className="orden-trabajo-modal">
+        <div className="orden-trabajo-header">
+          <h2>🖨️ Generar Orden de Trabajo (Manual)</h2>
+          <button className="orden-trabajo-close" onClick={onClose}>×</button>
         </div>
         
         {/* Toggle modo */}
@@ -174,14 +174,14 @@ function GenerarRDP({ formData, onClose }) {
           </button>
         </div>
         
-        {error && <div className="rdp-error">{error}</div>}
+        {error && <div className="orden-trabajo-error">{error}</div>}
         
-        <div className="rdp-content">
+        <div className="orden-trabajo-content">
           {modoReimprimir ? (
             /* === MODO REIMPRIMIR === */
             <>
-              <div className="rdp-correlativo" style={{ textAlign: 'center', padding: '16px 0' }}>
-                <span className="rdp-label" style={{ display: 'block', marginBottom: '8px' }}>Número de Correlativo:</span>
+              <div className="orden-trabajo-correlativo" style={{ textAlign: 'center', padding: '16px 0' }}>
+                <span className="orden-trabajo-label" style={{ display: 'block', marginBottom: '8px' }}>Número de Correlativo:</span>
                 <input
                   type="number"
                   value={correlativoReimprimir}
@@ -192,13 +192,13 @@ function GenerarRDP({ formData, onClose }) {
               </div>
               
               {resultado && (
-                <div className="rdp-resultado">
+                <div className="orden-trabajo-resultado">
                   {resultado.impreso ? (
-                    <div className="rdp-success">
-                      ✅ Sticker del RDP <strong>{resultado.correlativo}</strong> reimpreso
+                    <div className="orden-trabajo-success">
+                      ✅ Sticker de la Orden de Trabajo <strong>{resultado.correlativo}</strong> reimpreso
                     </div>
                   ) : (
-                    <div className="rdp-error">❌ Error al reimprimir</div>
+                    <div className="orden-trabajo-error">❌ Error al reimprimir</div>
                   )}
                 </div>
               )}
@@ -206,9 +206,9 @@ function GenerarRDP({ formData, onClose }) {
           ) : (
             /* === MODO GENERAR === */
             <>
-          <div className="rdp-correlativo">
-            <div className="rdp-corr-info" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span className="rdp-label">Correlativo:</span>
+          <div className="orden-trabajo-correlativo">
+            <div className="orden-trabajo-corr-info" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span className="orden-trabajo-label">Correlativo:</span>
               {modoOffline ? (
                  <input 
                    type="text" 
@@ -218,73 +218,73 @@ function GenerarRDP({ formData, onClose }) {
                    style={{ fontSize: '1.2rem', padding: '4px 8px', width: '150px' }}
                  />
               ) : (
-                 <span className="rdp-value">{siguiente || '---'}</span>
+                 <span className="orden-trabajo-value">{siguiente || '---'}</span>
               )}
             </div>
-            <div className="rdp-cache-info">
+            <div className="orden-trabajo-cache-info">
               {modoOffline ? (
-                <span className="rdp-cache-count" style={{ color: 'var(--warning)' }}>⚠️ Modo Manual</span>
+                <span className="orden-trabajo-cache-count" style={{ color: 'var(--warning)' }}>⚠️ Modo Manual</span>
               ) : (
-                <span className="rdp-cache-count">{disponibles} disponibles</span>
+                <span className="orden-trabajo-cache-count">{disponibles} disponibles</span>
               )}
             </div>
           </div>
           
-          <div className="rdp-form">
-            <div className="rdp-field">
-              <label>N° OP</label>
+          <div className="orden-trabajo-form">
+            <div className="orden-trabajo-field">
+              <label>N° Orden de Trabajo (Manual Opcional)</label>
               <input 
                 name="nro_op"
-                value={rdpData.nro_op}
+                value={ordenData.nro_op}
                 onChange={handleChange}
                 placeholder="OP-1322"
               />
             </div>
             
-            <div className="rdp-field">
+            <div className="orden-trabajo-field">
               <label>Turno</label>
-              <select name="turno" value={rdpData.turno} onChange={handleChange}>
+              <select name="turno" value={ordenData.turno} onChange={handleChange}>
                 <option value="">Seleccionar</option>
                 <option value="DIURNO">DIURNO</option>
                 <option value="NOCTURNO">NOCTURNO</option>
               </select>
             </div>
             
-            <div className="rdp-field full-width">
+            <div className="orden-trabajo-field full-width">
               <label>Molde</label>
               <input 
                 name="molde"
-                value={rdpData.molde}
+                value={ordenData.molde}
                 onChange={handleChange}
                 placeholder="Nombre del molde"
               />
             </div>
             
-            <div className="rdp-field">
+            <div className="orden-trabajo-field">
               <label>Máquina</label>
               <input 
                 name="maquina"
-                value={rdpData.maquina}
+                value={ordenData.maquina}
                 onChange={handleChange}
                 placeholder="INY-05"
               />
             </div>
             
-            <div className="rdp-field">
+            <div className="orden-trabajo-field">
               <label>Fecha</label>
               <input 
                 type="date"
                 name="fecha_ot"
-                value={rdpData.fecha_ot}
+                value={ordenData.fecha_ot}
                 onChange={handleChange}
               />
             </div>
             
-            <div className="rdp-field">
+            <div className="orden-trabajo-field">
               <label>Operador</label>
               <input 
                 name="operador"
-                value={rdpData.operador}
+                value={ordenData.operador}
                 onChange={handleChange}
                 placeholder="Nombre del operador"
                 list="operadores-rdp-list"
@@ -312,11 +312,11 @@ function GenerarRDP({ formData, onClose }) {
               </datalist>
             </div>
 
-            <div className="rdp-field">
+            <div className="orden-trabajo-field">
               <label>Color</label>
               <input 
                 name="color"
-                value={rdpData.color}
+                value={ordenData.color}
                 onChange={handleChange}
                 placeholder="Color"
               />
@@ -325,9 +325,9 @@ function GenerarRDP({ formData, onClose }) {
           
           {/* Dialog para anular */}
           {showAnular && (
-            <div className="rdp-anular-dialog">
-              <div className="rdp-anular-title">⚠️ Anular Correlativo {siguiente}</div>
-              <div className="rdp-field">
+            <div className="orden-trabajo-anular-dialog">
+              <div className="orden-trabajo-anular-title">⚠️ Anular Correlativo {siguiente}</div>
+              <div className="orden-trabajo-field">
                 <label>Motivo de anulación *</label>
                 <input 
                   value={motivoAnular}
@@ -335,15 +335,15 @@ function GenerarRDP({ formData, onClose }) {
                   placeholder="Ej: Hoja destruida por accidente"
                 />
               </div>
-              <div className="rdp-anular-actions">
+              <div className="orden-trabajo-anular-actions">
                 <button 
-                  className="rdp-btn rdp-btn-cancel"
+                  className="orden-trabajo-btn orden-trabajo-btn-cancel"
                   onClick={() => setShowAnular(false)}
                 >
                   Cancelar
                 </button>
                 <button 
-                  className="rdp-btn rdp-btn-danger"
+                  className="orden-trabajo-btn orden-trabajo-btn-danger"
                   onClick={handleAnular}
                   disabled={anulando || !motivoAnular.trim()}
                 >
@@ -354,22 +354,22 @@ function GenerarRDP({ formData, onClose }) {
           )}
           
           {resultado && !modoReimprimir && (
-            <div className={`rdp-resultado ${resultado.anulado ? 'anulado' : ''}`}>
+            <div className={`orden-trabajo-resultado ${resultado.anulado ? 'anulado' : ''}`}>
               {resultado.anulado ? (
-                <div className="rdp-anulado">
+                <div className="orden-trabajo-anulado">
                   ❌ Correlativo {resultado.correlativo} anulado
-                  <div className="rdp-anulado-motivo">Motivo: {resultado.motivo}</div>
+                  <div className="orden-trabajo-anulado-motivo">Motivo: {resultado.motivo}</div>
                 </div>
               ) : (
                 <>
-                  <div className="rdp-success">
-                    ✅ RDP Generado: <strong>{resultado.correlativo}</strong>
+                  <div className="orden-trabajo-success">
+                    ✅ Orden de Trabajo Generada: <strong>{resultado.correlativo}</strong>
                   </div>
                   {resultado.impreso && (
-                    <div className="rdp-impreso">🖨️ Sticker impreso</div>
+                    <div className="orden-trabajo-impreso">🖨️ Sticker impreso</div>
                   )}
                   <button 
-                    className="rdp-btn rdp-btn-secondary" 
+                    className="orden-trabajo-btn orden-trabajo-btn-secondary" 
                     onClick={handleReimprimir}
                     disabled={reimprimiendo}
                     style={{ marginTop: '8px', width: '100%' }}
@@ -384,10 +384,10 @@ function GenerarRDP({ formData, onClose }) {
           )}
         </div>
         
-        <div className="rdp-actions">
+        <div className="orden-trabajo-actions">
           {modoReimprimir ? (
             <button
-              className="rdp-btn rdp-btn-primary"
+              className="orden-trabajo-btn orden-trabajo-btn-primary"
               onClick={handleReimprimir}
               disabled={reimprimiendo || !correlativoReimprimir.trim()}
               style={{ width: '100%' }}
@@ -397,18 +397,18 @@ function GenerarRDP({ formData, onClose }) {
           ) : (
             <>
               <button 
-                className="rdp-btn rdp-btn-secondary"
+                className="orden-trabajo-btn orden-trabajo-btn-secondary"
                 onClick={() => setShowAnular(true)}
                 disabled={loading || !siguiente || showAnular}
               >
                 ❌ Anular Hoja
               </button>
               <button 
-                className="rdp-btn rdp-btn-primary"
+                className="orden-trabajo-btn orden-trabajo-btn-primary"
                 onClick={handleGenerar}
                 disabled={loading || !siguiente}
               >
-                {loading ? '⏳ Generando...' : '🖨️ Generar e Imprimir'}
+                {loading ? '⏳ Generando...' : '🖨️ Generar Orden de Trabajo'}
               </button>
             </>
           )}
@@ -418,4 +418,4 @@ function GenerarRDP({ formData, onClose }) {
   );
 }
 
-export default GenerarRDP;
+export default GenerarOrdenTrabajo;

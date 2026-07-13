@@ -107,25 +107,25 @@ export const syncApi = {
     api.get('/sync/status')
 };
 
-// ===== RDP (Registro Diario Producción) =====
-export const rdpApi = {
+// ===== Orden de Trabajo (ex-RDP) =====
+export const ordenTrabajoApi = {
   getSiguiente: () =>
-    api.get('/rdp/siguiente'),
+    api.get('/orden-trabajo/siguiente'),
   
   generar: (data) =>
-    api.post('/rdp/generar', data),
+    api.post('/orden-trabajo/generar', data),
   
   anular: (correlativo, motivo) =>
-    api.post('/rdp/cache/anular', { correlativo, motivo }),
+    api.post('/orden-trabajo/cache/anular', { correlativo, motivo }),
   
   cacheStatus: () =>
-    api.get('/rdp/cache/status'),
+    api.get('/orden-trabajo/cache/status'),
   
   cacheReponer: () =>
-    api.post('/rdp/cache/reponer'),
+    api.post('/orden-trabajo/cache/reponer'),
   
   reimprimir: (correlativo) =>
-    api.post('/rdp/reimprimir', { correlativo })
+    api.post('/orden-trabajo/reimprimir', { correlativo })
 };
 
 // ===== Avance Local =====

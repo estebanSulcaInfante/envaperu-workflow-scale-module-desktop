@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { pesajesApi } from '../services/api';
-import './GenerarRDP.css'; // Usamos los mismos estilos del modal
+import './GenerarOrdenTrabajo.css'; // Usamos los mismos estilos del modal
 
 export default function ExportarExcel({ onClose }) {
   // Por defecto, último mes hasta hoy
@@ -64,19 +64,19 @@ export default function ExportarExcel({ onClose }) {
   };
 
   return (
-    <div className="generar-rdp-overlay">
-      <div className="generar-rdp-modal">
-        <div className="rdp-header">
+    <div className="orden-trabajo-overlay">
+      <div className="orden-trabajo-modal">
+        <div className="orden-trabajo-header">
           <h2>📊 Exportar a Excel</h2>
-          <button className="rdp-close" onClick={onClose}>&times;</button>
+          <button className="orden-trabajo-close" onClick={onClose}>&times;</button>
         </div>
         
-        <div className="rdp-content">
+        <div className="orden-trabajo-content">
           <p>Seleccione el rango de fechas para exportar los pesajes.</p>
           
-          {error && <div className="rdp-error">{error}</div>}
+          {error && <div className="orden-trabajo-error">{error}</div>}
           
-          <div className="rdp-field" style={{ marginTop: '1rem' }}>
+          <div className="orden-trabajo-field" style={{ marginTop: '1rem' }}>
             <label>Fecha Inicio:</label>
             <input 
               type="date" 
@@ -87,7 +87,7 @@ export default function ExportarExcel({ onClose }) {
             />
           </div>
           
-          <div className="rdp-field" style={{ marginTop: '0.75rem' }}>
+          <div className="orden-trabajo-field" style={{ marginTop: '0.75rem' }}>
             <label>Fecha Fin:</label>
             <input 
               type="date" 
@@ -99,16 +99,16 @@ export default function ExportarExcel({ onClose }) {
           </div>
         </div>
         
-        <div className="rdp-actions">
+        <div className="orden-trabajo-actions">
           <button 
-            className="rdp-btn rdp-btn-cancel" 
+            className="orden-trabajo-btn orden-trabajo-btn-cancel" 
             onClick={onClose}
             disabled={loading}
           >
             Cancelar
           </button>
           <button 
-            className="rdp-btn rdp-btn-primary" 
+            className="orden-trabajo-btn orden-trabajo-btn-primary" 
             onClick={handleExportar}
             disabled={loading}
           >

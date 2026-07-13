@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request, current_app
 import requests
 from app import db
 
-rdp_bp = Blueprint('rdp', __name__, url_prefix='/api/rdp')
+orden_trabajo_bp = Blueprint('orden_trabajo', __name__, url_prefix='/api/orden-trabajo')
 
 
 def _get_central_api():
@@ -45,10 +45,10 @@ def obtener_siguiente_correlativo():
         return jsonify({'error': f'Sin conexión y cache local vacío'}), 503
 
 
-@rdp_bp.route('/generar', methods=['POST'])
-def generar_rdp():
+@orden_trabajo_bp.route('/generar', methods=['POST'])
+def generar_orden_trabajo():
     """
-    Genera un nuevo RDP usando cache local.
+    Genera un nuevo Orden de Trabajo usando cache local.
     Auto-repone cache si hay conexión y está bajo el threshold.
     """
     from app.models.correlativo_cache import (
@@ -135,7 +135,7 @@ def generar_rdp():
     })
 
 
-@rdp_bp.route('/cache/status', methods=['GET'])
+@orden_trabajo_bp.route('/cache/status', methods=['GET'])
 def cache_status():
     """Estado del cache local de correlativos."""
     from app.models.correlativo_cache import (
@@ -153,7 +153,7 @@ def cache_status():
     })
 
 
-@rdp_bp.route('/cache/reponer', methods=['POST'])
+@orden_trabajo_bp.route('/cache/reponer', methods=['POST'])
 def forzar_reponer():
     """Fuerza reposición del cache desde el servidor central."""
     try:
@@ -203,10 +203,11 @@ def anular_correlativo():
     
     corr.anular(motivo)
     db.session.commit()
+    orden_trabajo = str(corr.correlativo)
     
     return jsonify({
         'success': True,
-        'correlativo': corr.correlativo,
+        'correlativo': orden_trabajo,
         'motivo': corr.motivo_anulacion,
         'fecha': corr.fecha_anulacion.isoformat()
     })

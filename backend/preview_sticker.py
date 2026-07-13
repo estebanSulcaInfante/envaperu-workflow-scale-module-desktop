@@ -17,6 +17,7 @@ DATOS = {
     "nro_op": "OP1354",
     "turno": "DIURNO",
     "fecha_ot": "2026-03-02",
+    "nro_orden_trabajo": '30001',
     "nro_ot": "0001",
     "operador": "JUAN PEREZ GARCIA",
     "color": "NATURAL",

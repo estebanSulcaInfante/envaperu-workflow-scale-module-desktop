@@ -7,8 +7,8 @@ from app import db
 
 class CorrelativoCache(db.Model):
     """
-    Cache local de correlativos reservados del servidor central.
-    Permite generar RDPs sin conexión.
+    Cache local de correlativos de Orden de Trabajo descargados del central.
+    Permite generar Ordenes de Trabajo cuando no hay conexión.
     """
     __tablename__ = 'correlativo_cache'
     
@@ -17,7 +17,7 @@ class CorrelativoCache(db.Model):
     usado = db.Column(db.Boolean, default=False)
     fecha_uso = db.Column(db.DateTime, nullable=True)
     
-    # Datos del RDP generado (para reconciliación y reimpresión)
+    # Datos de la Orden de Trabajo generada (para reconciliación y reimpresión)
     nro_op = db.Column(db.String(50), nullable=True)
     molde = db.Column(db.String(100), nullable=True)
     maquina = db.Column(db.String(50), nullable=True)
@@ -32,7 +32,7 @@ class CorrelativoCache(db.Model):
     motivo_anulacion = db.Column(db.String(200), nullable=True)
     
     def marcar_usado(self, nro_op=None, molde=None, maquina=None, turno=None, fecha_ot=None, operador=None, color=None):
-        """Marca el correlativo como usado y guarda datos del RDP."""
+        """Marca el correlativo como usado y guarda datos de la Orden de Trabajo."""
         self.usado = True
         self.fecha_uso = datetime.now(timezone.utc)
         self.nro_op = nro_op
@@ -98,7 +98,7 @@ def get_siguiente_local():
 def consumir_local(nro_op=None, molde=None, maquina=None, turno=None, fecha_ot=None, operador=None, color=None):
     """
     Consume el siguiente correlativo del cache local.
-    Retorna el número de correlativo o None si no hay disponibles.
+    # Datos opcionales grabados al usar el correlativo para Orden de Trabajo offline si no hay disponibles.
     """
     siguiente = get_siguiente_local()
     if siguiente is None:

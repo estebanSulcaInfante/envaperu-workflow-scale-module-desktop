@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { pesajesApi, balanzaApi, syncApi, rdpApi } from './services/api';
+import { pesajesApi, balanzaApi, syncApi, ordenTrabajoApi } from './services/api';
 import socket from './services/socket';
 import ExportarExcel from './components/ExportarExcel';
 import AvanceDashboard from './components/AvanceDashboard';
 import GestionPesajes from './components/GestionPesajes';
+import GenerarOrdenTrabajo from './components/GenerarOrdenTrabajo';
 import CerrarOps from './components/CerrarOps';
 
 function App() {
@@ -365,7 +366,7 @@ function App() {
         peso_unitario_teorico: formData.peso_unitario_teorico
       };
 
-      const { data } = await rdpApi.generar(payload);
+      const { data } = await ordenTrabajoApi.generar(payload);
       if (data.impreso) {
         showToast(`✅ Sticker de OT "${formData.nro_orden_trabajo}" impreso`);
       } else {

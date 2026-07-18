@@ -1,7 +1,14 @@
 """
 Tests para el modelo CorrelativoCache y endpoint de anulación.
 """
+import os
+
 import pytest
+
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["SYNC_ENABLED"] = "false"
+os.environ["TESTING"] = "true"
+
 from app import create_app, db
 from app.models.correlativo_cache import (
     CorrelativoCache, 

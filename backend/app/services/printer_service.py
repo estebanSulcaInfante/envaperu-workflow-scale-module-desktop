@@ -3,6 +3,8 @@ Servicio de impresión de etiquetas/stickers.
 Soporta impresoras TSC (TSPL), Zebra (ZPL) y térmicas (ESC/POS).
 """
 from typing import Optional, List
+import threading
+import time
 from flask import current_app
 
 
@@ -14,6 +16,21 @@ class PrinterService:
         self.printer_type = printer_type
         self.printer_name = printer_name  # Nombre de impresora Windows
         self._connected = False
+        self._print_condition = threading.Condition()
+        self._active_prints = 0
+        self._accepting_prints = True
+
+    def _begin_print(self) -> bool:
+        with self._print_condition:
+            if not self._accepting_prints:
+                return False
+            self._active_prints += 1
+            return True
+
+    def _end_print(self):
+        with self._print_condition:
+            self._active_prints -= 1
+            self._print_condition.notify_all()
     
     def _get_config(self):
         """Obtiene configuración desde Flask config"""
@@ -74,11 +91,28 @@ class PrinterService:
     def disconnect(self):
         """Cierra la conexión con la impresora"""
         self._connected = False
+
+    def shutdown(self, timeout=5) -> bool:
+        """Deja de aceptar trabajos y espera los ya enviados al spooler."""
+        deadline = time.monotonic() + timeout
+        with self._print_condition:
+            self._accepting_prints = False
+            while self._active_prints:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._print_condition.wait(timeout=remaining)
+            drained = self._active_prints == 0
+        self.disconnect()
+        return drained
     
     def print_tspl(self, tspl_code: str) -> bool:
         """
         Imprime código TSPL (para impresoras TSC) via Windows RAW.
         """
+        if not self._begin_print():
+            return False
+
         try:
             import win32print
             
@@ -117,6 +151,8 @@ class PrinterService:
         except Exception as e:
             print(f"[PRINTER] ❌ Error: {e}")
             return False
+        finally:
+            self._end_print()
     
     def print_raw(self, data: bytes) -> bool:
         """Envía datos raw a la impresora"""
@@ -124,10 +160,15 @@ class PrinterService:
         
         if self.printer_type == 'TSPL':
             return self.print_tspl(data.decode('utf-8'))
-        
-        # Fallback para otros tipos
-        print(f"[PRINTER] Enviando {len(data)} bytes (tipo: {self.printer_type})")
-        return True
+
+        if not self._begin_print():
+            return False
+        try:
+            # Fallback para otros tipos
+            print(f"[PRINTER] Enviando {len(data)} bytes (tipo: {self.printer_type})")
+            return True
+        finally:
+            self._end_print()
     
     def print_zpl(self, zpl_code: str) -> bool:
         """Imprime código ZPL (para impresoras Zebra)"""
@@ -159,3 +200,9 @@ def get_printer_service() -> PrinterService:
     if _printer_service is None:
         _printer_service = PrinterService()
     return _printer_service
+
+
+def shutdown_printer_service(timeout=5) -> bool:
+    if _printer_service is None:
+        return True
+    return _printer_service.shutdown(timeout=timeout)

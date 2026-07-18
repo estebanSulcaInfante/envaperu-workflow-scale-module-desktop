@@ -1,10 +1,7 @@
 import axios from 'axios';
 
-// Usar URL absoluta para evitar problemas de proxy
-const API_BASE = 'http://127.0.0.1:5050/api';
-
 const api = axios.create({
-  baseURL: API_BASE,
+  baseURL: '/api',
   headers: {
     'Content-Type': 'application/json'
   }
@@ -30,21 +27,28 @@ export const pesajesApi = {
 
   crear: (data) => 
     api.post('/pesajes', data),
+
+  capturar: (data, captureId) =>
+    api.post('/local/v1/pesajes', data, {
+      headers: { 'Idempotency-Key': captureId }
+    }),
   
   obtener: (id) => 
     api.get(`/pesajes/${id}`),
   
-  actualizar: (id, data) => 
-    api.put(`/pesajes/${id}`, data),
-  
-  eliminar: (id) => 
-    api.delete(`/pesajes/${id}`),
-  
-  eliminarBulk: (ids) =>
-    api.post('/pesajes/bulk-delete', { ids }),
-  
   imprimir: (id) => 
     api.post(`/pesajes/${id}/imprimir`),
+
+  imprimirCaptura: (captureId) =>
+    api.post(`/local/v1/pesajes/${captureId}/print`),
+
+  solicitarCorreccion: (id, data, requestId) =>
+    api.post(`/local/v1/pesajes/${id}/corrections`, data, {
+      headers: { 'Idempotency-Key': requestId }
+    }),
+
+  listarCorrecciones: (id) =>
+    api.get(`/local/v1/pesajes/${id}/corrections`),
   
   previewSticker: (id) =>
     api.get(`/pesajes/${id}/preview-sticker`),
@@ -55,9 +59,6 @@ export const pesajesApi = {
   sinSincronizar: () => 
     api.get('/pesajes/sin-sincronizar'),
   
-  marcarSincronizado: (ids) => 
-    api.post('/pesajes/marcar-sincronizado', { ids }),
-    
   exportarExcel: (fechaInicio, fechaFin) => {
     let url = '/pesajes/exportar';
     const params = new URLSearchParams();
@@ -93,6 +94,12 @@ export const balanzaApi = {
   
   pesosPendientes: () => 
     api.get('/balanza/pesos-pendientes')
+};
+
+// ===== Salud de estación =====
+export const healthApi = {
+  ready: () =>
+    api.get('/local/v1/health/ready')
 };
 
 // ===== Sync (catálogo moldes) =====

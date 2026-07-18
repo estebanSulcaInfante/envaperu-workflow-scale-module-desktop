@@ -148,7 +148,7 @@ function CerrarOps() {
                   <tr key={op.nro_op}>
                     <td className="td-op">{op.nro_op}</td>
                     <td>{op.molde || '—'}</td>
-                    <td className="td-peso">{op.total_kg?.toFixed(1)}</td>
+                    <td className="td-peso">{op.total_kg?.toFixed(3)}</td>
                     <td className="td-bolsas">{op.total_bolsas}</td>
                     <td className="td-date">{formatDate(op.ultimo_pesaje)}</td>
                     <td className="col-action">
@@ -204,7 +204,7 @@ function CerrarOps() {
                     <tr key={op.nro_op}>
                       <td className="td-op cerrada">{op.nro_op}</td>
                       <td>{op.molde || '—'}</td>
-                      <td>{op.total_kg?.toFixed(1)}</td>
+                      <td>{op.total_kg?.toFixed(3)}</td>
                       <td>{op.total_bolsas}</td>
                       <td className="td-motivo">{op.motivo || '—'}</td>
                       <td className="td-date">{formatDate(op.fecha_cierre)}</td>

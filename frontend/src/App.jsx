@@ -1,16 +1,20 @@
-import { useState, useEffect } from 'react';
-import { pesajesApi, balanzaApi, syncApi, ordenTrabajoApi } from './services/api';
+import { useState, useEffect, useRef } from 'react';
+import { pesajesApi, balanzaApi, healthApi, syncApi, ordenTrabajoApi } from './services/api';
+import { createCaptureCoordinator, submitCaptureAndPrint } from './services/captureFlow';
 import socket from './services/socket';
+import CaptureResultNotice from './components/CaptureResultNotice';
 import ExportarExcel from './components/ExportarExcel';
 import AvanceDashboard from './components/AvanceDashboard';
 import GestionPesajes from './components/GestionPesajes';
 import GenerarOrdenTrabajo from './components/GenerarOrdenTrabajo';
 import CerrarOps from './components/CerrarOps';
+import CentralStatusBadge from './components/CentralStatusBadge';
 
 function App() {
   // Connection state
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
+  const [centralState, setCentralState] = useState('CENTRAL_NOT_PROVISIONED');
   
   // Weight state
   const [peso, setPeso] = useState(0);
@@ -44,10 +48,19 @@ function App() {
   const [generandoOT, setGenerandoOT] = useState(false);
   const [activeTab, setActiveTab] = useState('crear-ot');
   const [cooldown, setCooldown] = useState(false);
+  const [captureInFlight, setCaptureInFlight] = useState(false);
+  const [captureResult, setCaptureResult] = useState(null);
+  const [retryingPrint, setRetryingPrint] = useState(false);
+  const captureInFlightRef = useRef(false);
+  const captureCoordinatorRef = useRef(null);
+  if (!captureCoordinatorRef.current) {
+    captureCoordinatorRef.current = createCaptureCoordinator();
+  }
 
   // Load status and pesajes on mount
   useEffect(() => {
     checkStatus();
+    checkCentralStatus();
     loadPesajes();
     
     // Auto-llenar fecha con fecha actual
@@ -56,6 +69,11 @@ function App() {
       ...prev,
       fecha_orden_trabajo: today
     }));
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(checkCentralStatus, 30000);
+    return () => window.clearInterval(interval);
   }, []);
 
   // WebSocket: escuchar peso en vivo desde la balanza
@@ -107,7 +125,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [peso, formData, cooldown, activeTab]);
+  }, [peso, formData, cooldown, captureInFlight, activeTab]);
 
   const checkStatus = async () => {
     try {
@@ -218,7 +236,7 @@ function App() {
 
   // Aceptar peso con F2 (reemplaza al auto-grab)
   const handleAceptarPeso = async () => {
-    if (cooldown) {
+    if (cooldown || captureInFlightRef.current) {
       showToast('⏳ Espera unos segundos...', 'error');
       return;
     }
@@ -231,91 +249,109 @@ function App() {
       return;
     }
 
-    // Activar cooldown
+    captureInFlightRef.current = true;
+    setCaptureInFlight(true);
     setCooldown(true);
     setTimeout(() => setCooldown(false), 3000);
 
+    const session = captureCoordinatorRef.current.begin({
+      peso_kg: peso,
+      ...formData,
+      qr_data_original: qrInput
+    });
+
     try {
-      const pesajeData = {
-        peso_kg: peso,
-        ...formData,
-        qr_data_original: qrInput
-      };
-      console.log('[F2] Creando pesaje:', pesajeData);
+      const result = await submitCaptureAndPrint({
+        session,
+        captureRequest: pesajesApi.capturar,
+        printRequest: pesajesApi.imprimirCaptura,
+      });
 
-      const { data } = await pesajesApi.crear(pesajeData);
-      console.log('[F2] Pesaje creado con ID:', data.id);
+      captureCoordinatorRef.current.complete(session.captureId);
+      setCaptureResult(result);
+      await loadPesajes();
 
-      // Imprimir automáticamente
-      await pesajesApi.imprimir(data.id);
-      console.log('[F2] ✅ Impresión completada');
+      if (result.status === 'SAVED_PRINTED') {
+        showToast(`✅ Pesaje #${result.pesaje.id} guardado e impreso`);
+      } else {
+        showToast('Pesaje guardado; impresión fallida', 'error');
+      }
 
-      showToast(`✅ Pesaje #${data.id} guardado e impreso (${peso.toFixed(1)} kg)`);
-      loadPesajes();
-
-      // Show sticker preview
-      const preview = await pesajesApi.previewSticker(data.id);
-      setStickerPreview(preview.data.preview);
-
+      try {
+        const preview = await pesajesApi.previewSticker(result.pesaje.id);
+        setStickerPreview(preview.data.preview);
+      } catch (previewError) {
+        console.warn('[F2] No se pudo cargar la vista previa:', previewError);
+      }
     } catch (err) {
       console.error('[F2] ❌ Error:', err);
-      showToast('❌ Error al guardar/imprimir', 'error');
+      const isConflict = err.response?.data?.code === 'IDEMPOTENCY_CONFLICT';
+      showToast(
+        isConflict
+          ? 'Conflicto de captura. Requiere revisión del supervisor.'
+          : 'No se confirmó el guardado. F2 reintentará la misma captura.',
+        'error'
+      );
+    } finally {
+      captureInFlightRef.current = false;
+      setCaptureInFlight(false);
     }
   };
 
-  const handleGrabar = async () => {
-    // Validar peso mínimo
-    if (peso < 1.0) {
-      showToast('⚠️ Peso inválido (mínimo 1 kg)', 'error');
-      return;
-    }
-    
-    // Validar que hay datos del QR
-    if (!formData.nro_op) {
-      showToast('⚠️ Escanea un QR primero', 'error');
-      return;
-    }
-
+  const checkCentralStatus = async () => {
     try {
-      const { data } = await pesajesApi.crear({
-        peso_kg: peso,
-        ...formData,
-        qr_data_original: qrInput
-      });
-      
-      // Imprimir automáticamente
-      await pesajesApi.imprimir(data.id);
-      showToast('✅ Guardado e impreso correctamente');
-      loadPesajes();
-      
-      // Show sticker preview
-      const preview = await pesajesApi.previewSticker(data.id);
-      setStickerPreview(preview.data.preview);
-      
+      const { data } = await healthApi.ready();
+      setCentralState(data.central?.state || 'CENTRAL_NOT_PROVISIONED');
     } catch (err) {
-      showToast('❌ Error al guardar', 'error');
+      console.error('Error checking central status:', err);
+      setCentralState('CENTRAL_UNREACHABLE');
+    }
+  };
+
+  const handleRetryCapturePrint = async (captureId) => {
+    if (retryingPrint) return;
+    setRetryingPrint(true);
+    try {
+      const { data } = await pesajesApi.imprimirCaptura(captureId);
+      setCaptureResult({
+        status: data.status,
+        printStatus: data.status,
+        pesaje: data.pesaje,
+        attempt: data.print_attempt,
+      });
+
+      if (data.status === 'SAVED_PRINTED') {
+        showToast(`✅ Etiqueta del pesaje #${data.pesaje.id} impresa`);
+      } else {
+        showToast('La impresión volvió a fallar; el pesaje sigue guardado.', 'error');
+      }
+      await loadPesajes();
+    } catch (err) {
+      showToast('No se pudo confirmar la impresión; el pesaje sigue guardado.', 'error');
+    } finally {
+      setRetryingPrint(false);
     }
   };
 
   const handleImprimir = async (id) => {
     try {
-      await pesajesApi.imprimir(id);
-      showToast('🖨️ Sticker enviado a impresión');
-      loadPesajes();
+      const { data } = await pesajesApi.imprimir(id);
+      if (data.pesaje?.capture_id) {
+        setCaptureResult({
+          status: data.status,
+          printStatus: data.status,
+          pesaje: data.pesaje,
+          attempt: data.print_attempt,
+        });
+      }
+      if (data.status === 'SAVED_PRINTED') {
+        showToast('🖨️ Sticker enviado a impresión');
+      } else {
+        showToast('Pesaje guardado; impresión fallida', 'error');
+      }
+      await loadPesajes();
     } catch (err) {
       showToast('Error al imprimir', 'error');
-    }
-  };
-
-  const handleEliminar = async (id) => {
-    if (!confirm('¿Eliminar este pesaje?')) return;
-    
-    try {
-      await pesajesApi.eliminar(id);
-      showToast('🗑️ Pesaje eliminado');
-      loadPesajes();
-    } catch (err) {
-      showToast('Error al eliminar', 'error');
     }
   };
 
@@ -397,6 +433,7 @@ function App() {
       <header className="header">
         <h1>⚖️ Sistema de Pesado - ENVAPERU</h1>
         <div className="header-right">
+          <CentralStatusBadge state={centralState} />
           <button 
             className="btn btn-secondary"
             onClick={() => setShowExcelModal(true)}
@@ -654,13 +691,13 @@ function App() {
                   </datalist>
                 </div>
                 <div className="form-group">
-                  <label>Color</label>
+                  <label>Color de pieza</label>
                   <input
                     type="text"
                     name="color"
                     value={formData.color}
                     onChange={handleInputChange}
-                    placeholder="Color del producto"
+                    placeholder="Color de pieza"
                     list="colores-list"
                   />
                   <datalist id="colores-list">
@@ -721,18 +758,20 @@ function App() {
               {/* Weight Display */}
               <div className="weight-display-container">
                 <div className="weight-display">
-                  <span className="weight-value">{peso.toFixed(1)}</span>
+                  <span className="weight-value">{peso.toFixed(3)}</span>
                   <span className="weight-unit">kg</span>
                   <div className="weight-status">
                     {!listening
                       ? 'Conectar balanza para capturar peso'
-                      : cooldown
+                      : captureInFlight
+                        ? 'Guardando captura...'
+                        : cooldown
                         ? '⏳ Cooldown... espera'
                         : '📡 En vivo — Presiona F2 para aceptar'
                     }
                   </div>
                 </div>
-                {activeTab === 'pesar' && listening && !cooldown && peso >= 1.0 && formData.nro_op && (
+                {activeTab === 'pesar' && listening && !cooldown && !captureInFlight && peso >= 1.0 && formData.nro_op && (
                   <button
                     className="btn btn-primary"
                     onClick={handleAceptarPeso}
@@ -742,6 +781,12 @@ function App() {
                   </button>
                 )}
               </div>
+
+              <CaptureResultNotice
+                result={captureResult}
+                onRetryPrint={handleRetryCapturePrint}
+                retrying={retryingPrint}
+              />
 
               {/* Action Buttons */}
               <div className="actions-row">
@@ -765,7 +810,7 @@ function App() {
                 {pesajes.map((p) => (
                   <div key={p.id} className="pesaje-item">
                     <div className="pesaje-info">
-                      <span className="peso">{p.peso_kg.toFixed(1)} kg</span>
+                      <span className="peso">{p.peso_kg.toFixed(3)} kg</span>
                       <span className="meta">
                         {p.nro_orden_trabajo ? `OT ${p.nro_orden_trabajo} • ` : ''}{p.molde || 'Sin molde'} • {p.nro_op || ''} • {formatDate(p.fecha_hora)}
                       </span>
@@ -777,13 +822,6 @@ function App() {
                         title="Imprimir sticker"
                       >
                         🖨️
-                      </button>
-                      <button 
-                        className="btn btn-icon btn-danger"
-                        onClick={() => handleEliminar(p.id)}
-                        title="Eliminar pesaje"
-                      >
-                        🗑️
                       </button>
                     </div>
                   </div>

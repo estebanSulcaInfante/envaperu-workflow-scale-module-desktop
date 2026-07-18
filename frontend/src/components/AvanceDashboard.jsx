@@ -140,7 +140,7 @@ function AvanceDashboard() {
                 <span className="molde-colors-count">{moldeGroup.colores.length} color{moldeGroup.colores.length !== 1 ? 'es' : ''}</span>
               </div>
               <div className="molde-stats">
-                <span className="stat-kg">{moldeGroup.total_kg.toFixed(1)} kg</span>
+                <span className="stat-kg">{moldeGroup.total_kg.toFixed(3)} kg</span>
                 <span className="stat-bolsas">{moldeGroup.total_bolsas} bolsa{moldeGroup.total_bolsas !== 1 ? 's' : ''}</span>
               </div>
             </div>
@@ -161,7 +161,7 @@ function AvanceDashboard() {
                           <span className="color-tag">{colorGroup.color}</span>
                         </div>
                         <div className="color-stats">
-                          <span className="stat-kg">{colorGroup.total_kg.toFixed(1)} kg</span>
+                          <span className="stat-kg">{colorGroup.total_kg.toFixed(3)} kg</span>
                           <span className="stat-bolsas">{colorGroup.total_bolsas} bolsa{colorGroup.total_bolsas !== 1 ? 's' : ''}</span>
                         </div>
                       </div>
@@ -175,7 +175,7 @@ function AvanceDashboard() {
                                 <span className="bolsa-num">#{colorGroup.pesajes.length - i}</span>
                                 <span className="bolsa-time">{formatTime(p.fecha_hora)}</span>
                                 <span className="bolsa-ot">OT {p.nro_orden_trabajo || '—'}</span>
-                                <span className="bolsa-peso">{p.peso_kg?.toFixed(1)} kg</span>
+                                <span className="bolsa-peso">{p.peso_kg?.toFixed(3)} kg</span>
                               </div>
                             ))}
                           </div>
@@ -200,7 +200,7 @@ function AvanceDashboard() {
           <h2>📊 AVANCE EN VIVO</h2>
           <div className="header-actions">
             <span className="total-global">
-              <strong>{resumen.total_global_kg.toFixed(1)} kg</strong> — {resumen.total_registros} bolsas
+              <strong>{resumen.total_global_kg.toFixed(3)} kg</strong> — {resumen.total_registros} bolsas
             </span>
             <button className="btn btn-secondary" onClick={() => setAll(true)}>Expandir</button>
             <button className="btn btn-secondary" onClick={() => setAll(false)}>Colapsar</button>
@@ -219,7 +219,7 @@ function AvanceDashboard() {
         <h2>📊 Avance</h2>
         <div className="header-actions">
           <span className="total-global">
-            Total: <strong>{resumen.total_global_kg.toFixed(1)} kg</strong> ({resumen.total_registros} bolsas)
+            Total: <strong>{resumen.total_global_kg.toFixed(3)} kg</strong> ({resumen.total_registros} bolsas)
           </span>
           <button className="btn btn-secondary btn-sm" onClick={() => setAll(true)}>Expandir</button>
           <button className="btn btn-secondary btn-sm" onClick={() => setAll(false)}>Colapsar</button>

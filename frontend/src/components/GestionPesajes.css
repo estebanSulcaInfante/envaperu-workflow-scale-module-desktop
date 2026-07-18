@@ -1,5 +1,7 @@
 .gestion-container {
   padding: 1rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .gestion-header {
@@ -88,6 +90,9 @@
 
 /* Table */
 .gestion-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -124,18 +129,10 @@
   background: var(--bg-hover);
 }
 
-.gestion-table tbody tr.selected {
-  background: #E3F2FD;
-}
-
-.col-check {
-  width: 40px;
-  text-align: center;
-}
-
 .col-actions {
-  width: 60px;
+  width: 82px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .td-center {
@@ -157,6 +154,46 @@
 .td-peso {
   font-weight: 700;
   color: var(--accent);
+}
+
+.traceability-badge,
+.request-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.traceability-badge.local_capture {
+  border-color: #9BC7A0;
+  background: #EFF8F0;
+  color: #245E2A;
+}
+
+.traceability-badge.legacy_acknowledged_unverifiable,
+.traceability-badge.legacy_void_local {
+  border-color: #E8B476;
+  background: #FFF6EA;
+  color: #8A4A00;
+}
+
+.correction-action {
+  margin-left: 0.3rem;
+  border: 1px solid #96A8BC;
+  background: #F3F6F9;
+  color: var(--accent);
+}
+
+.correction-action:hover {
+  background: #E6EDF4;
 }
 
 /* Pagination */
@@ -198,6 +235,13 @@
   border: 1px solid var(--border);
 }
 
+.custom-modal.correction-modal {
+  width: min(92vw, 760px);
+  max-width: 760px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
 .custom-modal h3 {
   margin-top: 0;
   color: var(--accent);
@@ -210,8 +254,135 @@
   margin-bottom: 1.5rem;
 }
 
+.correction-mode {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.correction-mode button {
+  min-height: 38px;
+  padding: 0.5rem 0.85rem;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: #FFFFFF;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.correction-mode button:last-child {
+  border-right: 0;
+}
+
+.correction-mode button.active {
+  background: var(--accent);
+  color: #FFFFFF;
+}
+
+.correction-fields,
+.correction-audit-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 0.85rem 1rem;
+}
+
+.correction-audit-fields {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.correction-fields label,
+.correction-audit-fields label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--text-label);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.correction-fields input,
+.correction-fields textarea,
+.correction-audit-fields input,
+.correction-audit-fields textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+
+.correction-fields textarea,
+.correction-audit-fields textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.correction-fields input:focus,
+.correction-fields textarea:focus,
+.correction-audit-fields input:focus,
+.correction-audit-fields textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(30, 58, 95, 0.15);
+}
+
+.correction-wide-field {
+  grid-column: 1 / -1;
+}
+
 .custom-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+  margin-top: 1.25rem;
+}
+
+@media (max-width: 640px) {
+  .gestion-container {
+    padding: 0.75rem;
+  }
+
+  .gestion-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .custom-modal-overlay {
+    align-items: flex-start;
+    padding: 1rem 0;
+  }
+
+  .custom-modal.correction-modal {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 2rem);
+    padding: 1rem;
+  }
+
+  .correction-mode {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .correction-fields,
+  .correction-audit-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .correction-wide-field {
+    grid-column: auto;
+  }
 }

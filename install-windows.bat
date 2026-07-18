@@ -34,8 +34,8 @@ call venv\Scripts\activate
 echo Instalando librerias de Python...
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-echo Inicializando Base de Datos...
-python -c "from app import create_app; create_app()"
+echo La base de datos no se abre durante la instalacion.
+echo Usa import-legacy-windows.bat para migrar una estacion existente.
 cd ..
 
 :: 4. Preparar Frontend

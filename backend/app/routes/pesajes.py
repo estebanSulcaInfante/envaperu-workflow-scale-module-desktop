@@ -5,6 +5,11 @@ from flask import Blueprint, request, jsonify, send_file
 from app import db, socketio
 from app.models.pesaje import Pesaje
 from app.services.sticker_service import get_sticker_service
+from app.services.print_attempt_service import execute_print_attempt
+from app.runtime.mutation_guard import (
+    manual_sync_mutation_error,
+    release_legacy_mutation_error,
+)
 from app.utils.logger import get_pesaje_logger
 
 pesajes_bp = Blueprint('pesajes', __name__)
@@ -34,6 +39,12 @@ def listar_pesajes():
 @pesajes_bp.route('', methods=['POST'])
 def crear_pesaje():
     """Crea un nuevo registro de pesaje"""
+    blocked = release_legacy_mutation_error(
+        "LEGACY_CAPTURE_DISABLED",
+        "El perfil release exige captura idempotente por /api/local/v1/pesajes",
+    )
+    if blocked:
+        return blocked
     data = request.get_json()
     log.info(f"POST /pesajes - Datos recibidos: peso_kg={data.get('peso_kg')}, nro_op={data.get('nro_op')}, molde={data.get('molde')}")
     
@@ -122,6 +133,12 @@ def obtener_pesaje(id):
 @pesajes_bp.route('/<int:id>', methods=['PUT'])
 def actualizar_pesaje(id):
     """Actualiza un pesaje existente"""
+    blocked = release_legacy_mutation_error(
+        "DESTRUCTIVE_MUTATION_DISABLED",
+        "El pesaje confirmado es inmutable; registre una solicitud de correccion",
+    )
+    if blocked:
+        return blocked
     pesaje = Pesaje.query.get_or_404(id)
     data = request.get_json()
     
@@ -171,6 +188,12 @@ def actualizar_pesaje(id):
 @pesajes_bp.route('/<int:id>', methods=['DELETE'])
 def eliminar_pesaje(id):
     """Soft delete de un pesaje"""
+    blocked = release_legacy_mutation_error(
+        "DESTRUCTIVE_MUTATION_DISABLED",
+        "El pesaje confirmado no puede eliminarse en release",
+    )
+    if blocked:
+        return blocked
     log.info(f"DELETE /pesajes/{id} (soft)")
     pesaje = Pesaje.query.get_or_404(id)
     pesaje.soft_delete()
@@ -243,6 +266,12 @@ def buscar_pesajes():
 @pesajes_bp.route('/bulk-delete', methods=['POST'])
 def eliminar_pesajes_bulk():
     """Soft delete de múltiples pesajes por IDs."""
+    blocked = release_legacy_mutation_error(
+        "DESTRUCTIVE_MUTATION_DISABLED",
+        "La eliminacion masiva no esta disponible en release",
+    )
+    if blocked:
+        return blocked
     data = request.get_json()
     ids = data.get('ids', [])
     
@@ -268,18 +297,18 @@ def imprimir_sticker(id):
     pesaje = Pesaje.query.get_or_404(id)
     log.debug(f"Pesaje: {pesaje.peso_kg}kg, {pesaje.molde}, {pesaje.nro_op}")
     
-    sticker_service = get_sticker_service()
-    success = sticker_service.print_sticker(pesaje)
-    
-    if success:
-        pesaje.sticker_impreso = True
-        pesaje.fecha_impresion = datetime.now(timezone(timedelta(hours=-5)))
-        db.session.commit()
-        log.info(f"✅ Sticker enviado a impresión para pesaje {id}")
-        return jsonify({'status': 'ok', 'message': 'Sticker enviado a impresión'})
+    outcome = execute_print_attempt(pesaje)
+    socketio.emit('pesajes_updated')
+
+    if outcome.status == 'SAVED_PRINTED':
+        log.info(f"Sticker enviado a impresion para pesaje {id}")
     else:
         log.error(f"Error al imprimir pesaje {id}")
-        return jsonify({'status': 'error', 'message': 'Error al imprimir'}), 500
+    return jsonify({
+        'status': outcome.status,
+        'pesaje': pesaje.to_dict(),
+        'print_attempt': outcome.attempt.to_dict(),
+    })
 
 
 @pesajes_bp.route('/<int:id>/preview-sticker', methods=['GET'])
@@ -306,6 +335,9 @@ def pesajes_sin_sincronizar():
 @pesajes_bp.route('/marcar-sincronizado', methods=['POST'])
 def marcar_sincronizado():
     """Marca pesajes como sincronizados"""
+    blocked = manual_sync_mutation_error()
+    if blocked:
+        return blocked
     data = request.get_json()
     ids = data.get('ids', [])
     

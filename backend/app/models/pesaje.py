@@ -28,6 +28,10 @@ class Pesaje(db.Model):
     
     # Trazabilidad con la OP
     lote_salida_pieza_color_id = db.Column(db.Integer, nullable=True)
+
+    # Identidad idempotente de captura local
+    capture_id = db.Column(db.String(36), nullable=True, unique=True)
+    capture_payload_hash = db.Column(db.String(64), nullable=True)
     
     # Pieza/componente seleccionado (del dropdown)
     pieza_sku = db.Column(db.String(50), nullable=True)
@@ -48,6 +52,48 @@ class Pesaje(db.Model):
     
     # Soft delete
     deleted_at = db.Column(db.DateTime, nullable=True, default=None)
+
+    print_attempts = db.relationship(
+        "PrintAttempt",
+        back_populates="pesaje",
+        lazy="selectin",
+        order_by="PrintAttempt.id",
+    )
+    correction_requests = db.relationship(
+        "PesajeCorrectionRequest",
+        back_populates="pesaje",
+        lazy="selectin",
+        order_by="PesajeCorrectionRequest.id",
+    )
+
+    @property
+    def latest_print_attempt(self):
+        return self.print_attempts[-1] if self.print_attempts else None
+
+    @property
+    def print_status(self):
+        latest = self.latest_print_attempt
+        if latest is None:
+            return "SAVED_PRINTED" if self.sticker_impreso else "SAVED_PRINT_PENDING"
+        if latest.result == "SUCCEEDED":
+            return "SAVED_PRINTED"
+        if latest.result == "FAILED":
+            return "SAVED_PRINT_FAILED"
+        return "SAVED_PRINT_PENDING"
+
+    @property
+    def traceability_classification(self):
+        if self.deleted_at is not None:
+            return "LEGACY_VOID_LOCAL"
+        if self.sincronizado:
+            return "LEGACY_ACKNOWLEDGED_UNVERIFIABLE"
+        if self.capture_id:
+            return "LOCAL_CAPTURE"
+        return "LOCAL_ONLY_LEGACY"
+
+    @property
+    def latest_correction_request(self):
+        return self.correction_requests[-1] if self.correction_requests else None
     
     @classmethod
     def active(cls):
@@ -72,11 +118,26 @@ class Pesaje(db.Model):
             'peso_unitario_teorico': self.peso_unitario_teorico,
             'operador': self.operador,
             'color': self.color,
+            'lote_salida_pieza_color_id': self.lote_salida_pieza_color_id,
+            'capture_id': self.capture_id,
             'pieza_sku': self.pieza_sku,
             'pieza_nombre': self.pieza_nombre,
             'observaciones': self.observaciones,
             'sticker_impreso': self.sticker_impreso,
             'fecha_impresion': self.fecha_impresion.isoformat() if self.fecha_impresion else None,
+            'print_status': self.print_status,
+            'latest_print_attempt': (
+                self.latest_print_attempt.to_dict()
+                if self.latest_print_attempt
+                else None
+            ),
+            'traceability_classification': self.traceability_classification,
+            'correction_request_count': len(self.correction_requests),
+            'latest_correction_request': (
+                self.latest_correction_request.to_dict()
+                if self.latest_correction_request
+                else None
+            ),
             'sincronizado': self.sincronizado,
             'fecha_sincronizacion': self.fecha_sincronizacion.isoformat() if self.fecha_sincronizacion else None,
             'qr_data_original': self.qr_data_original,

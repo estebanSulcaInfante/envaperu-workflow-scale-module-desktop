@@ -1,10 +1,7 @@
 import { io } from 'socket.io-client';
 
-// Conectar al mismo servidor backend
-const SOCKET_URL = 'http://127.0.0.1:5050';
-
-const socket = io(SOCKET_URL, {
-  transports: ['websocket', 'polling'],
+const socket = io({
+  transports: ['polling'],
   autoConnect: true,
   reconnection: true,
   reconnectionDelay: 1000,

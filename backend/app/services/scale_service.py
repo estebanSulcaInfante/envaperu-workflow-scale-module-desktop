@@ -19,6 +19,7 @@ class ScaleService:
         self.serial_connection: Optional[serial.Serial] = None
         self.is_listening = False
         self._listener_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
         
         # Regex para capturar peso del ticket: "1.     2.1"
         self.pattern = re.compile(r"^\s*\d+\.\s+(\d+\.?\d*)")
@@ -43,8 +44,9 @@ class ScaleService:
     
     def disconnect(self):
         """Cierra la conexión con la balanza"""
+        self.is_listening = False
+        self._stop_event.set()
         if self.serial_connection and self.serial_connection.is_open:
-            self.is_listening = False
             self.serial_connection.close()
     
     def read_weight(self) -> Optional[float]:
@@ -79,7 +81,7 @@ class ScaleService:
                     match = re.search(pattern, line)
                     if match:
                         weight = float(match.group(1))
-                        log.info(f"Peso detectado: {weight} kg")
+                        log.debug("Peso detectado: %s kg", weight)
                         return weight
                 
                 log.warning(f"No se pudo parsear: '{line}'")
@@ -95,7 +97,8 @@ class ScaleService:
         """Inicia escucha continua de la balanza en un hilo separado"""
         if self.is_listening:
             return
-        
+
+        self._stop_event.clear()
         self.is_listening = True
         self._listener_thread = threading.Thread(
             target=self._listen_loop,
@@ -104,11 +107,23 @@ class ScaleService:
         )
         self._listener_thread.start()
     
-    def stop_listening(self):
+    def stop_listening(self, timeout=2):
         """Detiene la escucha continua"""
         self.is_listening = False
-        if self._listener_thread:
-            self._listener_thread.join(timeout=2)
+        self._stop_event.set()
+        thread = self._listener_thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        stopped = thread is None or not thread.is_alive()
+        if stopped:
+            self._listener_thread = None
+        return stopped
+
+    def shutdown(self, timeout=5):
+        """Detiene reconexiones, espera el listener y cierra el puerto serial."""
+        stopped = self.stop_listening(timeout=timeout)
+        self.disconnect()
+        return stopped
     
     def _emit_status(self, socketio, connected: bool):
         """Emite estado de conexión vía WebSocket"""
@@ -133,7 +148,8 @@ class ScaleService:
                 weight = self.read_weight()
                 if weight is not None:
                     callback(weight)
-                time.sleep(0.1)
+                if self._stop_event.wait(0.1):
+                    break
             except serial.SerialException:
                 log.warning("⚠️ Balanza desconectada físicamente")
                 self._emit_status(socketio, False)
@@ -149,7 +165,10 @@ class ScaleService:
                 # Auto-reconexión
                 while self.is_listening:
                     log.info("🔄 Intentando reconectar...")
-                    time.sleep(3)
+                    if self._stop_event.wait(3):
+                        break
+                    if not self.is_listening:
+                        break
                     if self.connect():
                         log.info("✅ Balanza reconectada")
                         self._emit_status(socketio, True)
@@ -176,3 +195,9 @@ def get_scale_service() -> ScaleService:
     if _scale_service is None:
         _scale_service = ScaleService()
     return _scale_service
+
+
+def shutdown_scale_service(timeout=5) -> bool:
+    if _scale_service is None:
+        return True
+    return _scale_service.shutdown(timeout=timeout)

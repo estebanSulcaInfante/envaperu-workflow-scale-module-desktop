@@ -1,4 +1,6 @@
 from app.utils.logger import (
+    configure_logging,
+    shutdown_logging,
     setup_logger,
     get_pesaje_logger,
     get_balanza_logger,

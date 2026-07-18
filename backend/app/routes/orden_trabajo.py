@@ -14,7 +14,7 @@ def _get_central_api():
 
 
 
-@rdp_bp.route('/siguiente', methods=['GET'])
+@orden_trabajo_bp.route('/siguiente', methods=['GET'])
 def obtener_siguiente_correlativo():
     """
     Obtiene el siguiente correlativo disponible.
@@ -163,7 +163,7 @@ def forzar_reponer():
         return jsonify({'error': str(e)}), 503
 
 
-@rdp_bp.route('/cache/anular', methods=['POST'])
+@orden_trabajo_bp.route('/cache/anular', methods=['POST'])
 def anular_correlativo():
     """
     Anula un correlativo (hoja destruida/perdida).
@@ -203,17 +203,16 @@ def anular_correlativo():
     
     corr.anular(motivo)
     db.session.commit()
-    orden_trabajo = str(corr.correlativo)
     
     return jsonify({
         'success': True,
-        'correlativo': orden_trabajo,
+        'correlativo': corr.correlativo,
         'motivo': corr.motivo_anulacion,
         'fecha': corr.fecha_anulacion.isoformat()
     })
 
 
-@rdp_bp.route('/cache/anulados', methods=['GET'])
+@orden_trabajo_bp.route('/cache/anulados', methods=['GET'])
 def listar_anulados():
     """Lista todos los correlativos anulados."""
     from app.models.correlativo_cache import CorrelativoCache
@@ -225,7 +224,7 @@ def listar_anulados():
     return jsonify([c.to_dict() for c in anulados])
 
 
-@rdp_bp.route('/reimprimir', methods=['POST'])
+@orden_trabajo_bp.route('/reimprimir', methods=['POST'])
 def reimprimir_rdp():
     """
     Reimprime el sticker de un RDP existente.

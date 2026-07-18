@@ -47,6 +47,8 @@ def normalize_central_origin(origin, *, allow_insecure=False):
 class CentralApiClient:
     CONNECT_TIMEOUT_SECONDS = 3.0
     READ_TIMEOUT_SECONDS = 5.0
+    CAPABILITIES_READ_TIMEOUT_SECONDS = 30.0
+    LEGACY_HISTORY_READ_TIMEOUT_SECONDS = 120.0
 
     def __init__(
         self,
@@ -99,7 +101,19 @@ class CentralApiClient:
             return "CENTRAL_ERROR"
         return "CENTRAL_ERROR"
 
-    def _request(self, method, path, *, operation, payload=None, idempotency_key=None):
+    def _request(
+        self,
+        method,
+        path,
+        *,
+        operation,
+        payload=None,
+        idempotency_key=None,
+        read_timeout=None,
+    ):
+        effective_read_timeout = (
+            self.READ_TIMEOUT_SECONDS if read_timeout is None else read_timeout
+        )
         try:
             response = self.session.request(
                 method,
@@ -108,7 +122,7 @@ class CentralApiClient:
                 json=payload,
                 timeout=(
                     self.CONNECT_TIMEOUT_SECONDS,
-                    self.READ_TIMEOUT_SECONDS,
+                    effective_read_timeout,
                 ),
             )
         except requests.exceptions.SSLError as exc:
@@ -116,7 +130,7 @@ class CentralApiClient:
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
             raise CentralApiError(
                 "CENTRAL_UNREACHABLE",
-                "Central connection failed",
+                f"Central connection failed ({type(exc).__name__})",
             ) from exc
         except requests.exceptions.RequestException as exc:
             raise CentralApiError(
@@ -144,6 +158,7 @@ class CentralApiClient:
             "GET",
             "/api/integration/v1/capabilities",
             operation="capabilities",
+            read_timeout=self.CAPABILITIES_READ_TIMEOUT_SECONDS,
         )
 
     def send_heartbeat(self, station_id, payload):
@@ -180,4 +195,43 @@ class CentralApiClient:
             operation="legacy_history",
             payload=payload,
             idempotency_key=f"{import_id}:{chunk_index}",
+            read_timeout=self.LEGACY_HISTORY_READ_TIMEOUT_SECONDS,
+        )
+
+    def get_history_sync_state(self, station_id):
+        return self._request(
+            "GET",
+            f"/api/integration/v1/stations/{station_id}/legacy-history/sync-state",
+            operation="legacy_history_sync_state",
+        )
+
+    def send_history_delta(self, station_id, payload):
+        return self._request(
+            "PUT",
+            (
+                f"/api/integration/v1/stations/{station_id}/legacy-history/"
+                f"deltas/{payload['batch_id']}"
+            ),
+            operation="legacy_history_delta",
+            payload=payload,
+            idempotency_key=payload["batch_id"],
+            read_timeout=self.LEGACY_HISTORY_READ_TIMEOUT_SECONDS,
+        )
+
+    def get_pilot_commands(self, station_id):
+        return self._request(
+            "GET",
+            f"/api/integration/v1/stations/{station_id}/pilot-commands",
+            operation="pilot_commands",
+        )
+
+    def acknowledge_pilot_command(self, station_id, command_id, payload):
+        return self._request(
+            "POST",
+            (
+                f"/api/integration/v1/stations/{station_id}/"
+                f"pilot-commands/{command_id}/ack"
+            ),
+            operation="pilot_command_ack",
+            payload=payload,
         )

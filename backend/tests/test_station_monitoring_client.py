@@ -47,6 +47,9 @@ class FakeCentralClient:
         self.capability_calls = 0
         self.heartbeats = []
         self.progress_reports = []
+        self.history_deltas = []
+        self.pilot_commands = []
+        self.command_acks = []
         self.error = None
 
     def get_capabilities(self):
@@ -63,6 +66,7 @@ class FakeCentralClient:
                 "weight_event": [
                     "sync-pesajes-legacy-v1",
                     "station-production-progress-v1",
+                    "station-legacy-continuity-v1",
                 ],
             },
             "features": {
@@ -70,6 +74,7 @@ class FakeCentralClient:
                 "catalog_snapshot": False,
                 "legacy_weight_ingest_enabled": False,
                 "remote_hardware_commands": False,
+                "pilot_data_commands": True,
             },
         }
 
@@ -98,6 +103,35 @@ class FakeCentralClient:
             "window_start_date": payload["window_start_date"],
             "window_end_date": payload["window_end_date"],
         }
+
+    def get_history_sync_state(self, station_id):
+        return {
+            "station_id": station_id,
+            "initial_import_id": str(uuid.uuid4()),
+            "high_watermark": 0,
+            "contract_version": "station-legacy-continuity-v1",
+        }
+
+    def send_history_delta(self, station_id, payload):
+        self.history_deltas.append((station_id, payload))
+        return {
+            "accepted": True,
+            "station_id": station_id,
+            "batch_id": payload["batch_id"],
+            "rows_received": len(payload["rows"]),
+            "rows_created": len(payload["rows"]),
+            "high_watermark": max(
+                [row["legacy_id"] for row in payload["rows"]], default=0
+            ),
+            "received_at_utc": "2026-07-17T15:00:00+00:00",
+        }
+
+    def get_pilot_commands(self, _station_id):
+        return {"items": self.pilot_commands}
+
+    def acknowledge_pilot_command(self, station_id, command_id, payload):
+        self.command_acks.append((station_id, command_id, payload))
+        return {"command_id": command_id, "station_id": station_id, **payload}
 
 
 class FakeDpapi:
@@ -154,6 +188,7 @@ def test_contract_copies_match_workspace_canonical():
         "station-heartbeat-v1",
         "station-production-progress-v1",
         "station-legacy-history-v1",
+        "station-legacy-continuity-v1",
     ):
         for filename in ("contract.schema.json", "examples.json"):
             canonical = workspace_root / "contracts" / contract / filename
@@ -230,8 +265,10 @@ def test_central_api_client_uses_one_origin_headers_and_timeouts():
         "https://central.envaperu.test/api/integration/v1/stations/"
         "7f99acdd-63e6-4385-bc16-b904d5d8d5ee/heartbeat",
     )
+    assert capability_call[2]["timeout"] == (3.0, 30.0)
+    assert heartbeat_call[2]["timeout"] == (3.0, 5.0)
+    assert progress_call[2]["timeout"] == (3.0, 5.0)
     for _, _, kwargs in session.calls:
-        assert kwargs["timeout"] == (3.0, 5.0)
         assert kwargs["headers"]["Authorization"] == "Bearer secret-station-token"
         assert uuid.UUID(kwargs["headers"]["X-Correlation-Id"])
     assert (
@@ -307,6 +344,25 @@ def test_central_api_client_classifies_failures(response, operation, expected_st
 
     assert error.value.state == expected_state
     assert "secret-token" not in str(error.value)
+
+
+def test_legacy_history_uses_extended_read_timeout():
+    session = FakeSession([FakeResponse(200, {"status": "RECEIVING"})])
+    client = CentralApiClient(
+        origin="https://central.envaperu.test",
+        token="secret-token",
+        station_version="1.1.0",
+        session=session,
+    )
+
+    client.send_legacy_history_chunk(
+        "7f99acdd-63e6-4385-bc16-b904d5d8d5ee",
+        "e73e0de4-a456-5e87-a073-21ab05b7addc",
+        0,
+        {"rows": []},
+    )
+
+    assert session.calls[0][2]["timeout"] == (3.0, 120.0)
 
 
 def test_station_identity_is_uuid_and_survives_restart(monitoring_app):
@@ -406,6 +462,62 @@ def test_heartbeat_reports_local_legacy_without_secrets(monitoring_app):
         assert runtime.communication_state == "ONLINE"
         assert runtime.sequence == 1
         assert runtime.last_central_ack_utc is not None
+
+
+def test_pilot_void_command_is_applied_locally_and_acknowledged(monitoring_app):
+    with monitoring_app.app_context():
+        capture = Pesaje(
+            peso_kg=25.0,
+            fecha_hora=datetime(2026, 7, 18, 16, 0),
+            capture_id=str(uuid.uuid4()),
+            nro_op="OP-0213",
+            nro_orden_trabajo="025639",
+            molde="EMBUDO N1",
+            maquina="HT-160B",
+            turno="DIA",
+        )
+        db.session.add(capture)
+        db.session.commit()
+        capture_id = capture.id
+
+        fake_client = FakeCentralClient()
+        command_id = str(uuid.uuid4())
+        fake_client.pilot_commands = [
+            {
+                "command_id": command_id,
+                "action": "VOID_CAPTURE",
+                "legacy_pesaje_id": capture_id,
+                "op": "OP-0213",
+                "requested_by": "Jefe de planta",
+                "reason": "Pesaje duplicado",
+            }
+        ]
+        service = MonitoringService(
+            client_factory=lambda _token: fake_client,
+            token_provider=lambda: "test-token",
+            component_provider=_component_provider,
+        )
+
+        result = service.run_once()
+
+        assert result["state"] == "ONLINE"
+        assert db.session.get(Pesaje, capture_id).deleted_at is not None
+        station_id = StationIdentity.query.one().station_id
+        assert fake_client.command_acks == [
+            (
+                station_id,
+                command_id,
+                {
+                    "status": "APPLIED",
+                    "result": {
+                        "deleted_at_local": db.session.get(
+                            Pesaje, capture_id
+                        ).deleted_at.isoformat(sep=" ")
+                    },
+                },
+            )
+        ]
+        assert fake_client.progress_reports[0][1]["rows"] == []
 
 
 def test_central_failure_is_degraded_but_local_capture_remains_ready(monitoring_app):

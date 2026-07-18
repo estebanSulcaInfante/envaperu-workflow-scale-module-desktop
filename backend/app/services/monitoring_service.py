@@ -16,6 +16,10 @@ from app.models.pesaje import Pesaje
 from app.models.station_identity import StationIdentity, StationRuntimeState
 from app.runtime.token_store import read_configured_station_token
 from app.services.central_api_client import CentralApiClient, CentralApiError
+from app.services.legacy_continuity_service import (
+    apply_pilot_command,
+    build_history_delta,
+)
 
 
 def _utc_now():
@@ -233,6 +237,48 @@ class MonitoringService:
                 "CENTRAL_INCOMPATIBLE",
                 "Central no soporta station-production-progress-v1",
             )
+        if (
+            "station-legacy-continuity-v1"
+            not in payload["supported_contracts"]["weight_event"]
+            or payload["features"].get("pilot_data_commands") is not True
+        ):
+            raise CentralApiError(
+                "CENTRAL_INCOMPATIBLE",
+                "Central no soporta continuidad operativa del piloto",
+            )
+
+    @staticmethod
+    def _sync_continuity(client, station_id):
+        state = client.get_history_sync_state(station_id)
+        delta = build_history_delta(station_id, state["high_watermark"])
+        delta_ack = client.send_history_delta(station_id, delta)
+        if (
+            delta_ack.get("accepted") is not True
+            or delta_ack.get("batch_id") != delta["batch_id"]
+        ):
+            raise CentralApiError(
+                "CONTRACT_CONFLICT",
+                "Acuse central no coincide con el delta legacy",
+            )
+
+        commands = client.get_pilot_commands(station_id).get("items", [])
+        for command in commands:
+            try:
+                result = apply_pilot_command(command)
+                ack_payload = {"status": "APPLIED", "result": result}
+            except Exception as exc:
+                db.session.rollback()
+                ack_payload = {
+                    "status": "FAILED",
+                    "error_code": str(exc)[:100] or type(exc).__name__,
+                    "result": {},
+                }
+            client.acknowledge_pilot_command(
+                station_id,
+                command["command_id"],
+                ack_payload,
+            )
+        return delta_ack
 
     def _legacy_snapshot(self, now):
         timezone_name = current_app.config.get("TIMEZONE", "America/Lima")
@@ -548,6 +594,7 @@ class MonitoringService:
                     "CONTRACT_CONFLICT",
                     "Acuse central no coincide con el heartbeat",
                 )
+            self._sync_continuity(client, identity.station_id)
             progress_payload = self._build_production_progress_payload(now)
             _validate_contract(
                 "station-production-progress-v1",

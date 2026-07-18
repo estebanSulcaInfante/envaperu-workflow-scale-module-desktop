@@ -31,11 +31,29 @@ Get-FileHash ".\backend\instance\pesajes.db" -Algorithm SHA256
 ## 2. Actualizar sin abrir la base
 
 ```powershell
-git pull
+git fetch origin
+git switch codex/monitored-offline-pilot
+git pull --ff-only origin codex/monitored-offline-pilot
 .\install-windows.bat
 ```
 
 El instalador nuevo solo prepara dependencias y compila el frontend. No ejecuta `create_app`, `init_db.py` ni otra inicializacion sobre la base legacy.
+
+Antes del primer arranque, crear o actualizar `.env` en la raiz del modulo con la identidad ya registrada en la API central:
+
+```dotenv
+STATION_CODE=PESAJE-PLANTA-01
+STATION_UUID=6e4a5f65-67b7-413d-a780-1c9a2669e50f
+STATION_MODE=MONITORED_LEGACY
+STATION_APP_VERSION=1.1.0-pilot
+CENTRAL_ORIGIN=https://envaperu-scm-api.onrender.com
+ALLOW_INSECURE_CENTRAL=false
+MONITORING_ENABLED=true
+SYNC_ENABLED=false
+TIMEZONE=America/Lima
+```
+
+`STATION_UUID` debe coincidir con la estacion usada para importar el historico. No iniciar el modulo con otro UUID: eso crearia una segunda identidad y separaria los pesajes nuevos de los 11 676 registros importados.
 
 ## 3. Ejecutar la importacion segura
 
@@ -69,6 +87,12 @@ Si el destino ya contiene pesajes, el importador devuelve `STORAGE_ERROR` y no l
 .\import-legacy-windows.bat ".\backend\instance\pesajes.db" --replace-existing
 ```
 
+Provisionar en esta PC el token de esa misma estacion. El valor se introduce de forma oculta y queda cifrado con DPAPI; no se guarda en `.env`:
+
+```powershell
+backend\venv\Scripts\python.exe backend\station_control.py provision-token
+```
+
 ## 4. Smoke test release
 
 ```powershell
@@ -80,9 +104,10 @@ En otra consola:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/live
 Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/ready
+backend\venv\Scripts\python.exe backend\station_control.py identity
 ```
 
-Confirmar `LIVE`, `READY`, historial visible, balanza conectada y una impresion de prueba controlada. No habilitar pesaje productivo hasta cerrar esta validacion.
+Confirmar `LIVE`, `READY`, identidad `6e4a5f65-67b7-413d-a780-1c9a2669e50f`, enlace central `ONLINE`, historial visible, balanza conectada y una impresion de prueba controlada. No habilitar pesaje productivo hasta cerrar esta validacion.
 
 ## 5. Rollback antes de producir
 
@@ -105,4 +130,3 @@ El rollback directo solo es valido antes de capturar produccion en el release. S
 | `2` | Argumento o entorno Python invalido | Corregir ruta/instalacion; no hubo activacion |
 | `6` | Estacion o puerto activo | Detener backend y repetir |
 | `7` | Error de almacenamiento o validacion | No iniciar; revisar detalle JSON y backups |
-

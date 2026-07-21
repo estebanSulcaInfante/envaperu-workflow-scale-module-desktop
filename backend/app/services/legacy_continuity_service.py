@@ -33,6 +33,8 @@ def _row(pesaje):
         "raw": {
             "id": pesaje.id,
             "capture_id": pesaje.capture_id,
+            "peso_bruto_kg": pesaje.peso_bruto_kg,
+            "fraccion_descuento": pesaje.fraccion_descuento,
             "pieza_sku": pesaje.pieza_sku,
             "pieza_nombre": pesaje.pieza_nombre,
             "observaciones": pesaje.observaciones,

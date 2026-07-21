@@ -114,6 +114,8 @@ def test_sqlite_pragmas_and_versioned_schema_are_applied(tmp_path):
         assert "lote_salida_pieza_color_id" in pesaje_columns
         assert "capture_id" in pesaje_columns
         assert "capture_payload_hash" in pesaje_columns
+        assert "peso_bruto_kg" in pesaje_columns
+        assert "fraccion_descuento" in pesaje_columns
         assert print_attempts_exists == 1
         assert correction_requests_exists == 1
         assert station_identity_exists == 1
@@ -175,11 +177,20 @@ def test_legacy_database_is_backed_up_once_and_migrated_without_losing_rows(
             versions = db.session.execute(
                 db.text("SELECT version FROM schema_migrations ORDER BY version")
             ).scalars().all()
+            migrated_weight = db.session.execute(
+                db.text(
+                    "SELECT peso_kg, peso_bruto_kg, fraccion_descuento "
+                    "FROM pesajes WHERE id = 41"
+                )
+            ).one()
 
-        assert tuple(row) == (41, 30.0, "merma molida")
-        assert "lote_salida_pieza_color_id" in columns
-        assert "deleted_at" in columns
-        assert versions == list(range(1, LATEST_SCHEMA_VERSION + 1))
+            assert tuple(row) == (41, 30.0, "merma molida")
+            assert "lote_salida_pieza_color_id" in columns
+            assert "deleted_at" in columns
+            assert "peso_bruto_kg" in columns
+            assert "fraccion_descuento" in columns
+            assert tuple(migrated_weight) == (30.0, 30.0, 0.0)
+            assert versions == list(range(1, LATEST_SCHEMA_VERSION + 1))
     finally:
         _dispose_app(app)
 
@@ -221,7 +232,12 @@ def test_schema_v2_is_backed_up_and_upgraded_through_current_schema(tmp_path):
         v2_columns = [
             row[1]
             for row in connection.execute("PRAGMA table_info(pesajes)").fetchall()
-            if row[1] not in {"capture_id", "capture_payload_hash"}
+            if row[1] not in {
+                "capture_id",
+                "capture_payload_hash",
+                "peso_bruto_kg",
+                "fraccion_descuento",
+            }
         ]
         selected_columns = ", ".join(f'"{column}"' for column in v2_columns)
         connection.execute(
@@ -312,7 +328,7 @@ def test_schema_v4_is_backed_up_before_adding_station_identity(tmp_path):
     with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.execute("DROP TABLE station_runtime_state")
         connection.execute("DROP TABLE station_identity")
-        connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+        connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
     upgraded_app = _create_test_app(database_path, backup_dir, "PESAJE-V4-01")
     try:

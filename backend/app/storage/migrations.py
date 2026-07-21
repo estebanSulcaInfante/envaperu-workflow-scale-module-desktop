@@ -114,6 +114,7 @@ EXPECTED_COLUMNS = {
 }
 EXPECTED_COLUMNS["pesajes"].add("lote_salida_pieza_color_id")
 EXPECTED_COLUMNS["pesajes"].update({"capture_id", "capture_payload_hash"})
+EXPECTED_COLUMNS["pesajes"].update({"peso_bruto_kg", "fraccion_descuento"})
 EXPECTED_COLUMNS["print_attempts"] = {
     "id",
     "pesaje_id",
@@ -307,6 +308,23 @@ def _migration_5_station_monitoring_identity(connection, metadata):
     runtime_state.create(bind=connection, checkfirst=True)
 
 
+def _migration_6_weight_discount_traceability(connection, _metadata):
+    columns = _table_columns(connection, "pesajes")
+    if "peso_bruto_kg" not in columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE pesajes ADD COLUMN peso_bruto_kg FLOAT"
+        )
+    if "fraccion_descuento" not in columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE pesajes ADD COLUMN "
+            "fraccion_descuento FLOAT NOT NULL DEFAULT 0"
+        )
+    connection.exec_driver_sql(
+        "UPDATE pesajes SET peso_bruto_kg = peso_kg "
+        "WHERE peso_bruto_kg IS NULL"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "legacy_baseline", _migration_1_legacy_baseline),
     Migration(2, "lote_salida_pieza_color_traceability", _migration_2_lote_salida_traceability),
@@ -324,6 +342,11 @@ MIGRATIONS = (
         5,
         "station_monitoring_identity",
         _migration_5_station_monitoring_identity,
+    ),
+    Migration(
+        6,
+        "weight_discount_traceability",
+        _migration_6_weight_discount_traceability,
     ),
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

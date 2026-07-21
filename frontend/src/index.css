@@ -295,6 +295,13 @@ body {
   border-color: var(--warning);
 }
 
+.field-hint {
+  margin-top: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
 /* Weight Display */
 .weight-display-container {
   margin-top: 1rem;
@@ -305,6 +312,65 @@ body {
   border-radius: var(--radius);
   padding: 1.5rem;
   text-align: center;
+}
+
+.weight-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.weight-adjustment-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success);
+  border-radius: 4px;
+  background: var(--bg-secondary, #F5F7FA);
+}
+
+.weight-adjustment-summary > span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.weight-adjustment-summary > strong {
+  color: var(--text-primary);
+  font-size: 1.35rem;
+}
+
+.weight-adjustment-summary > small {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+}
+
+.weight-adjustment-summary.active {
+  border-left-color: var(--warning);
+  background: #FFF8E8;
+}
+
+.weight-adjustment-summary.invalid {
+  border-left-color: var(--danger, #C62828);
+  background: #FFF1F1;
+}
+
+@media (max-width: 520px) {
+  .weight-adjustment-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .weight-adjustment-summary > small {
+    grid-column: auto;
+  }
 }
 
 .weight-value {
@@ -584,6 +650,45 @@ body {
 }
 
 @media (max-width: 560px) {
+  .main-content {
+    gap: 0.75rem;
+    padding: 0.5rem;
+  }
+
+  .panel,
+  .panel-body,
+  .qr-section,
+  .qr-input-group,
+  .form-group {
+    min-width: 0;
+  }
+
+  .panel-body {
+    padding: 0.75rem;
+  }
+
+  .form-grid,
+  .form-grid.triple {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form-group.full-width {
+    grid-column: auto;
+  }
+
+  .weight-display {
+    overflow: hidden;
+    padding: 1rem 0.5rem;
+  }
+
+  .weight-value {
+    font-size: 2.75rem;
+  }
+
+  .weight-unit {
+    font-size: 1.1rem;
+  }
+
   .header {
     align-items: stretch;
     flex-direction: column;

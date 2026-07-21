@@ -114,6 +114,42 @@ def test_same_capture_id_with_different_payload_returns_conflict(client, capture
         assert Pesaje.query.count() == 1
 
 
+def test_capture_persists_gross_weight_discount_fraction_and_attributable_weight(
+    client,
+    capture_app,
+):
+    response = post_capture(
+        client,
+        str(uuid.uuid4()),
+        capture_payload(
+            peso_kg=27.0,
+            peso_bruto_kg=30.0,
+            fraccion_descuento=0.1,
+        ),
+    )
+
+    assert response.status_code == 201
+    pesaje_data = response.get_json()["pesaje"]
+    assert pesaje_data["peso_kg"] == 27.0
+    assert pesaje_data["peso_bruto_kg"] == 30.0
+    assert pesaje_data["fraccion_descuento"] == 0.1
+
+    with capture_app[0].app_context():
+        pesaje = Pesaje.query.one()
+        assert pesaje.peso_kg == 27.0
+        assert pesaje.peso_bruto_kg == 30.0
+        assert pesaje.fraccion_descuento == 0.1
+
+
+def test_legacy_capture_defaults_to_no_discount(client):
+    response = post_capture(client, str(uuid.uuid4()))
+
+    assert response.status_code == 201
+    pesaje_data = response.get_json()["pesaje"]
+    assert pesaje_data["peso_bruto_kg"] == 30.125
+    assert pesaje_data["fraccion_descuento"] == 0.0
+
+
 @pytest.mark.parametrize(
     ("payload", "expected_code"),
     [
@@ -122,6 +158,30 @@ def test_same_capture_id_with_different_payload_returns_conflict(client, capture
         (capture_payload(nro_op=""), "OP_REQUIRED"),
         (capture_payload(fecha_orden_trabajo="17/07/2026"), "INVALID_DATE"),
         (capture_payload(molde="M" * 101), "STRING_TOO_LONG"),
+        (
+            capture_payload(
+                peso_kg=27.0,
+                peso_bruto_kg=30.0,
+                fraccion_descuento=-0.1,
+            ),
+            "INVALID_DISCOUNT_FRACTION",
+        ),
+        (
+            capture_payload(
+                peso_kg=27.0,
+                peso_bruto_kg=30.0,
+                fraccion_descuento=1,
+            ),
+            "INVALID_DISCOUNT_FRACTION",
+        ),
+        (
+            capture_payload(
+                peso_kg=27.1,
+                peso_bruto_kg=30.0,
+                fraccion_descuento=0.1,
+            ),
+            "WEIGHT_ADJUSTMENT_MISMATCH",
+        ),
     ],
 )
 def test_capture_validates_operational_payload(client, payload, expected_code):

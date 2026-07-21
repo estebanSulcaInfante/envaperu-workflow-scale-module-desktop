@@ -3,7 +3,7 @@ import json
 import math
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from sqlalchemy.exc import IntegrityError
 
@@ -72,6 +72,54 @@ def normalize_capture_payload(payload, max_weight_kg):
             "WEIGHT_LIMIT_EXCEEDED",
             f"peso_kg excede el maximo tecnico de {max_weight_kg}",
         )
+
+    has_adjustment = (
+        "peso_bruto_kg" in payload or "fraccion_descuento" in payload
+    )
+    if has_adjustment:
+        gross_weight = _decimal_value(
+            payload.get("peso_bruto_kg"),
+            "INVALID_GROSS_WEIGHT",
+            "peso_bruto_kg",
+        )
+        if gross_weight <= 0:
+            raise CaptureValidationError(
+                "INVALID_GROSS_WEIGHT",
+                "peso_bruto_kg debe ser mayor que cero",
+            )
+        if gross_weight > Decimal(str(max_weight_kg)):
+            raise CaptureValidationError(
+                "WEIGHT_LIMIT_EXCEEDED",
+                f"peso_bruto_kg excede el maximo tecnico de {max_weight_kg}",
+            )
+
+        discount_fraction = _decimal_value(
+            payload.get("fraccion_descuento", 0),
+            "INVALID_DISCOUNT_FRACTION",
+            "fraccion_descuento",
+        )
+        if discount_fraction < 0 or discount_fraction >= 1:
+            raise CaptureValidationError(
+                "INVALID_DISCOUNT_FRACTION",
+                "fraccion_descuento debe estar entre 0 y menos de 1",
+            )
+
+        expected_weight = (
+            gross_weight * (Decimal("1") - discount_fraction)
+        ).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        submitted_weight = weight.quantize(
+            Decimal("0.001"),
+            rounding=ROUND_HALF_UP,
+        )
+        if submitted_weight != expected_weight:
+            raise CaptureValidationError(
+                "WEIGHT_ADJUSTMENT_MISMATCH",
+                "peso_kg no coincide con peso_bruto_kg y fraccion_descuento",
+            )
+        weight = expected_weight
+    else:
+        gross_weight = weight
+        discount_fraction = Decimal("0")
 
     strings = {}
     for field, limit in STRING_LIMITS.items():
@@ -149,6 +197,8 @@ def normalize_capture_payload(payload, max_weight_kg):
 
     canonical = {
         "peso_kg": _canonical_decimal(weight),
+        "peso_bruto_kg": _canonical_decimal(gross_weight),
+        "fraccion_descuento": _canonical_decimal(discount_fraction),
         "fecha_orden_trabajo": fecha_ot.isoformat() if fecha_ot else None,
         "peso_unitario_teorico": canonical_unit_weight,
         "lote_salida_pieza_color_id": lote_salida_id,
@@ -165,6 +215,8 @@ def normalize_capture_payload(payload, max_weight_kg):
 
     attributes = {
         "peso_kg": float(weight),
+        "peso_bruto_kg": float(gross_weight),
+        "fraccion_descuento": float(discount_fraction),
         "fecha_orden_trabajo": fecha_ot,
         "peso_unitario_teorico": (
             float(unit_weight) if unit_weight is not None else None

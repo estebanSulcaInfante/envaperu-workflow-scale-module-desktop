@@ -51,6 +51,8 @@ SUPPORTED_CHANGES = set(STRING_CHANGE_LIMITS) | {
 SNAPSHOT_FIELDS = (
     "id",
     "peso_kg",
+    "peso_bruto_kg",
+    "fraccion_descuento",
     "fecha_hora",
     "molde",
     "maquina",

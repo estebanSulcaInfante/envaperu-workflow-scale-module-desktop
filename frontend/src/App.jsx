@@ -9,6 +9,7 @@ import GestionPesajes from './components/GestionPesajes';
 import GenerarOrdenTrabajo from './components/GenerarOrdenTrabajo';
 import CerrarOps from './components/CerrarOps';
 import CentralStatusBadge from './components/CentralStatusBadge';
+import { calculateWeightAdjustment } from './utils/weightAdjustment';
 
 function App() {
   // Connection state
@@ -32,7 +33,8 @@ function App() {
     color: '',
     pieza_sku: '',
     pieza_nombre: '',
-    peso_unitario_teorico: ''
+    peso_unitario_teorico: '',
+    descuento_porcentaje: '0'
   });
   
   // Piezas disponibles para el molde actual (del cache)
@@ -56,6 +58,10 @@ function App() {
   if (!captureCoordinatorRef.current) {
     captureCoordinatorRef.current = createCaptureCoordinator();
   }
+  const weightAdjustment = calculateWeightAdjustment(
+    peso,
+    formData.descuento_porcentaje,
+  );
 
   // Load status and pesajes on mount
   useEffect(() => {
@@ -187,7 +193,8 @@ function App() {
           nro_orden_trabajo: data.data.nro_orden_trabajo || '',
           peso_unitario_teorico: data.data.peso_unitario_teorico || '',
           pieza_sku: '',
-          pieza_nombre: ''
+          pieza_nombre: '',
+          descuento_porcentaje: '0'
         }));
         
         // Buscar piezas cacheadas para este molde
@@ -240,7 +247,15 @@ function App() {
       showToast('⏳ Espera unos segundos...', 'error');
       return;
     }
-    if (peso < 1.0) {
+    const adjustment = calculateWeightAdjustment(
+      peso,
+      formData.descuento_porcentaje,
+    );
+    if (!adjustment.valid) {
+      showToast('El descuento debe estar entre 0% y menos de 100%', 'error');
+      return;
+    }
+    if (adjustment.attributableWeightKg < 1.0) {
       showToast('⚠️ Peso inválido (mínimo 1 kg)', 'error');
       return;
     }
@@ -254,9 +269,13 @@ function App() {
     setCooldown(true);
     setTimeout(() => setCooldown(false), 3000);
 
+    const captureFormData = { ...formData };
+    delete captureFormData.descuento_porcentaje;
     const session = captureCoordinatorRef.current.begin({
-      peso_kg: peso,
-      ...formData,
+      ...captureFormData,
+      peso_kg: adjustment.attributableWeightKg,
+      peso_bruto_kg: adjustment.grossWeightKg,
+      fraccion_descuento: adjustment.discountFraction,
       qr_data_original: qrInput
     });
 
@@ -372,7 +391,10 @@ function App() {
       nro_orden_trabajo: '',
       peso_unitario_teorico: '',
       operador: '',
-      color: ''
+      color: '',
+      pieza_sku: '',
+      pieza_nombre: '',
+      descuento_porcentaje: '0'
     });
     setStickerPreview(null);
   };
@@ -724,6 +746,26 @@ function App() {
                     <option value="VERDE" />
                   </datalist>
                 </div>
+
+                <div className="form-group">
+                  <label htmlFor="descuento-porcentaje">Descuento ajeno a la pieza (%)</label>
+                  <input
+                    id="descuento-porcentaje"
+                    type="number"
+                    name="descuento_porcentaje"
+                    value={formData.descuento_porcentaje}
+                    onChange={handleInputChange}
+                    min="0"
+                    max="99.999"
+                    step="0.1"
+                    inputMode="decimal"
+                    aria-describedby="descuento-porcentaje-ayuda"
+                    aria-invalid={!weightAdjustment.valid}
+                  />
+                  <small id="descuento-porcentaje-ayuda" className="field-hint">
+                    Ejemplo: 10 descuenta el 10% del peso mostrado por la balanza.
+                  </small>
+                </div>
                 
                 {/* Selector de Pieza/Componente */}
                 {piezasDisponibles.length > 0 && (
@@ -758,6 +800,7 @@ function App() {
               {/* Weight Display */}
               <div className="weight-display-container">
                 <div className="weight-display">
+                  <span className="weight-label">Peso de balanza</span>
                   <span className="weight-value">{peso.toFixed(3)}</span>
                   <span className="weight-unit">kg</span>
                   <div className="weight-status">
@@ -771,10 +814,27 @@ function App() {
                     }
                   </div>
                 </div>
-                {activeTab === 'pesar' && listening && !cooldown && !captureInFlight && peso >= 1.0 && formData.nro_op && (
+                <div
+                  className={`weight-adjustment-summary ${weightAdjustment.discountPercentage > 0 ? 'active' : ''} ${!weightAdjustment.valid ? 'invalid' : ''}`}
+                  role="status"
+                >
+                  <span>Peso atribuible a la pieza</span>
+                  <strong>
+                    {weightAdjustment.valid
+                      ? `${weightAdjustment.attributableWeightKg.toFixed(3)} kg`
+                      : 'Descuento inválido'}
+                  </strong>
+                  <small>
+                    {weightAdjustment.valid && weightAdjustment.discountPercentage > 0
+                      ? `Se descuentan ${weightAdjustment.discountedWeightKg.toFixed(3)} kg (${weightAdjustment.discountPercentage}%).`
+                      : 'Sin descuento aplicado.'}
+                  </small>
+                </div>
+                {activeTab === 'pesar' && listening && !cooldown && !captureInFlight && weightAdjustment.valid && weightAdjustment.attributableWeightKg >= 1.0 && formData.nro_op && (
                   <button
                     className="btn btn-primary"
                     onClick={handleAceptarPeso}
+                    aria-label={`Aceptar ${weightAdjustment.attributableWeightKg.toFixed(3)} kg`}
                     style={{ marginTop: '12px', fontSize: '1.1rem', padding: '12px 32px' }}
                   >
                     ⏎ Aceptar Peso (F2)

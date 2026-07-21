@@ -11,6 +11,13 @@ class Pesaje(db.Model):
     
     # Datos del pesaje
     peso_kg = db.Column(db.Float, nullable=False)
+    peso_bruto_kg = db.Column(db.Float, nullable=True)
+    fraccion_descuento = db.Column(
+        db.Float,
+        nullable=False,
+        default=0.0,
+        server_default="0",
+    )
     fecha_hora = db.Column(db.DateTime, default=lambda: datetime.now(timezone(timedelta(hours=-5))), nullable=False)
     
     # Datos de la Orden de Producción (del QR escaneado)
@@ -108,6 +115,8 @@ class Pesaje(db.Model):
         return {
             'id': self.id,
             'peso_kg': self.peso_kg,
+            'peso_bruto_kg': self.peso_bruto_kg,
+            'fraccion_descuento': self.fraccion_descuento,
             'fecha_hora': self.fecha_hora.isoformat() if self.fecha_hora else None,
             'molde': self.molde,
             'maquina': self.maquina,

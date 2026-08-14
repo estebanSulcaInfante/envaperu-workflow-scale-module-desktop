@@ -275,3 +275,44 @@ def test_correction_history_is_listed_without_mutating_original(
         "VOID",
     ]
     assert response.get_json()["pesaje"]["peso_kg"] == 30.125
+
+
+def test_delete_is_blocked_outside_release_profile(client, traceability_app):
+    pesaje_id = traceability_app.config["TEST_LOCAL_ID"]
+    traceability_app.config["RUNTIME_PROFILE"] = "DEVELOPMENT"
+
+    single = client.delete(f"/api/pesajes/{pesaje_id}")
+    bulk = client.post("/api/pesajes/bulk-delete", json={"ids": [pesaje_id]})
+
+    assert single.status_code == 403
+    assert bulk.status_code == 403
+    assert single.get_json()["code"] == "DESTRUCTIVE_MUTATION_DISABLED"
+    assert bulk.get_json()["code"] == "DESTRUCTIVE_MUTATION_DISABLED"
+    with traceability_app.app_context():
+        assert db.session.get(Pesaje, pesaje_id).deleted_at is None
+
+
+def test_excel_labels_deleted_rows_as_borrado_anulado(client):
+    import io
+
+    import openpyxl
+
+    response = client.get("/api/pesajes/exportar")
+    assert response.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(response.data))
+    sheet = workbook["Pesajes"]
+    headers = [cell.value for cell in sheet[1]]
+    state_column = headers.index("Estado efectivo") + 1
+    states = {
+        sheet.cell(row=row, column=state_column).value
+        for row in range(2, sheet.max_row + 1)
+    }
+    assert "BORRADO / ANULADO" in states
+
+    summary = workbook["Conciliacion"]
+    summary_states = {
+        summary.cell(row=row, column=1).value
+        for row in range(2, summary.max_row + 1)
+    }
+    assert "BORRADO / ANULADO" in summary_states
+    assert "ANULADO" not in summary_states

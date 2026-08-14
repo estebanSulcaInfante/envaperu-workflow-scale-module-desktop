@@ -91,6 +91,9 @@ export const balanzaApi = {
   
   ultimoPeso: () => 
     api.get('/balanza/ultimo-peso'),
+
+  simularPeso: (pesoKg) =>
+    api.post('/balanza/simular-peso', { peso_kg: pesoKg }),
   
   pesosPendientes: () => 
     api.get('/balanza/pesos-pendientes')
@@ -100,6 +103,28 @@ export const balanzaApi = {
 export const healthApi = {
   ready: () =>
     api.get('/local/v1/health/ready')
+};
+
+export const scmPrelabelsApi = {
+  pending: ({ status = 'PENDING', limit = 20 } = {}) =>
+    api.get('/local/v1/scm/print-jobs', { params: { status, limit } }),
+  preview: (printJobId) =>
+    api.get(`/local/v1/scm/print-jobs/${encodeURIComponent(printJobId)}`),
+  print: (printJobId) =>
+    api.post(`/local/v1/scm/print-jobs/${encodeURIComponent(printJobId)}/print`),
+};
+
+export const scmWeighingApi = {
+  resolve: (qr) =>
+    api.post('/local/v1/scm/weighing/resolve', { qr }),
+  confirm: (labelId, operationId, motivoDesfase = null) =>
+    api.post(
+      '/local/v1/scm/weighing/confirm',
+      { label_id: labelId, motivo_desfase: motivoDesfase },
+      { headers: { 'Idempotency-Key': operationId } },
+    ),
+  recover: (operationId) =>
+    api.get(`/local/v1/scm/weighing/operations/${encodeURIComponent(operationId)}`),
 };
 
 // ===== Sync (catálogo moldes) =====

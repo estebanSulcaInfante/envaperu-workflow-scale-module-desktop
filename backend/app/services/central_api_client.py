@@ -1,6 +1,6 @@
 import ipaddress
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import requests
 
@@ -177,6 +177,75 @@ class CentralApiClient:
             operation="production_progress",
             payload=payload,
             idempotency_key=payload["report_id"],
+        )
+
+    def get_scm_print_job(self, station_id, print_job_id):
+        return self._request(
+            "GET",
+            (
+                f"/api/integration/v1/stations/{station_id}/"
+                f"print-jobs/{print_job_id}"
+            ),
+            operation="scm_prelabel_print_job",
+        )
+
+    def list_scm_print_jobs(self, station_id, *, status="PENDING", limit=20):
+        query = urlencode({"status": status, "limit": limit})
+        return self._request(
+            "GET",
+            (
+                f"/api/integration/v1/stations/{station_id}/"
+                f"print-jobs?{query}"
+            ),
+            operation="scm_prelabel_print_jobs",
+        )
+
+    def claim_scm_print_job(self, station_id, print_job_id):
+        return self._request(
+            "POST",
+            (
+                f"/api/integration/v1/stations/{station_id}/"
+                f"print-jobs/{print_job_id}/claim"
+            ),
+            operation="scm_prelabel_print_job_claim",
+            idempotency_key=print_job_id,
+        )
+
+    def resolve_scm_manga_label(self, label_id):
+        return self._request(
+            "GET",
+            f"/api/integration/v1/manga-labels/{label_id}/resolve",
+            operation="scm_manga_label_resolve",
+        )
+
+    def confirm_scm_manga_weighing(self, operation_id, payload):
+        return self._request(
+            "POST",
+            "/api/integration/v1/manga-weighings",
+            operation="scm_manga_weighing",
+            payload=payload,
+            idempotency_key=operation_id,
+        )
+
+    def get_scm_operation(self, operation_id):
+        return self._request(
+            "GET",
+            f"/api/integration/v1/operations/{operation_id}",
+            operation="scm_operation_recovery",
+        )
+
+    def acknowledge_scm_print_job(
+        self, station_id, print_job_id, payload
+    ):
+        return self._request(
+            "PUT",
+            (
+                f"/api/integration/v1/stations/{station_id}/"
+                f"print-jobs/{print_job_id}/result"
+            ),
+            operation="scm_prelabel_print_result",
+            payload=payload,
+            idempotency_key=print_job_id,
         )
 
     def send_legacy_history_chunk(

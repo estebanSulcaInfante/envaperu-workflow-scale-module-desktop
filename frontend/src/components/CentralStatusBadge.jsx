@@ -1,4 +1,5 @@
 const STATUS_COPY = {
+  PORTFOLIO_DEMO: 'Demo aislada',
   ONLINE: 'Central en línea',
   CENTRAL_NOT_PROVISIONED: 'Central sin provisionar',
   CENTRAL_UNREACHABLE: 'Central sin conexión',
@@ -12,7 +13,7 @@ const STATUS_COPY = {
 };
 
 function badgeClass(state) {
-  if (state === 'ONLINE') return 'central-online';
+  if (['ONLINE', 'PORTFOLIO_DEMO'].includes(state)) return 'central-online';
   if (state === 'CENTRAL_NOT_PROVISIONED') return 'central-not-provisioned';
   return 'central-degraded';
 }

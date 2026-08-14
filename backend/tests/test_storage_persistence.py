@@ -103,6 +103,13 @@ def test_sqlite_pragmas_and_versioned_schema_are_applied(tmp_path):
                     "WHERE type = 'table' AND name = 'station_runtime_state'"
                 )
             ).scalar_one()
+            scm_prelabel_attempt_exists = db.session.execute(
+                db.text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' "
+                    "AND name = 'scm_label_print_attempt'"
+                )
+            ).scalar_one()
 
         assert pragmas == {
             "foreign_keys": 1,
@@ -120,6 +127,7 @@ def test_sqlite_pragmas_and_versioned_schema_are_applied(tmp_path):
         assert correction_requests_exists == 1
         assert station_identity_exists == 1
         assert runtime_state_exists == 1
+        assert scm_prelabel_attempt_exists == 1
         assert app.config["SCHEMA_VERSION"] == LATEST_SCHEMA_VERSION
         assert list((tmp_path / "backups").glob("*.db")) == []
     finally:

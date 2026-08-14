@@ -158,6 +158,22 @@ EXPECTED_COLUMNS["station_runtime_state"] = {
     "last_error_code",
     "next_heartbeat_seconds",
 }
+EXPECTED_COLUMNS["scm_label_print_attempt"] = {
+    "id",
+    "print_job_id",
+    "label_id",
+    "label_type",
+    "operation_id",
+    "capture_id",
+    "manga_id",
+    "payload_hash",
+    "rendered_payload_hash",
+    "attempted_at_utc",
+    "completed_at_utc",
+    "printer_name",
+    "result",
+    "error_detail",
+}
 
 
 def _quote_identifier(identifier):
@@ -325,6 +341,95 @@ def _migration_6_weight_discount_traceability(connection, _metadata):
     )
 
 
+def _migration_7_scm_prelabel_print_evidence(connection, metadata):
+    table = metadata.tables.get("scm_label_print_attempt")
+    if table is None:
+        raise SchemaIncompatibleError(
+            "ScmLabelPrintAttempt metadata is not registered"
+        )
+    table.create(bind=connection, checkfirst=True)
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_scm_label_print_attempt_print_job_id "
+        "ON scm_label_print_attempt (print_job_id)"
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_scm_label_print_attempt_label_id "
+        "ON scm_label_print_attempt (label_id)"
+    )
+
+
+def _migration_8_repeatable_prelabel_print_attempts(connection, metadata):
+    """Replace the v7 uniqueness rule while preserving every prior attempt."""
+    table = metadata.tables.get("scm_label_print_attempt")
+    if table is None:
+        raise SchemaIncompatibleError(
+            "ScmLabelPrintAttempt metadata is not registered"
+        )
+    connection.exec_driver_sql(
+        "DROP INDEX IF EXISTS ix_scm_label_print_attempt_print_job_id"
+    )
+    connection.exec_driver_sql(
+        "DROP INDEX IF EXISTS ix_scm_label_print_attempt_label_id"
+    )
+    connection.exec_driver_sql(
+        "DROP INDEX IF EXISTS ix_scm_label_print_attempt_operation_id"
+    )
+    connection.exec_driver_sql(
+        "DROP INDEX IF EXISTS ix_scm_label_print_attempt_manga_id"
+    )
+    connection.exec_driver_sql(
+        "ALTER TABLE scm_label_print_attempt "
+        "RENAME TO scm_label_print_attempt_v7"
+    )
+    table.create(bind=connection, checkfirst=True)
+    columns = (
+        "id, print_job_id, label_id, payload_hash, attempted_at_utc, "
+        "completed_at_utc, printer_name, result, error_detail"
+    )
+    connection.exec_driver_sql(
+        f"INSERT INTO scm_label_print_attempt ({columns}) "
+        f"SELECT {columns} FROM scm_label_print_attempt_v7"
+    )
+    connection.exec_driver_sql("DROP TABLE scm_label_print_attempt_v7")
+
+
+def _migration_9_prelabel_render_hash(connection, _metadata):
+    columns = _table_columns(connection, "scm_label_print_attempt")
+    if "rendered_payload_hash" not in columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE scm_label_print_attempt "
+            "ADD COLUMN rendered_payload_hash VARCHAR(64)"
+        )
+
+
+def _migration_10_scm_print_business_context(connection, _metadata):
+    columns = _table_columns(connection, "scm_label_print_attempt")
+    additions = {
+        "label_type": "VARCHAR(20)",
+        "operation_id": "VARCHAR(36)",
+        "capture_id": "VARCHAR(36)",
+        "manga_id": "VARCHAR(36)",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE scm_label_print_attempt "
+                f"ADD COLUMN {name} {definition}"
+            )
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_scm_label_print_attempt_operation_id "
+        "ON scm_label_print_attempt (operation_id)"
+    )
+    connection.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS "
+        "ix_scm_label_print_attempt_manga_id "
+        "ON scm_label_print_attempt (manga_id)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "legacy_baseline", _migration_1_legacy_baseline),
     Migration(2, "lote_salida_pieza_color_traceability", _migration_2_lote_salida_traceability),
@@ -347,6 +452,26 @@ MIGRATIONS = (
         6,
         "weight_discount_traceability",
         _migration_6_weight_discount_traceability,
+    ),
+    Migration(
+        7,
+        "scm_prelabel_print_evidence",
+        _migration_7_scm_prelabel_print_evidence,
+    ),
+    Migration(
+        8,
+        "repeatable_prelabel_print_attempts",
+        _migration_8_repeatable_prelabel_print_attempts,
+    ),
+    Migration(
+        9,
+        "prelabel_render_hash",
+        _migration_9_prelabel_render_hash,
+    ),
+    Migration(
+        10,
+        "scm_print_business_context",
+        _migration_10_scm_print_business_context,
     ),
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

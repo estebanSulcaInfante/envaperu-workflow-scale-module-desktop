@@ -24,16 +24,30 @@ class Config:
     STATION_UUID = os.getenv('STATION_UUID')
     STATION_MODE = os.getenv('STATION_MODE', 'MONITORED_LEGACY')
     STATION_APP_VERSION = os.getenv('STATION_APP_VERSION', '1.1.0-pilot')
+    SCM_OPERATOR_ID = os.getenv('SCM_OPERATOR_ID')
     TIMEZONE = os.getenv('TIMEZONE', 'America/Lima')
     
     # Scale (Balanza)
     SCALE_PORT = os.getenv('SCALE_PORT', 'COM4')
     SCALE_BAUD_RATE = int(os.getenv('SCALE_BAUD_RATE', '9600'))
+    ALLOW_SCALE_SIMULATION = os.getenv(
+        'ALLOW_SCALE_SIMULATION',
+        str(DEBUG),
+    ).lower() == 'true'
+    ALLOW_LOCAL_SCM_DEMO = os.getenv(
+        'ALLOW_LOCAL_SCM_DEMO',
+        'false',
+    ).lower() == 'true'
+    PORTFOLIO_DEMO_MODE = os.getenv(
+        'PORTFOLIO_DEMO_MODE',
+        'false',
+    ).lower() == 'true'
     
     # Printer (Impresora)
     PRINTER_PORT = os.getenv('PRINTER_PORT', 'COM3')
     PRINTER_TYPE = os.getenv('PRINTER_TYPE', 'TSPL')  # TSPL, ESC_POS, ZPL
     PRINTER_NAME = os.getenv('PRINTER_NAME', None)  # Nombre Windows (ej: "TSC TE200")
+    SIMULATE_PRINTER = os.getenv('SIMULATE_PRINTER', 'false').lower() == 'true'
     
     # API Backend Port
     API_PORT = int(os.getenv('API_PORT', '5050'))

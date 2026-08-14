@@ -100,4 +100,11 @@ def ready():
             "last_error_code": None,
         }
     )
+    if current_app.config.get("PORTFOLIO_DEMO_MODE"):
+        central = {
+            "state": "PORTFOLIO_DEMO",
+            "last_central_ack_utc": None,
+            "last_error_code": None,
+            "isolated": True,
+        }
     return jsonify({"status": "READY", "issues": [], "central": central})

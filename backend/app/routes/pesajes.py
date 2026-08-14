@@ -187,6 +187,11 @@ def actualizar_pesaje(id):
 
 @pesajes_bp.route('/<int:id>', methods=['DELETE'])
 def eliminar_pesaje(id):
+    return jsonify({
+        "code": "DESTRUCTIVE_MUTATION_DISABLED",
+        "error": "El pesaje confirmado no puede eliminarse; use la anulacion controlada",
+    }), 403
+
     """Soft delete de un pesaje"""
     blocked = release_legacy_mutation_error(
         "DESTRUCTIVE_MUTATION_DISABLED",
@@ -265,6 +270,11 @@ def buscar_pesajes():
 
 @pesajes_bp.route('/bulk-delete', methods=['POST'])
 def eliminar_pesajes_bulk():
+    return jsonify({
+        "code": "DESTRUCTIVE_MUTATION_DISABLED",
+        "error": "La eliminacion masiva no esta permitida; use la anulacion controlada",
+    }), 403
+
     """Soft delete de múltiples pesajes por IDs."""
     blocked = release_legacy_mutation_error(
         "DESTRUCTIVE_MUTATION_DISABLED",
@@ -359,7 +369,9 @@ def exportar_pesajes():
     fecha_inicio_str = request.args.get('fecha_inicio')
     fecha_fin_str = request.args.get('fecha_fin')
     
-    query = Pesaje.active()
+    # La conciliacion fisica nunca oculta anulados: una etiqueta impresa puede
+    # seguir circulando aunque el registro ya no sea vigente.
+    query = Pesaje.query
     
     # Validar y aplicar filtros de fecha
     try:
@@ -388,7 +400,9 @@ def exportar_pesajes():
     columnas = [
         "ID", "Fecha/Hora", "Peso (kg)", "Peso Unit. (g)", "Nro OP", "Turno", "Fecha OT", "Nro OT",
         "Máquina", "Molde", "Color", "Operador", "Pieza SKU", "Pieza Nombre",
-        "Observaciones", "Sincronizado"
+        "Observaciones", "Sincronizado", "Estado efectivo", "Fecha anulacion",
+        "Accion correccion", "Estado correccion", "Motivo correccion",
+        "Solicitado por"
     ]
     ws.append(columnas)
     
@@ -413,9 +427,35 @@ def exportar_pesajes():
             p.pieza_sku,
             p.pieza_nombre,
             p.observaciones,
-            "Sí" if p.sincronizado else "No"
+            "Sí" if p.sincronizado else "No",
+            "BORRADO / ANULADO" if p.deleted_at else (
+                "CORRECCION_SOLICITADA"
+                if p.latest_correction_request
+                else "VIGENTE"
+            ),
+            p.deleted_at.isoformat() if p.deleted_at else "",
+            p.latest_correction_request.action if p.latest_correction_request else "",
+            p.latest_correction_request.status if p.latest_correction_request else "",
+            p.latest_correction_request.reason if p.latest_correction_request else "",
+            p.latest_correction_request.requested_by if p.latest_correction_request else "",
         ]
         ws.append(fila)
+
+    summary = wb.create_sheet("Conciliacion")
+    summary.append(["Estado", "Cantidad etiquetas", "Peso kg"])
+    groups = {"VIGENTE": [0, 0.0], "BORRADO / ANULADO": [0, 0.0], "CORRECCION_SOLICITADA": [0, 0.0]}
+    for p in pesajes:
+        state = "BORRADO / ANULADO" if p.deleted_at else (
+            "CORRECCION_SOLICITADA"
+            if p.latest_correction_request
+            else "VIGENTE"
+        )
+        groups[state][0] += 1
+        groups[state][1] += float(p.peso_kg or 0)
+    for state, values in groups.items():
+        summary.append([state, values[0], round(values[1], 3)])
+    summary.append([])
+    summary.append(["Control obligatorio", "Cruzar cada sticker fisico por ID/QR y separar los BORRADOS / ANULADOS."])
         
     # Ajustar ancho de columnas básico
     for col in ws.columns:

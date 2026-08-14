@@ -68,6 +68,8 @@ class FakeCentralClient:
                     "station-production-progress-v1",
                     "station-legacy-continuity-v1",
                 ],
+                "manga_prelabel": ["scm-manga-prelabel-v1"],
+                "manga_weighing": ["scm-manga-weighing-v1"],
             },
             "features": {
                 "monitoring": True,
@@ -75,6 +77,8 @@ class FakeCentralClient:
                 "legacy_weight_ingest_enabled": False,
                 "remote_hardware_commands": False,
                 "pilot_data_commands": True,
+                "scm_manga_prelabel": True,
+                "scm_manga_weighing": True,
             },
         }
 
@@ -286,6 +290,36 @@ def test_central_api_client_uses_one_origin_headers_and_timeouts():
     )
 
 
+def test_central_api_client_separa_bandeja_preview_y_claim_de_impresion():
+    station_id = "7f99acdd-63e6-4385-bc16-b904d5d8d5ee"
+    print_job_id = "959cd203-4034-49ae-a6bb-881fd8d3f6e1"
+    session = FakeSession([
+        FakeResponse(200, {"print_jobs": [], "count": 0}),
+        FakeResponse(200, {"print_job_id": print_job_id}),
+        FakeResponse(200, {"print_job_id": print_job_id}),
+    ])
+    client = CentralApiClient(
+        origin="https://central.envaperu.test",
+        token="secret-station-token",
+        station_version="1.1.0-pilot",
+        session=session,
+    )
+
+    client.list_scm_print_jobs(station_id, status="PENDING", limit=20)
+    client.get_scm_print_job(station_id, print_job_id)
+    client.claim_scm_print_job(station_id, print_job_id)
+
+    inbox, preview, claim = session.calls
+    base = (
+        "https://central.envaperu.test/api/integration/v1/stations/"
+        f"{station_id}/print-jobs"
+    )
+    assert inbox[0:2] == ("GET", f"{base}?status=PENDING&limit=20")
+    assert preview[0:2] == ("GET", f"{base}/{print_job_id}")
+    assert claim[0:2] == ("POST", f"{base}/{print_job_id}/claim")
+    assert claim[2]["headers"]["Idempotency-Key"] == print_job_id
+
+
 def test_remote_http_requires_explicit_insecure_lan_opt_in():
     assert normalize_central_origin("http://127.0.0.1:5000") == (
         "http://127.0.0.1:5000"
@@ -462,6 +496,34 @@ def test_heartbeat_reports_local_legacy_without_secrets(monitoring_app):
         assert runtime.communication_state == "ONLINE"
         assert runtime.sequence == 1
         assert runtime.last_central_ack_utc is not None
+
+
+def test_connected_normalized_skips_legacy_continuity(monitoring_app):
+    """SCM conectado no exige bootstrap del historial legacy vacio."""
+    with monitoring_app.app_context():
+        monitoring_app.config["STATION_MODE"] = "CONNECTED_NORMALIZED"
+        fake_client = FakeCentralClient()
+
+        def unexpected_legacy_call(*_args, **_kwargs):
+            raise AssertionError(
+                "CONNECTED_NORMALIZED no debe negociar continuidad legacy"
+            )
+
+        fake_client.get_history_sync_state = unexpected_legacy_call
+        fake_client.send_history_delta = unexpected_legacy_call
+        fake_client.get_pilot_commands = unexpected_legacy_call
+        service = MonitoringService(
+            client_factory=lambda _token: fake_client,
+            token_provider=lambda: "test-token",
+            component_provider=_component_provider,
+        )
+
+        result = service.run_once()
+
+        assert result["state"] == "ONLINE"
+        assert fake_client.heartbeats[0][1]["mode"] == "CONNECTED_NORMALIZED"
+        assert len(fake_client.progress_reports) == 1
+        assert fake_client.progress_reports[0][1]["rows"] == []
 
 
 def test_pilot_void_command_is_applied_locally_and_acknowledged(monitoring_app):

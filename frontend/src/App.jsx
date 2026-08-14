@@ -9,13 +9,21 @@ import GestionPesajes from './components/GestionPesajes';
 import GenerarOrdenTrabajo from './components/GenerarOrdenTrabajo';
 import CerrarOps from './components/CerrarOps';
 import CentralStatusBadge from './components/CentralStatusBadge';
+import ScmPrelabels from './components/ScmPrelabels';
+import ScmWeighing from './components/ScmWeighing';
 import { calculateWeightAdjustment } from './utils/weightAdjustment';
+import { stationNavigationFromSearch } from './utils/scmNavigation';
 
 function App() {
+  const [initialNavigation] = useState(() => stationNavigationFromSearch(
+    globalThis.location?.search || '',
+  ));
   // Connection state
   const [connected, setConnected] = useState(false);
   const [listening, setListening] = useState(false);
   const [centralState, setCentralState] = useState('CENTRAL_NOT_PROVISIONED');
+  const [scaleSimulationEnabled, setScaleSimulationEnabled] = useState(false);
+  const [portfolioDemoMode, setPortfolioDemoMode] = useState(false);
   
   // Weight state
   const [peso, setPeso] = useState(0);
@@ -48,7 +56,7 @@ function App() {
   const [stickerPreview, setStickerPreview] = useState(null);
   const [showExcelModal, setShowExcelModal] = useState(false);
   const [generandoOT, setGenerandoOT] = useState(false);
-  const [activeTab, setActiveTab] = useState('crear-ot');
+  const [activeTab, setActiveTab] = useState(initialNavigation.activeTab);
   const [cooldown, setCooldown] = useState(false);
   const [captureInFlight, setCaptureInFlight] = useState(false);
   const [captureResult, setCaptureResult] = useState(null);
@@ -81,6 +89,12 @@ function App() {
     const interval = window.setInterval(checkCentralStatus, 30000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (portfolioDemoMode && !activeTab.startsWith('scm-')) {
+      setActiveTab('scm-weighing');
+    }
+  }, [activeTab, portfolioDemoMode]);
 
   // WebSocket: escuchar peso en vivo desde la balanza
   useEffect(() => {
@@ -138,6 +152,8 @@ function App() {
       const { data } = await balanzaApi.status();
       setConnected(data.connected);
       setListening(data.listening);
+      setScaleSimulationEnabled(Boolean(data.simulation_enabled));
+      setPortfolioDemoMode(Boolean(data.portfolio_demo));
     } catch (err) {
       console.error('Error checking status:', err);
     }
@@ -317,6 +333,14 @@ function App() {
     }
   };
 
+  const handleSimulateWeight = async (weight) => {
+    const { data } = await balanzaApi.simularPeso(weight);
+    setPeso(Number(data.peso_kg));
+    setConnected(true);
+    setListening(true);
+    return data;
+  };
+
   const checkCentralStatus = async () => {
     try {
       const { data } = await healthApi.ready();
@@ -450,7 +474,7 @@ function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app ${portfolioDemoMode ? 'portfolio-demo' : ''}`}>
       {/* Header */}
       <header className="header">
         <h1>⚖️ Sistema de Pesado - ENVAPERU</h1>
@@ -470,19 +494,33 @@ function App() {
             style={{ cursor: 'pointer' }}
           >
             <span className="status-dot"></span>
-            {connected ? 'Balanza Conectada' : 'Balanza Desconectada'}
+            {portfolioDemoMode
+              ? 'Balanza simulada'
+              : (connected ? 'Balanza Conectada' : 'Balanza Desconectada')}
           </div>
         </div>
       </header>
 
-      {/* Tab Navigation */}
-      <div className="tab-nav">
-        <button 
-          className={`tab-btn ${activeTab === 'crear-ot' ? 'active' : ''}`}
-          onClick={() => setActiveTab('crear-ot')}
-        >
-          📋 Crear OT
-        </button>
+      {portfolioDemoMode && (
+        <section className="portfolio-demo-banner" role="status">
+          <strong>ESTACION EDGE // DEMO PUBLICA</strong>
+          <span>
+            Balanza RS-232 e impresora TSC simuladas. No usa hardware ni datos reales.
+          </span>
+        </section>
+      )}
+
+      {/* Navigation kept split while SCM and the temporary legacy flow coexist. */}
+      <nav className="tab-nav" aria-label="Flujos del módulo de pesaje">
+        <div className="tab-group tab-group-legacy" aria-label="Flujo legacy temporal">
+          <span className="tab-group-label tab-group-label-legacy">Legacy temporal</span>
+          <div className="tab-group-actions">
+            <button
+              className={`tab-btn ${activeTab === 'crear-ot' ? 'active' : ''}`}
+              onClick={() => setActiveTab('crear-ot')}
+            >
+              📋 Crear OT
+            </button>
             <button 
               className={`tab-btn ${activeTab === 'pesar' ? 'active' : ''}`}
               onClick={() => setActiveTab('pesar')}
@@ -508,6 +546,26 @@ function App() {
               🔒 Cerrar OPs
             </button>
           </div>
+        </div>
+
+        <div className="tab-group tab-group-scm" aria-label="Nuevo flujo SCM">
+          <span className="tab-group-label tab-group-label-scm">Nuevo · SCM</span>
+          <div className="tab-group-actions">
+            <button
+              className={`tab-btn ${activeTab === 'scm-prelabels' ? 'active' : ''}`}
+              onClick={() => setActiveTab('scm-prelabels')}
+            >
+              Etiquetas
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'scm-weighing' ? 'active' : ''}`}
+              onClick={() => setActiveTab('scm-weighing')}
+            >
+              Pesaje SCM
+            </button>
+          </div>
+        </div>
+      </nav>
 
       {/* ========== TAB 1: CREAR OT ========== */}
       {activeTab === 'crear-ot' && (
@@ -624,6 +682,26 @@ function App() {
       {activeTab === 'cerrar-ops' && (
         <main className="main-content avance-full">
           <CerrarOps />
+        </main>
+      )}
+
+      {activeTab === 'scm-prelabels' && (
+        <main className="main-content avance-full">
+          <ScmPrelabels initialJobId={initialNavigation.printJobId} />
+        </main>
+      )}
+
+      {activeTab === 'scm-weighing' && (
+        <main className="main-content avance-full">
+          <ScmWeighing
+            peso={peso}
+            listening={listening}
+            centralState={centralState}
+            onConnect={handleConnect}
+            simulationEnabled={scaleSimulationEnabled}
+            onSimulateWeight={handleSimulateWeight}
+            portfolioDemoMode={portfolioDemoMode}
+          />
         </main>
       )}
 

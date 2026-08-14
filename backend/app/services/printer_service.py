@@ -110,6 +110,16 @@ class PrinterService:
         """
         Imprime código TSPL (para impresoras TSC) via Windows RAW.
         """
+        try:
+            if current_app.config.get('SIMULATE_PRINTER', False):
+                print(
+                    f"[PRINTER] Simulacion local: {len(tspl_code)} bytes TSPL "
+                    "aceptados sin enviar al spooler"
+                )
+                return True
+        except RuntimeError:
+            pass
+
         if not self._begin_print():
             return False
 

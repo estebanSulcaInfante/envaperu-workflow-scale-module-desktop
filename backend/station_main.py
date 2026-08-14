@@ -44,6 +44,16 @@ def _parser():
         default=os.getenv("STATION_ID", DEFAULT_STATION_ID),
     )
     parser.add_argument(
+        "--station-uuid",
+        default=os.getenv("STATION_UUID"),
+        help="UUID central preprovisionado de la estación.",
+    )
+    parser.add_argument(
+        "--scm-operator-id",
+        default=os.getenv("SCM_OPERATOR_ID"),
+        help="Trabajador autenticado para el pesaje SCM local.",
+    )
+    parser.add_argument(
         "--static-dir",
         type=Path,
         default=Path(os.getenv("STATION_STATIC_DIR", DEFAULT_STATIC_DIR)),
@@ -65,6 +75,24 @@ def _parser():
         help="Compatibility override for a specific SQLite file",
     )
     parser.add_argument("--open-browser", action="store_true")
+    parser.add_argument(
+        "--allow-scale-simulation",
+        action="store_true",
+        default=os.getenv("ALLOW_SCALE_SIMULATION", "false").lower() == "true",
+        help="Habilita entrada manual de peso exclusivamente para pruebas locales.",
+    )
+    parser.add_argument(
+        "--allow-local-scm-demo",
+        action="store_true",
+        default=os.getenv("ALLOW_LOCAL_SCM_DEMO", "false").lower() == "true",
+        help="Habilita un QR SCM ficticio que nunca confirma datos en central.",
+    )
+    parser.add_argument(
+        "--simulate-printer",
+        action="store_true",
+        default=os.getenv("SIMULATE_PRINTER", "false").lower() == "true",
+        help="Confirma impresión local sin enviar TSPL al spooler.",
+    )
     return parser
 
 
@@ -97,8 +125,13 @@ def build_release_app(args, runtime_state=None):
             "SAME_ORIGIN_ONLY": True,
             "SYNC_ENABLED": False,
             "MONITORING_ENABLED": True,
+            "ALLOW_SCALE_SIMULATION": args.allow_scale_simulation,
+            "ALLOW_LOCAL_SCM_DEMO": args.allow_local_scm_demo,
+            "SIMULATE_PRINTER": args.simulate_printer,
             "STATION_ID": args.station_id,
             "STATION_CODE": args.station_id,
+            "STATION_UUID": args.station_uuid,
+            "SCM_OPERATOR_ID": args.scm_operator_id,
             "RUNTIME_STATE": runtime_state,
             **storage_config,
         },

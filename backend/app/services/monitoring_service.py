@@ -594,7 +594,11 @@ class MonitoringService:
                     "CONTRACT_CONFLICT",
                     "Acuse central no coincide con el heartbeat",
                 )
-            self._sync_continuity(client, identity.station_id)
+            # El continuo historico solo pertenece al perfil que replica la
+            # base legacy. Una estacion CONNECTED_NORMALIZED puede iniciar
+            # limpia y operar por contratos SCM sin una importacion historica.
+            if current_app.config.get("STATION_MODE") == "MONITORED_LEGACY":
+                self._sync_continuity(client, identity.station_id)
             progress_payload = self._build_production_progress_payload(now)
             _validate_contract(
                 "station-production-progress-v1",

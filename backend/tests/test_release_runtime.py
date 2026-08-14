@@ -26,8 +26,10 @@ def _free_port():
         return sock.getsockname()[1]
 
 
-def _station_command(port, static_dir, database_path, station_id):
-    return [
+def _station_command(
+    port, static_dir, database_path, station_id, *, allow_simulation=False,
+):
+    command = [
         sys.executable,
         str(STATION_MAIN),
         "--port",
@@ -39,6 +41,9 @@ def _station_command(port, static_dir, database_path, station_id):
         "--station-id",
         station_id,
     ]
+    if allow_simulation:
+        command.append("--allow-scale-simulation")
+    return command
 
 
 def _start_station(command):
@@ -240,6 +245,28 @@ def test_frontend_clients_use_release_same_origin_contract():
     assert "'websocket'" not in socket_source
 
     assert "base: '/'" in vite_source
+
+
+def test_release_simulation_requires_explicit_runtime_flag(tmp_path):
+    static_dir = tmp_path / "dist"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("station-ui", encoding="utf-8")
+    station_id = f"TEST-{uuid.uuid4().hex}"
+    port = _free_port()
+    origin = f"http://127.0.0.1:{port}"
+    process = _start_station(_station_command(
+        port,
+        static_dir,
+        tmp_path / "station.db",
+        station_id,
+        allow_simulation=True,
+    ))
+    try:
+        _wait_until_live(process, origin)
+        status = requests.get(f"{origin}/api/balanza/status", timeout=2).json()
+        assert status["simulation_enabled"] is True
+    finally:
+        _stop_process(process)
 
 
 def test_windows_launcher_uses_single_release_runtime():

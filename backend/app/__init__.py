@@ -124,6 +124,8 @@ def create_app(config_overrides=None, static_dir=None, start_workers=None):
     from app.routes.avance import avance_bp
     from app.routes.ops import ops_bp
     from app.routes.local_capture import local_capture_bp
+    from app.routes.scm_prelabels import scm_prelabels_bp
+    from app.routes.scm_weighing import scm_weighing_bp
     from app.runtime.health import health_bp
     from app.runtime.lifecycle import install_runtime_guard
     
@@ -134,6 +136,8 @@ def create_app(config_overrides=None, static_dir=None, start_workers=None):
     app.register_blueprint(avance_bp, url_prefix='/api/avance')
     app.register_blueprint(ops_bp, url_prefix='/api/ops')
     app.register_blueprint(local_capture_bp, url_prefix='/api/local/v1')
+    app.register_blueprint(scm_prelabels_bp, url_prefix='/api/local/v1')
+    app.register_blueprint(scm_weighing_bp, url_prefix='/api/local/v1')
     app.register_blueprint(health_bp, url_prefix='/api/local/v1/health')
     install_runtime_guard(app)
 

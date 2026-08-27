@@ -35,8 +35,8 @@ function Get-LastJson {
 function Find-BootstrapPython {
     $candidate = Get-Command python -ErrorAction SilentlyContinue
     if ($candidate) {
-        $version = @(& $candidate.Source -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $version[-1] -eq '3.12') { return $candidate.Source }
+        & $candidate.Source -c 'import sys; sys.exit(sys.version_info[:2] != (3, 12))' 2>$null
+        if ($LASTEXITCODE -eq 0) { return $candidate.Source }
     }
     $launcher = Get-Command py -ErrorAction SilentlyContinue
     if ($launcher) {

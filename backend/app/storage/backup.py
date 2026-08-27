@@ -40,10 +40,12 @@ class DatabaseInspection:
     path: Path
     size_bytes: int
     sha256: str
+    logical_sha256: str
     integrity_check: str
     schema_version: int
     table_counts: dict
     max_ids: dict
+    operational_hashes: dict
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,24 @@ BUSINESS_TABLES = (
     "correlativo_cache",
     "molde_piezas_cache",
     "ops_cerradas",
+    "print_attempts",
+    "pesaje_correction_requests",
+    "scm_label_print_attempt",
+    "station_identity",
+    "station_runtime_state",
+)
+
+# These tables contain the facts that a rollback must never silently discard.
+# Runtime heartbeat rows are intentionally excluded because they change while an
+# update validates Central and do not represent a weighing/printing operation.
+OPERATIONAL_TABLES = (
+    "pesajes",
+    "correlativo_cache",
+    "molde_piezas_cache",
+    "ops_cerradas",
+    "print_attempts",
+    "pesaje_correction_requests",
+    "scm_label_print_attempt",
 )
 
 
@@ -76,6 +96,20 @@ def _sha256(path):
     with Path(path).open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
+    return digest.hexdigest()
+
+
+def _logical_sha256(path):
+    """Hash a consistent SQLite snapshot, including committed WAL contents."""
+    digest = hashlib.sha256()
+    with closing(_readonly_connection(path)) as connection:
+        connection.execute("BEGIN")
+        try:
+            for statement in connection.iterdump():
+                digest.update(statement.encode("utf-8"))
+                digest.update(b"\n")
+        finally:
+            connection.rollback()
     return digest.hexdigest()
 
 
@@ -167,6 +201,85 @@ def _database_metrics(path):
     return counts, max_ids
 
 
+def _canonical_sqlite_value(value):
+    if isinstance(value, bytes):
+        return {"blob_hex": value.hex()}
+    return value
+
+
+def _operational_hashes(path):
+    """Hash every operational row so updates to acknowledgements are detected."""
+    hashes = {}
+    with closing(_readonly_connection(path)) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        for table in OPERATIONAL_TABLES:
+            if table not in tables:
+                continue
+            columns_info = list(connection.execute(f'PRAGMA table_info("{table}")'))
+            columns = [row[1] for row in columns_info]
+            primary_keys = [
+                row[1]
+                for row in sorted(columns_info, key=lambda item: item[5])
+                if row[5]
+            ]
+            order_columns = primary_keys or columns
+            quoted_columns = ", ".join(f'"{column}"' for column in columns)
+            order_by = ", ".join(f'"{column}"' for column in order_columns)
+            digest = hashlib.sha256()
+            digest.update(
+                json.dumps(columns, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            )
+            digest.update(b"\n")
+            cursor = connection.execute(
+                f'SELECT {quoted_columns} FROM "{table}" ORDER BY {order_by}'
+            )
+            for row in cursor:
+                canonical = [_canonical_sqlite_value(value) for value in row]
+                digest.update(
+                    json.dumps(
+                        canonical,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                )
+                digest.update(b"\n")
+            hashes[table] = digest.hexdigest()
+    return hashes
+
+
+def compare_operational_state(current, reference):
+    """Return a per-table delta for rollback-sensitive operational facts."""
+    deltas = {}
+    for table in OPERATIONAL_TABLES:
+        current_count = current.table_counts.get(table, 0)
+        reference_count = reference.table_counts.get(table, 0)
+        current_max_id = current.max_ids.get(table)
+        reference_max_id = reference.max_ids.get(table)
+        current_hash = current.operational_hashes.get(table)
+        reference_hash = reference.operational_hashes.get(table)
+        if (
+            current_count != reference_count
+            or current_max_id != reference_max_id
+            or current_hash != reference_hash
+        ):
+            deltas[table] = {
+                "reference_count": reference_count,
+                "current_count": current_count,
+                "reference_max_id": reference_max_id,
+                "current_max_id": current_max_id,
+                "reference_sha256": reference_hash,
+                "current_sha256": current_hash,
+            }
+    return deltas
+
+
 def inspect_database(database_path):
     database_path = Path(database_path).expanduser().resolve()
     if not database_path.is_file():
@@ -178,6 +291,7 @@ def inspect_database(database_path):
     try:
         schema_version = _schema_version(database_path)
         table_counts, max_ids = _database_metrics(database_path)
+        operational_hashes = _operational_hashes(database_path)
     except sqlite3.DatabaseError as exc:
         raise BackupVerificationError(
             f"SQLite database metadata is invalid for {database_path}: {exc}"
@@ -187,10 +301,12 @@ def inspect_database(database_path):
         path=database_path,
         size_bytes=database_path.stat().st_size,
         sha256=_sha256(database_path),
+        logical_sha256=_logical_sha256(database_path),
         integrity_check=integrity,
         schema_version=schema_version,
         table_counts=table_counts,
         max_ids=max_ids,
+        operational_hashes=operational_hashes,
     )
 
 

@@ -148,6 +148,7 @@ def test_release_profile_serves_ui_and_socketio_same_origin(tmp_path):
         live_response = _wait_until_live(primary, primary_origin)
         live = live_response.json()
         assert live == {
+            "app_version": "1.1.0-pilot",
             "debug": False,
             "profile": "RELEASE",
             "reloader": False,
@@ -163,6 +164,7 @@ def test_release_profile_serves_ui_and_socketio_same_origin(tmp_path):
         ready = ready_response.json()
         assert ready["issues"] == []
         assert ready["status"] == "READY"
+        assert ready["app_version"] == "1.1.0-pilot"
         assert ready["central"]["state"] == "CENTRAL_NOT_PROVISIONED"
         assert ready["central"]["last_central_ack_utc"] is None
 

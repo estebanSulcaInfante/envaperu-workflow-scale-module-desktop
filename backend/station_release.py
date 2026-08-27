@@ -44,6 +44,7 @@ def _parser():
     activate.add_argument("--install-root", type=Path, required=True)
     activate.add_argument("--data-root", type=Path, required=True)
     activate.add_argument("--preupdate-backup")
+    activate.add_argument("--validation-baseline")
 
     current = commands.add_parser("current")
     current.add_argument("--install-root", type=Path, required=True)
@@ -97,6 +98,7 @@ def main(argv=None):
             state = store.activate(
                 args.version,
                 preupdate_backup=args.preupdate_backup,
+                validation_baseline=args.validation_baseline,
             )
             _print("RELEASE_ACTIVATED", state=state)
             return 0

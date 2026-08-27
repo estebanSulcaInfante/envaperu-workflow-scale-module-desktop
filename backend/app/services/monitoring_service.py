@@ -127,6 +127,10 @@ def initialize_station_monitoring(app):
     runtime.started_at_utc = _utc_now()
     runtime.last_attempt_at_utc = None
     runtime.last_heartbeat_id = None
+    # Nunca heredar ONLINE de un proceso anterior. El release nuevo solo debe
+    # anunciar conexión después de recibir un heartbeat válido en este boot.
+    runtime.communication_state = "CENTRAL_NOT_PROVISIONED"
+    runtime.last_error_code = None
     runtime.next_heartbeat_seconds = int(
         app.config.get("HEARTBEAT_SECONDS", 30)
     )

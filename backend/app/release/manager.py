@@ -315,11 +315,19 @@ class ActiveReleaseStore:
         os.replace(temporary, self.state_path)
         return state
 
-    def activate(self, version, *, preupdate_backup=None):
+    def activate(
+        self,
+        version,
+        *,
+        preupdate_backup=None,
+        validation_baseline=None,
+    ):
         release_path = self._release_path(version)
         current = self.read()
         if current and current.get("active_version") == version:
-            return current
+            raise ReleasePackageError(
+                f"Release {version} is already active; activate a new immutable version"
+            )
         state = {
             "schema_version": RELEASE_STATE_SCHEMA_VERSION,
             "active_version": version,
@@ -328,6 +336,9 @@ class ActiveReleaseStore:
             "previous_path": current.get("active_path") if current else None,
             "activated_at_utc": _utc_now(),
             "preupdate_backup": str(preupdate_backup) if preupdate_backup else None,
+            "validation_baseline": (
+                str(validation_baseline) if validation_baseline else None
+            ),
         }
         return self._write(state)
 
@@ -345,5 +356,6 @@ class ActiveReleaseStore:
             "previous_path": current["active_path"],
             "activated_at_utc": _utc_now(),
             "preupdate_backup": current.get("preupdate_backup"),
+            "validation_baseline": current.get("validation_baseline"),
         }
         return self._write(state)

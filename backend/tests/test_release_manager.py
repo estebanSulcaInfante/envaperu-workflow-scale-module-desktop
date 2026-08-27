@@ -115,14 +115,20 @@ def test_activation_and_rollback_only_switch_the_pointer(tmp_path):
     _write_release(second, "1.2.0", "second")
 
     first_state = store.activate("1.1.0")
-    second_state = store.activate("1.2.0", preupdate_backup="backup-1.1.0.db")
+    second_state = store.activate(
+        "1.2.0",
+        preupdate_backup="backup-1.1.0.db",
+        validation_baseline="baseline-1.2.0.db",
+    )
     rolled_back = store.rollback()
 
     assert first_state["active_version"] == "1.1.0"
     assert second_state["active_version"] == "1.2.0"
     assert second_state["previous_version"] == "1.1.0"
+    assert second_state["validation_baseline"] == "baseline-1.2.0.db"
     assert rolled_back["active_version"] == "1.1.0"
     assert rolled_back["previous_version"] == "1.2.0"
+    assert rolled_back["validation_baseline"] == "baseline-1.2.0.db"
     assert first.is_dir() and second.is_dir()
     assert json.loads(store.state_path.read_text(encoding="utf-8")) == rolled_back
 
@@ -151,3 +157,17 @@ def test_failed_staging_does_not_change_active_release(tmp_path):
 
     assert store.read() == before
     assert not (install_root / "releases" / "1.2.0").exists()
+
+
+def test_activation_rejects_the_already_active_immutable_version(tmp_path):
+    install_root = tmp_path / "install"
+    data_root = tmp_path / "program-data"
+    active = install_root / "releases" / "1.2.0"
+    _write_release(active, "1.2.0", "immutable")
+    store = ActiveReleaseStore(install_root=install_root, data_root=data_root)
+    before = store.activate("1.2.0")
+
+    with pytest.raises(ReleasePackageError, match="already active"):
+        store.activate("1.2.0")
+
+    assert store.read() == before

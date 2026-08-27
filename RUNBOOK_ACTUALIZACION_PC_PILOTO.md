@@ -1,226 +1,283 @@
-# Runbook de instalación y actualización de la PC piloto
+# Actualización de la PC de pesaje — piloto SCM
 
-La primera instalación migra la base SQLite legacy al almacenamiento release. Las actualizaciones siguientes ya no se realizan mediante `git pull`: usan un paquete inmutable generado por CI, backup previo, preflight sobre una copia, activación por puntero y rollback automático.
+Este procedimiento instala `1.2.0-pilot.3` sin modificar la base antigua a
+ciegas. El paquete es inmutable, funciona sin Internet para instalar sus
+dependencias y conserva código, datos, configuración y secretos en ubicaciones
+separadas.
 
-## Dos procedimientos distintos
+## Gate de salida
 
-1. **Primera instalación:** seguir las secciones 1 a 5 para preservar la SQLite legacy e inicializar `ProgramData`.
-2. **Actualización de una estación ya versionada:** seguir la sección 6. No volver a importar la SQLite legacy.
+No habilitar pesajes productivos hasta obtener y registrar todos estos hitos:
 
-## Condiciones de inicio
+- `PILOT_CONFIG_READY`;
+- `CENTRAL_ONLINE`;
+- `UPDATE_COMPLETE` o `LEGACY_MIGRATION_COMPLETE`;
+- `/health/ready` con `status=READY` y `central.state=ONLINE`;
+- historial anterior visible y conteos conciliados;
+- balanza real, impresora real, dos stickers iguales y QR escaneado con Enter;
+- arranque de la tarea programada con el mismo usuario que provisionó el token.
 
-- No hay un pesaje en curso ni una etiqueta pendiente.
-- El CMD del backend legacy esta cerrado.
-- El puerto local `5050` ya no esta en escucha.
-- Se conoce la ruta exacta de la base usada por el backend legacy.
-- El estado Git del codigo fue revisado antes del pull.
-- Hay una ventana operativa para smoke test sin produccion real.
+La respuesta `READY` por sí sola no acredita Central ni el hardware.
 
-No continuar si alguna condicion no se cumple.
+## 1. Antes de ir a la PC
 
-## 1. Registrar el estado anterior
+Llevar en una misma carpeta de soporte:
 
-Desde PowerShell, en la raiz de `modulo-pesaje`:
+- `envaperu-pesaje-1.2.0-pilot.3-win-x64.zip`;
+- `envaperu-pesaje-1.2.0-pilot.3-win-x64.zip.sha256`;
+- este runbook;
+- el SHA-256 comunicado por un segundo canal;
+- UUID real de la estación en Central;
+- ID numérico del trabajador que operará el piloto;
+- token de esa misma estación;
+- cuenta Windows operativa que inicia la estación.
+
+Central debe estar desplegado y compatible antes de activar la estación. El
+paquete no está firmado con Authenticode; durante el piloto solo se distribuye
+por el canal privado acordado y siempre se compara el SHA-256.
+
+## 2. Ventana operativa
+
+Antes de detener la versión anterior, terminar o conciliar:
+
+- pesaje o lectura activa en pantalla;
+- manga abierta sin entrega de continuidad;
+- preetiqueta o sticker pendiente;
+- impresión `PENDING`, `EMISION_EN_PROGRESO`, `EMISION_INCIERTA` o `PARCIAL`;
+- impresión exitosa cuyo acuse central siga pendiente;
+- operación SCM resuelta localmente pero aún no confirmada.
+
+Cerrar el navegador operativo y deshabilitar temporalmente cualquier arranque
+automático de la aplicación antigua. No actualizar durante producción.
+
+## 3. Verificar el paquete y extraerlo
+
+Abrir Windows PowerShell 5.1 como administrador, usando la **misma cuenta
+Windows que operará la estación**:
 
 ```powershell
-git status --short
-git rev-parse HEAD
-Get-NetTCPConnection -LocalPort 5050 -State Listen -ErrorAction SilentlyContinue
-Resolve-Path ".\backend\instance\pesajes.db"
-Get-Item ".\backend\instance\pesajes.db" | Select-Object FullName, Length, LastWriteTime
-Get-FileHash ".\backend\instance\pesajes.db" -Algorithm SHA256
+$Kit = 'C:\Soporte\EnvaPeru-Piloto-1.2.0-pilot.3'
+$Zip = Join-Path $Kit 'envaperu-pesaje-1.2.0-pilot.3-win-x64.zip'
+certutil -hashfile $Zip SHA256
 ```
 
-`Get-NetTCPConnection` no debe devolver ningun listener. Guardar el commit, tamano y SHA-256 en el acta de despliegue. Si `DATABASE_URL` fue personalizado, usar su ruta real en vez del ejemplo.
-
-## 2. Actualizar sin abrir la base
+El hash debe coincidir exactamente con el `.sha256` y con el valor recibido por
+el segundo canal. **Solo después de confirmar esa coincidencia**, desbloquear el
+ZIP, extraerlo y desbloquear los scripts contenidos:
 
 ```powershell
-git fetch origin
-git switch codex/monitored-offline-pilot
-git pull --ff-only origin codex/monitored-offline-pilot
-.\install-windows.bat
+Unblock-File -LiteralPath $Zip
+Expand-Archive -LiteralPath $Zip -DestinationPath (Join-Path $Kit 'extraido')
+Get-ChildItem -LiteralPath (Join-Path $Kit 'extraido\release') `
+  -Filter '*.ps1' -File | Unblock-File
 ```
 
-El instalador nuevo solo prepara dependencias y compila el frontend. No ejecuta `create_app`, `init_db.py` ni otra inicializacion sobre la base legacy.
+No cambiar la política global con `Set-ExecutionPolicy Unrestricted`. Si la
+política corporativa impide `Unblock-File`, soporte puede invocar cada script
+verificado con `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ...`;
+ese bypass debe limitarse a esa invocación y hacerse únicamente después de la
+verificación del SHA-256.
 
-Antes del primer arranque, crear o actualizar `.env` en la raiz del modulo con la identidad ya registrada en la API central:
+## 4. Clasificar la instalación; no adivinar
+
+Ejecutar el diagnóstico de solo lectura. En una instalación antigua indicar la
+carpeta y base reales:
+
+```powershell
+& "$Kit\extraido\release\Inspect-Station.ps1" `
+  -LegacyRoot 'C:\ruta\modulo-pesaje' `
+  -LegacyDatabasePath 'C:\ruta\modulo-pesaje\backend\instance\pesajes.db' `
+  -OutputPath "$Kit\diagnostico-estacion.json"
+```
+
+La salida decide el carril:
+
+| Resultado | Acción |
+|---|---|
+| `VERSIONED` | Seguir la sección 5. Nunca reimportar la base legacy. |
+| `LEGACY` | Seguir la sección 6. |
+| `PARTIAL_VERSIONED` | Detenerse. Respaldar y completar la instalación parcial; no reimportar. |
+| `CONFLICT` | Detenerse. Hay dos bases candidatas y deben conciliarse. |
+| `UNKNOWN` | Detenerse y localizar la instalación/base real. |
+
+La existencia de un `.db` no basta: registrar también `-wal`, `-shm`, tamaño,
+fecha y hash cuando el diagnóstico pueda calcularlo de forma consistente.
+
+## 5. Carril A — estación ya versionada
+
+Aplicar este carril únicamente cuando el diagnóstico diga `VERSIONED` y exista:
+
+```text
+C:\ProgramData\EnvaPeru\Pesaje\run\active-release.json
+C:\ProgramData\EnvaPeru\Pesaje\data\pesajes.db
+```
+
+### 5.1 Configuración persistente
+
+Revisar `C:\ProgramData\EnvaPeru\Pesaje\config\station.env`. Debe contener
+valores reales, como mínimo:
 
 ```dotenv
 STATION_CODE=PESAJE-PLANTA-01
-STATION_UUID=6e4a5f65-67b7-413d-a780-1c9a2669e50f
+STATION_UUID=<uuid-real-de-central>
 STATION_MODE=MONITORED_LEGACY
-STATION_APP_VERSION=1.1.0-pilot
+SCM_OPERATOR_ID=<id-numerico-real>
 CENTRAL_ORIGIN=https://envaperu-scm-api.onrender.com
 ALLOW_INSECURE_CENTRAL=false
-MONITORING_ENABLED=true
-SYNC_ENABLED=false
-TIMEZONE=America/Lima
+PORTFOLIO_DEMO_MODE=false
+ALLOW_SCALE_SIMULATION=false
+ALLOW_LOCAL_SCM_DEMO=false
+SIMULATE_PRINTER=false
 ```
 
-`STATION_UUID` debe coincidir con la estacion usada para importar el historico. No iniciar el modulo con otro UUID: eso crearia una segunda identidad y separaria los pesajes nuevos de los 11 676 registros importados.
+Conservar los valores físicos comprobados de `SCALE_PORT`,
+`SCALE_BAUD_RATE`, `PRINTER_TYPE`, `PRINTER_NAME` y `PRINTER_PORT`. No guardar el
+token en ese archivo.
 
-## 3. Ejecutar la importacion segura
+Si falta el token, provisionarlo con el runtime activo y la cuenta operativa:
 
 ```powershell
-.\import-legacy-windows.bat ".\backend\instance\pesajes.db"
+$State = Get-Content 'C:\ProgramData\EnvaPeru\Pesaje\run\active-release.json' -Raw | ConvertFrom-Json
+& "$($State.active_path)\backend\venv\Scripts\python.exe" `
+  "$($State.active_path)\backend\station_control.py" `
+  provision-token --data-root 'C:\ProgramData\EnvaPeru\Pesaje'
 ```
 
-El wrapper vuelve a bloquear la operacion si detecta el puerto `5050`. El comando interno realiza, en orden:
+### 5.2 Detener y actualizar
 
-1. inspeccion de integridad del origen en modo lectura;
-2. SHA-256, conteos e IDs maximos del origen;
-3. backup consistente SQLite con manifiesto `VALID`;
-4. migraciones versionadas sobre una copia temporal;
-5. nueva comprobacion de integridad y metricas;
-6. backup verificado de cualquier destino previo;
-7. activacion atomica en `C:\ProgramData\EnvaPeru\Pesaje\data\pesajes.db`.
-
-No continuar salvo que la ultima salida JSON contenga:
-
-```text
-"event": "LEGACY_IMPORT_COMPLETE"
-"source_unchanged": true
-"integrity_check": "ok"
-```
-
-Comparar `source.sha256`, `table_counts.pesajes` y `max_ids.pesajes` con la evidencia previa. Registrar tambien `source_backup.path`, `source_backup.manifest_path` e `incident_path` cuando exista.
-
-Si el destino ya contiene pesajes, el importador devuelve `STORAGE_ERROR` y no lo reemplaza. `--replace-existing` solo se usa despues de comparar ambas bases y dejar aprobacion explicita:
+Detener ordenadamente la estación actual y confirmar que el puerto 5050 quedó
+libre. Ejecutar el **actualizador incluido en el paquete nuevo**, no una copia
+antigua del launcher:
 
 ```powershell
-.\import-legacy-windows.bat ".\backend\instance\pesajes.db" --replace-existing
+& "$Kit\extraido\release\Update-Station.ps1" `
+  -PackagePath $Zip `
+  -ExpectedSha256 '<sha256-aprobado>'
 ```
 
-Provisionar en esta PC el token de esa misma estacion. El valor se introduce de forma oculta y queda cifrado con DPAPI; no se guarda en `.env`:
+El actualizador valida el paquete y cada archivo, repara un runtime parcial,
+crea y verifica un backup SQLite, prueba las migraciones sobre una copia,
+activa la versión, espera `READY`, valida identidad/configuración física y
+espera un heartbeat aceptado por Central. Ante un fallo vuelve al release y
+backup anteriores.
+
+No usar `-NoStart` en la PC productiva.
+
+## 6. Carril B — aplicación legacy no versionada
+
+Usar únicamente cuando el diagnóstico diga `LEGACY`, no exista
+`active-release.json`, el puerto 5050 esté libre y exista una sola base fuente.
+
+El puente no copia el `.env` completo. Solo conserva parámetros físicos
+permitidos y fuerza demo/simulaciones en `false`.
+
+Para preparar el runtime offline busca Python 3.12 primero en los entornos
+`backend\.venv` o `backend\venv` de la instalación legacy seleccionada y luego
+en `PATH`/`py`. Si no encuentra exactamente Python 3.12 se detiene antes de
+modificar la base; soporte debe instalar el runtime aprobado y repetir.
 
 ```powershell
-backend\venv\Scripts\python.exe backend\station_control.py provision-token
+& "$Kit\extraido\release\Migrate-LegacyStation.ps1" `
+  -PackagePath $Zip `
+  -ExpectedSha256 '<sha256-aprobado>' `
+  -LegacyDatabasePath 'C:\ruta\modulo-pesaje\backend\instance\pesajes.db' `
+  -LegacyEnvironmentPath 'C:\ruta\modulo-pesaje\.env' `
+  -StationUuid '<uuid-real-de-central>' `
+  -ScmOperatorId <id-numerico-real> `
+  -StationCode 'PESAJE-PLANTA-01'
 ```
 
-## 4. Smoke test release
+El puente ejecuta, en orden:
+
+1. bloquea una estación activa, versionada, parcial o ambigua;
+2. valida el ZIP/manifiesto sin activar un puntero;
+3. crea y verifica el runtime desde los wheels offline;
+4. genera `station.env` con una lista permitida;
+5. solicita el token y lo cifra con DPAPI del usuario operativo;
+6. respalda, migra y activa una copia consistente de la SQLite legacy;
+7. exige fuente sin cambios, integridad `ok`, conteos e IDs conservados;
+8. fija en la copia importada el UUID y código provisionados por Central;
+9. ejecuta una única activación completa;
+10. exige Central `ONLINE` y registra el launcher estable.
+
+La base fuente legacy nunca se modifica. La evidencia queda en
+`C:\ProgramData\EnvaPeru\Pesaje\backups`.
+
+No usar `Update-Station.ps1 -NoStart` como puente: esa opción ya crea el puntero
+activo y no representa una migración legacy.
+
+Si un timeout de Central o el registro de la tarea falla **después** de la
+primera activación, el actualizador detiene el proceso pero conserva el release,
+la base importada y sus dos respaldos. Corregir la causa y reanudar exactamente
+el mismo paquete; no volver a importar la SQLite legacy:
 
 ```powershell
-.\start-windows.bat
+& "$Kit\extraido\release\Update-Station.ps1" `
+  -PackagePath $Zip `
+  -ExpectedSha256 '<sha256-aprobado>' `
+  -ResumeFirstActivation
 ```
 
-En otra consola:
+`-ResumeFirstActivation` solo acepta una primera activación sin release anterior,
+con la misma versión/ruta y ambos respaldos registrados. No permite reemplazar
+un release activo normal con el mismo número de versión.
+
+## 7. Smoke físico obligatorio
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/live
-Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/ready
-backend\venv\Scripts\python.exe backend\station_control.py identity
+$Ready = Invoke-RestMethod 'http://127.0.0.1:5050/api/local/v1/health/ready'
+$Ready | ConvertTo-Json -Depth 8
+Get-Content 'C:\ProgramData\EnvaPeru\Pesaje\run\active-release.json'
 ```
 
-Confirmar `LIVE`, `READY`, identidad `6e4a5f65-67b7-413d-a780-1c9a2669e50f`, enlace central `ONLINE`, historial visible, balanza conectada y una impresion de prueba controlada. No habilitar pesaje productivo hasta cerrar esta validacion.
+Confirmar en presencia de operación:
 
-## 5. Rollback antes de producir
+1. `status=READY` y `central.state=ONLINE`;
+2. UUID/código de estación y operador correctos;
+3. pestaña **Legacy temporal** con historial anterior;
+4. pestañas **Nuevo · SCM** para Etiquetas y Pesaje SCM;
+5. balanza real estable y sin captura manual;
+6. una preetiqueta controlada imprime dos stickers idénticos;
+7. lectura del QR mediante escáner, que equivale a texto + Enter;
+8. peso y acuse visibles en Central;
+9. una reimpresión controlada respeta el ledger y no duplica una emisión incierta;
+10. tarea `EnvaPeru Pesaje Edge` inicia con la cuenta operativa y supera un reinicio.
 
-Si falla el smoke test:
+La primera etiqueta es una prueba controlada, no producción. Solo después de
+firmar el smoke se autoriza el corte.
+
+## 8. Rollback
+
+### Actualización versionada
+
+Solo si no hubo capturas, impresiones, stickers físicos, acuses ni movimientos
+nuevos:
 
 ```powershell
-.\stop-windows.bat
-Get-NetTCPConnection -LocalPort 5050 -State Listen -ErrorAction SilentlyContinue
+cd 'C:\Program Files\EnvaPeru\Pesaje\launcher'
+.\Rollback-Station.ps1 -ConfirmNoCapturesSinceUpdate
 ```
 
-La base legacy original sigue intacta y puede volver a usarse con el commit anterior registrado. No eliminar ProgramData ni los backups: se conservan como evidencia para diagnostico.
+El script espera que el proceso y puerto terminen antes de restaurar SQLite y
+luego inicia la versión anterior.
 
-El rollback directo solo es valido antes de capturar produccion en el release. Si el release ya registro pesajes reales, volver al archivo legacy produciria dos historiales divergentes y exige conciliacion antes de reanudar.
+### Primera conversión legacy
 
-## Codigos relevantes
+No existe un release versionado anterior. Antes de producir, detener la versión
+nueva y volver manualmente a la aplicación legacy con su SQLite fuente intacta.
+Conservar `ProgramData` y todos los backups como evidencia.
 
-| Codigo | Significado | Accion |
-|---:|---|---|
-| `0` | Importacion completa | Revisar evidencia y ejecutar smoke test |
-| `2` | Argumento o entorno Python invalido | Corregir ruta/instalacion; no hubo activacion |
-| `6` | Estacion o puerto activo | Detener backend y repetir |
-| `7` | Error de almacenamiento o validacion | No iniciar; revisar detalle JSON y backups |
+Después de cualquier hecho productivo nuevo, no restaurar una base anterior:
+detener la operación, conciliar y recuperar hacia adelante.
 
-## 6. Actualizaciones versionadas posteriores
+## Evidencia mínima del acta
 
-### 6.1. Preparar la ventana
-
-- terminar o cancelar la sesión de pesaje activa;
-- confirmar que no existe una etiqueta pendiente de impresión;
-- descargar desde el artefacto privado de CI el ZIP y su `.sha256`;
-- obtener el SHA-256 también por el canal de soporte y compararlo;
-- no copiar repositorios, `node_modules`, `.env`, bases SQLite ni tokens dentro del paquete.
-
-Verificar la configuración persistente del launcher en
-`C:\ProgramData\EnvaPeru\Pesaje\config\station.env`. Para el piloto SCM debe
-contener, como mínimo:
-
-```dotenv
-CENTRAL_ORIGIN=https://envaperu-scm-api.onrender.com
-ALLOW_INSECURE_CENTRAL=false
-SCM_OPERATOR_ID=123
-```
-
-`SCM_OPERATOR_ID` debe ser el ID numérico positivo del trabajador autorizado
-en Central. No usar el nombre del operario ni un ID provisional. El token de la
-misma estación debe existir cifrado con DPAPI bajo
-`ProgramData\secrets\station-token.dpapi`.
-
-### 6.2. Ejecutar la actualización
-
-Abrir PowerShell como administrador:
-
-```powershell
-cd C:\Program Files\EnvaPeru\Pesaje\launcher
-.\Update-Station.ps1 `
-  -PackagePath C:\Soporte\envaperu-pesaje-1.2.0-win-x64.zip `
-  -ExpectedSha256 <sha256-aprobado>
-```
-
-El actualizador ejecuta en orden:
-
-1. valida el hash integral del ZIP;
-2. extrae en staging y valida `manifest.json` y todos sus archivos;
-3. crea un venv nuevo desde `wheels`, sin Internet;
-4. crea y verifica un backup SQLite;
-5. prueba las migraciones sobre una copia;
-6. detiene ordenadamente el release activo;
-7. cambia `active-release.json`;
-8. inicia la versión nueva y espera `READY`;
-9. valida identidad central, `CENTRAL_ORIGIN`, token DPAPI y `SCM_OPERATOR_ID`;
-10. si falla, recupera puntero, SQLite y runtime anteriores.
-
-No continuar si la salida no contiene `PILOT_CONFIG_READY` y no termina en:
-
-```text
-UPDATE_COMPLETE version=<version> backup=<ruta>
-```
-
-### 6.3. Smoke posterior
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/live
-Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/ready
-Get-Content C:\ProgramData\EnvaPeru\Pesaje\run\active-release.json
-```
-
-Confirmar versión, `READY`, balanza, impresora, Central y el historial de la sesión. La primera etiqueta del release se imprime como prueba controlada, no como producción.
-
-Si la impresión queda `IMPRESA` con acuse pendiente, usar **Reanudar acuse
-central**: el ledger local impide enviar otra copia. Si queda
-`EMISION_INCIERTA` o `PARCIAL`, no reintentar: separar el material y gestionar
-en Central un reemplazo supervisado con motivo y auditoría. La estación no
-ofrece un override local para ese estado.
-
-En la primera instalación versionada, registrar una vez el arranque estable:
-
-```powershell
-C:\Program Files\EnvaPeru\Pesaje\launcher\Install-StationTask.ps1
-```
-
-La tarea se vincula al launcher, no a una carpeta de versión. Probarla cerrando la estación, ejecutando manualmente la tarea y finalmente reiniciando Windows dentro de la ventana UAT.
-
-### 6.4. Rollback
-
-El rollback por fallo de readiness es automático. Para un rollback manual sin capturas posteriores:
-
-```powershell
-.\release\Rollback-Station.ps1 -ConfirmNoCapturesSinceUpdate
-```
-
-Si ya hubo capturas o impresiones, detener y escalar: no restaurar una base anterior hasta conciliar los hechos nuevos.
+- clasificación y `diagnostico-estacion.json`;
+- usuario Windows operativo;
+- versión/commit anterior y nueva;
+- SHA-256 del paquete;
+- ruta/hash/conteos/IDs de la fuente y backup;
+- UUID, código y operador (nunca el token);
+- salida de activación y `/ready`;
+- resultados de balanza, doble sticker, QR, Central y reinicio;
+- hora de autorización o de rollback.

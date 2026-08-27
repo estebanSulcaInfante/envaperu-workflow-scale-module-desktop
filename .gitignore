@@ -186,3 +186,7 @@ backend/app/release/**/*.py[cod]
 *.db
 *.sqlite3
 backend/instance/
+
+# Release archives are generated outputs. Keeping the default output directory
+# ignored lets the builder re-check that all source inputs still match HEAD.
+/artifacts/

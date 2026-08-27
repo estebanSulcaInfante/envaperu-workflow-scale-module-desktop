@@ -27,6 +27,47 @@ function Invoke-Checked {
     }
 }
 
+function Get-CleanGitRevision {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $git) {
+        throw 'Git es obligatorio para construir un release trazable.'
+    }
+
+    $insideWorkTree = @(& $git.Source -C $RepositoryRoot rev-parse --is-inside-work-tree 2>&1)
+    if ($LASTEXITCODE -ne 0 -or @($insideWorkTree).Count -eq 0 -or $insideWorkTree[-1].ToString().Trim() -ne 'true') {
+        throw 'El origen del release no es un árbol de trabajo Git válido.'
+    }
+
+    $dirtyEntries = @(& $git.Source -C $RepositoryRoot status --porcelain=v1 --untracked-files=all 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'No se pudo comprobar el estado del árbol Git antes de empaquetar.'
+    }
+    if (@($dirtyEntries).Count -gt 0) {
+        throw 'El árbol Git contiene cambios versionados o archivos nuevos. Confirme el código y deje el árbol limpio antes de construir el release.'
+    }
+
+    $revisionOutput = @(& $git.Source -C $RepositoryRoot rev-parse --verify HEAD 2>&1)
+    if ($LASTEXITCODE -ne 0 -or @($revisionOutput).Count -eq 0) {
+        throw 'No se pudo resolver HEAD para el manifiesto del release.'
+    }
+    $revision = ([string]$revisionOutput[-1]).Trim()
+    if ($revision -notmatch '^[0-9a-fA-F]{40,64}$') {
+        throw 'HEAD no devolvió una revisión Git válida.'
+    }
+    return $revision.ToLowerInvariant()
+}
+
+function Assert-NewReleaseArtifact {
+    param([Parameter(Mandatory = $true)][string]$ArchivePath)
+    foreach ($candidate in @($ArchivePath, "$ArchivePath.sha256")) {
+        if (Test-Path -LiteralPath $candidate) {
+            throw "Ya existe el artefacto inmutable $candidate. Use una versión nueva; nunca sobrescriba un ZIP o sidecar publicado."
+        }
+    }
+}
+
 function Copy-ReleaseTree {
     param([string]$Source, [string]$Destination)
     $sourceRoot = [IO.Path]::GetFullPath($Source)
@@ -42,6 +83,11 @@ function Copy-ReleaseTree {
         Copy-Item -LiteralPath $_.FullName -Destination $target
     }
 }
+
+$archiveName = "envaperu-pesaje-$Version-win-x64.zip"
+$archivePath = Join-Path $outputRoot $archiveName
+Assert-NewReleaseArtifact -ArchivePath $archivePath
+$sourceRevision = Get-CleanGitRevision -RepositoryRoot $moduleRoot
 
 try {
     New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
@@ -96,8 +142,10 @@ try {
         Set-Content -LiteralPath (Join-Path $stagingRoot 'wheels\SKIPPED_FOR_TESTS.txt') -Value 'Wheelhouse omitted by explicit test flag.'
     }
 
-    $sourceRevision = (& git -C $moduleRoot rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0) { $sourceRevision = 'unknown' }
+    $confirmedSourceRevision = Get-CleanGitRevision -RepositoryRoot $moduleRoot
+    if (-not [string]::Equals($sourceRevision, $confirmedSourceRevision, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'HEAD cambió durante la construcción. Descarte el staging y vuelva a generar el release.'
+    }
     Invoke-Checked {
         & $repoPython (Join-Path $moduleRoot 'backend\station_release.py') manifest `
             --root $stagingRoot `
@@ -105,11 +153,6 @@ try {
             --source-revision $sourceRevision | Out-Null
     } 'No se pudo generar el manifiesto del release'
 
-    $archiveName = "envaperu-pesaje-$Version-win-x64.zip"
-    $archivePath = Join-Path $outputRoot $archiveName
-    if (Test-Path -LiteralPath $archivePath) {
-        Remove-Item -LiteralPath $archivePath -Force
-    }
     Compress-Archive -Path (Join-Path $stagingRoot '*') -DestinationPath $archivePath -CompressionLevel Optimal
     $sha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     Set-Content -LiteralPath "$archivePath.sha256" -Value "$sha256  $archiveName" -Encoding ascii

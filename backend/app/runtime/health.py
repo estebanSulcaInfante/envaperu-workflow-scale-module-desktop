@@ -12,6 +12,7 @@ def live():
             "status": "LIVE",
             "profile": current_app.config.get("RUNTIME_PROFILE", "DEVELOPMENT"),
             "server": current_app.config.get("RUNTIME_SERVER", "werkzeug"),
+            "app_version": current_app.config.get("STATION_APP_VERSION"),
             "debug": bool(current_app.debug),
             "reloader": bool(current_app.config.get("USE_RELOADER", False)),
         }
@@ -107,4 +108,9 @@ def ready():
             "last_error_code": None,
             "isolated": True,
         }
-    return jsonify({"status": "READY", "issues": [], "central": central})
+    return jsonify({
+        "status": "READY",
+        "issues": [],
+        "app_version": current_app.config.get("STATION_APP_VERSION"),
+        "central": central,
+    })

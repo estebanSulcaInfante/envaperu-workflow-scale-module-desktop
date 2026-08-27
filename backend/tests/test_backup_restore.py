@@ -12,10 +12,12 @@ from app.storage.backup import (
     BackupService,
     BackupStationMismatch,
     BackupVerificationError,
+    compare_operational_state,
+    inspect_database,
 )
 from app.runtime.single_instance import StationMutex
 from station_storage import STATION_ACTIVE_EXIT_CODE, main as storage_main
-from station_storage import STORAGE_ERROR_EXIT_CODE
+from station_storage import OPERATIONAL_DELTA_EXIT_CODE, STORAGE_ERROR_EXIT_CODE
 
 
 def _database_uri(path):
@@ -80,6 +82,135 @@ def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_logical_fingerprint_detects_committed_wal_only_update(tmp_path):
+    database_path = tmp_path / "wal-evidence.db"
+    writer = sqlite3.connect(database_path)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE evidence (id INTEGER PRIMARY KEY, value TEXT)")
+        writer.execute("INSERT INTO evidence (id, value) VALUES (1, 'before')")
+        writer.commit()
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+        before = inspect_database(database_path)
+        writer.execute("UPDATE evidence SET value = 'after' WHERE id = 1")
+        writer.commit()
+        after = inspect_database(database_path)
+
+        assert before.sha256 == after.sha256
+        assert before.table_counts == after.table_counts
+        assert before.max_ids == after.max_ids
+        assert before.logical_sha256 != after.logical_sha256
+    finally:
+        writer.close()
+
+
+def test_operational_fingerprints_detect_updates_without_count_deltas(tmp_path):
+    station_id = "PESAJE-ROLLBACK-GUARD-01"
+    database_path = tmp_path / "data" / "pesajes.db"
+    backup_dir = tmp_path / "backups"
+    _create_database(database_path, backup_dir, station_id)
+    with closing(sqlite3.connect(database_path)) as connection, connection:
+        connection.execute(
+            "INSERT INTO print_attempts "
+            "(id, pesaje_id, attempted_at_utc, result) "
+            "VALUES (1, 7, '2026-08-27 12:00:00', 'PENDING')"
+        )
+        connection.execute(
+            "INSERT INTO pesaje_correction_requests "
+            "(id, request_id, request_payload_hash, pesaje_id, requested_at_utc, "
+            "requested_by, action, reason, proposed_changes_json, "
+            "original_snapshot_json, source_classification, status) "
+            "VALUES (1, ?, ?, 7, '2026-08-27 12:01:00', 'qa', 'CORRECT', "
+            "'test', '{}', '{}', 'LOCAL_CAPTURE', 'PENDING_LOCAL_REVIEW')",
+            ("11111111-1111-4111-8111-111111111111", "a" * 64),
+        )
+        connection.execute(
+            "INSERT INTO scm_label_print_attempt "
+            "(id, print_job_id, label_id, payload_hash, attempted_at_utc, result) "
+            "VALUES (1, ?, ?, ?, '2026-08-27 12:02:00', 'PENDING')",
+            (
+                "22222222-2222-4222-8222-222222222222",
+                "33333333-3333-4333-8333-333333333333",
+                "b" * 64,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO correlativo_cache "
+            "(correlativo, fecha_reserva, usado, anulado) "
+            "VALUES (9001, '2026-08-27 12:03:00', 0, 0)"
+        )
+        connection.execute(
+            "INSERT INTO molde_piezas_cache "
+            "(id, molde_codigo, pieza_sku, updated_at) "
+            "VALUES (1, 'M-01', 'P-01', '2026-08-27 12:04:00')"
+        )
+        connection.execute(
+            "INSERT INTO ops_cerradas "
+            "(id, nro_op, fecha_cierre) "
+            "VALUES (1, 'OP-01', '2026-08-27 12:05:00')"
+        )
+
+    baseline = BackupService(
+        database_path,
+        backup_dir,
+        station_id,
+    ).create_backup(reason="pre-validation")
+    reference = inspect_database(baseline.path)
+
+    with closing(sqlite3.connect(database_path)) as connection, connection:
+        connection.execute(
+            "UPDATE pesajes SET sincronizado = 1 WHERE id = 7"
+        )
+        connection.execute(
+            "UPDATE print_attempts SET result = 'SUCCEEDED' WHERE id = 1"
+        )
+        connection.execute(
+            "UPDATE pesaje_correction_requests SET status = 'REQUIRES_CENTRAL_REVIEW' "
+            "WHERE id = 1"
+        )
+        connection.execute(
+            "UPDATE scm_label_print_attempt SET result = 'IMPRESA' WHERE id = 1"
+        )
+        connection.execute(
+            "UPDATE correlativo_cache SET usado = 1 WHERE correlativo = 9001"
+        )
+        connection.execute(
+            "UPDATE molde_piezas_cache SET pieza_sku = 'P-02' WHERE id = 1"
+        )
+        connection.execute(
+            "UPDATE ops_cerradas SET motivo = 'turno' WHERE id = 1"
+        )
+
+    current = inspect_database(database_path)
+    deltas = compare_operational_state(current, reference)
+
+    assert current.table_counts == reference.table_counts
+    assert current.max_ids == reference.max_ids
+    assert set(deltas) == {
+        "pesajes",
+        "correlativo_cache",
+        "molde_piezas_cache",
+        "ops_cerradas",
+        "print_attempts",
+        "pesaje_correction_requests",
+        "scm_label_print_attempt",
+    }
+
+    exit_code = storage_main(
+        [
+            "--data-root",
+            str(tmp_path),
+            "--station-id",
+            station_id,
+            "compare-operational",
+            str(baseline.path),
+        ]
+    )
+    assert exit_code == OPERATIONAL_DELTA_EXIT_CODE
+
+
 def test_backup_has_hash_manifest_integrity_and_default_retention(tmp_path):
     station_id = "PESAJE-PLANTA-01"
     database_path = tmp_path / "data" / "pesajes.db"
@@ -137,6 +268,19 @@ def test_restore_validates_copy_then_preserves_replaced_database(tmp_path):
     database_path = tmp_path / "data" / "pesajes.db"
     backup_dir = tmp_path / "backups"
     _create_database(database_path, backup_dir, station_id)
+    with closing(sqlite3.connect(database_path)) as connection, connection:
+        connection.execute(
+            "INSERT INTO scm_label_print_attempt "
+            "(print_job_id, label_id, payload_hash, attempted_at_utc, result) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                "a" * 64,
+                "2026-08-27 12:00:00",
+                "IMPRESA",
+            ),
+        )
     service = BackupService(database_path, backup_dir, station_id)
     record = service.create_backup(reason="manual")
 
@@ -153,6 +297,7 @@ def test_restore_validates_copy_then_preserves_replaced_database(tmp_path):
     assert result.incident_path.exists()
     assert _read_weight(result.incident_path) == 99.0
     assert result.table_counts["pesajes"] == 1
+    assert result.table_counts["scm_label_print_attempt"] == 1
     assert result.max_ids["pesajes"] == 7
 
 

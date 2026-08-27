@@ -15,7 +15,10 @@ from app.services.central_api_client import (
     CentralApiError,
     normalize_central_origin,
 )
-from app.services.monitoring_service import MonitoringService
+from app.services.monitoring_service import (
+    MonitoringService,
+    initialize_station_monitoring,
+)
 from app.runtime.token_store import StationTokenStore
 
 
@@ -209,6 +212,21 @@ def _canonical_contract_hashes(backend_root):
         if (stripped := line.strip()) and not stripped.startswith("#")
         for digest, relative in [stripped.split(None, 1)]
     }
+
+
+def test_station_boot_never_inherits_stale_online_state(monitoring_app):
+    with monitoring_app.app_context():
+        runtime = StationRuntimeState.query.one()
+        previous_boot_id = runtime.boot_id
+        runtime.communication_state = "ONLINE"
+        runtime.last_error_code = None
+        db.session.commit()
+
+        _identity, restarted = initialize_station_monitoring(monitoring_app)
+
+        assert restarted.boot_id != previous_boot_id
+        assert restarted.communication_state == "CENTRAL_NOT_PROVISIONED"
+        assert restarted.last_error_code is None
 
 
 def test_contract_copies_match_pinned_canonical_hashes():

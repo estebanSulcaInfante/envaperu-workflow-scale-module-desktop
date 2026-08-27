@@ -5,7 +5,12 @@ import sys
 from pathlib import Path
 
 from app.runtime.single_instance import InstanceAlreadyRunning, StationMutex
-from app.storage.backup import BackupError, BackupService, inspect_database
+from app.storage.backup import (
+    BackupError,
+    BackupService,
+    compare_operational_state,
+    inspect_database,
+)
 from app.storage.migrations import SchemaMigrationError, migrate_sqlite_database
 from app.storage.paths import resolve_station_storage
 
@@ -13,6 +18,7 @@ from app.storage.paths import resolve_station_storage
 DEFAULT_STATION_ID = "PESAJE-PLANTA-01"
 STATION_ACTIVE_EXIT_CODE = 6
 STORAGE_ERROR_EXIT_CODE = 7
+OPERATIONAL_DELTA_EXIT_CODE = 8
 
 
 def _parser():
@@ -49,6 +55,16 @@ def _parser():
 
     verify = commands.add_parser("verify", help="Verify backup hash and integrity")
     verify.add_argument("backup_path", type=Path)
+
+    commands.add_parser(
+        "inspect",
+        help="Inspect the stopped authoritative database",
+    )
+    compare = commands.add_parser(
+        "compare-operational",
+        help="Reject rollback when operational facts differ from a baseline",
+    )
+    compare.add_argument("reference_database", type=Path)
 
     commands.add_parser("migrate", help="Apply pending versioned migrations")
 
@@ -90,10 +106,12 @@ def _inspection_payload(inspection):
         "path": str(inspection.path),
         "size_bytes": inspection.size_bytes,
         "sha256": inspection.sha256,
+        "logical_sha256": inspection.logical_sha256,
         "integrity_check": inspection.integrity_check,
         "schema_version": inspection.schema_version,
         "table_counts": inspection.table_counts,
         "max_ids": inspection.max_ids,
+        "operational_hashes": inspection.operational_hashes,
     }
 
 
@@ -136,6 +154,30 @@ def main(argv=None):
             )
             return STATION_ACTIVE_EXIT_CODE
 
+        if args.command == "inspect":
+            inspection = inspect_database(database_path)
+            _print_result("DATABASE_INSPECTED", database=_inspection_payload(inspection))
+            return 0
+
+        if args.command == "compare-operational":
+            current = inspect_database(database_path)
+            reference = inspect_database(args.reference_database)
+            deltas = compare_operational_state(current, reference)
+            if deltas:
+                _print_result(
+                    "OPERATIONAL_DELTA",
+                    deltas=deltas,
+                    current=_inspection_payload(current),
+                    reference=_inspection_payload(reference),
+                )
+                return OPERATIONAL_DELTA_EXIT_CODE
+            _print_result(
+                "OPERATIONAL_STATE_MATCH",
+                current=_inspection_payload(current),
+                reference=_inspection_payload(reference),
+            )
+            return 0
+
         if args.command == "migrate":
             report = migrate_sqlite_database(
                 database_path=database_path,
@@ -173,9 +215,22 @@ def main(argv=None):
                         "Existing destination is not an EnvaPeru weighing database; "
                         "it will not be replaced"
                     )
+                # Una inicialización accidental puede haber creado únicamente
+                # identidad/runtime. Eso no equivale a hechos operativos, pero
+                # cualquier captura, impresión o corrección sí debe bloquear el
+                # reemplazo automático.
+                replace_blocking_tables = {
+                    "pesajes",
+                    "correlativo_cache",
+                    "molde_piezas_cache",
+                    "ops_cerradas",
+                    "print_attempts",
+                    "pesaje_correction_requests",
+                    "scm_label_print_attempt",
+                }
                 has_business_data = any(
-                    count > 0
-                    for count in destination_before.table_counts.values()
+                    destination_before.table_counts.get(table, 0) > 0
+                    for table in replace_blocking_tables
                 )
                 if has_business_data and not args.replace_existing:
                     raise BackupError(
@@ -204,6 +259,8 @@ def main(argv=None):
                 source_backup_inspection.table_counts
                 != source_before.table_counts
                 or source_backup_inspection.max_ids != source_before.max_ids
+                or source_backup_inspection.logical_sha256
+                != source_before.logical_sha256
             ):
                 raise BackupError(
                     "Verified source backup does not match legacy business metrics; "

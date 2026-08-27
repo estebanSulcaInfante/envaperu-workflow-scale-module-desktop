@@ -146,6 +146,21 @@ El rollback directo solo es valido antes de capturar produccion en el release. S
 - obtener el SHA-256 también por el canal de soporte y compararlo;
 - no copiar repositorios, `node_modules`, `.env`, bases SQLite ni tokens dentro del paquete.
 
+Verificar la configuración persistente del launcher en
+`C:\ProgramData\EnvaPeru\Pesaje\config\station.env`. Para el piloto SCM debe
+contener, como mínimo:
+
+```dotenv
+CENTRAL_ORIGIN=https://envaperu-scm-api.onrender.com
+ALLOW_INSECURE_CENTRAL=false
+SCM_OPERATOR_ID=123
+```
+
+`SCM_OPERATOR_ID` debe ser el ID numérico positivo del trabajador autorizado
+en Central. No usar el nombre del operario ni un ID provisional. El token de la
+misma estación debe existir cifrado con DPAPI bajo
+`ProgramData\secrets\station-token.dpapi`.
+
 ### 6.2. Ejecutar la actualización
 
 Abrir PowerShell como administrador:
@@ -167,9 +182,10 @@ El actualizador ejecuta en orden:
 6. detiene ordenadamente el release activo;
 7. cambia `active-release.json`;
 8. inicia la versión nueva y espera `READY`;
-9. si falla, recupera puntero, SQLite y runtime anteriores.
+9. valida identidad central, `CENTRAL_ORIGIN`, token DPAPI y `SCM_OPERATOR_ID`;
+10. si falla, recupera puntero, SQLite y runtime anteriores.
 
-No continuar si la salida no termina en:
+No continuar si la salida no contiene `PILOT_CONFIG_READY` y no termina en:
 
 ```text
 UPDATE_COMPLETE version=<version> backup=<ruta>
@@ -184,6 +200,12 @@ Get-Content C:\ProgramData\EnvaPeru\Pesaje\run\active-release.json
 ```
 
 Confirmar versión, `READY`, balanza, impresora, Central y el historial de la sesión. La primera etiqueta del release se imprime como prueba controlada, no como producción.
+
+Si la impresión queda `IMPRESA` con acuse pendiente, usar **Reanudar acuse
+central**: el ledger local impide enviar otra copia. Si queda
+`EMISION_INCIERTA` o `PARCIAL`, no reintentar: separar el material y gestionar
+en Central un reemplazo supervisado con motivo y auditoría. La estación no
+ofrece un override local para ese estado.
 
 En la primera instalación versionada, registrar una vez el arranque estable:
 

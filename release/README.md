@@ -26,13 +26,45 @@ El resultado contiene el ZIP y su `.sha256`. El frontend ya está compilado y el
 
 Ejecutar PowerShell como administrador, fuera del horario de pesaje:
 
+Antes de la primera activación SCM, completar
+`C:\ProgramData\EnvaPeru\Pesaje\config\station.env`:
+
+```dotenv
+CENTRAL_ORIGIN=https://envaperu-scm-api.onrender.com
+ALLOW_INSECURE_CENTRAL=false
+SCM_OPERATOR_ID=123
+```
+
+`SCM_OPERATOR_ID` es el ID numérico positivo del trabajador autorizado para
+el piloto; no es un nombre ni un valor ficticio. Provisionar además el token
+de la misma estación, sin guardarlo en `station.env`:
+
+```powershell
+& 'C:\Program Files\EnvaPeru\Pesaje\releases\<version>\backend\venv\Scripts\python.exe' `
+  'C:\Program Files\EnvaPeru\Pesaje\releases\<version>\backend\station_control.py' `
+  provision-token --data-root C:\ProgramData\EnvaPeru\Pesaje
+```
+
 ```powershell
 .\release\Update-Station.ps1 `
   -PackagePath C:\Soporte\envaperu-pesaje-1.2.0-win-x64.zip `
   -ExpectedSha256 <sha256-comunicado-por-soporte>
 ```
 
-La salida terminal válida es `UPDATE_COMPLETE`. `UPDATE_STAGED` solo se usa en pruebas o cuando soporte difiere conscientemente el arranque.
+El actualizador valida identidad, origen central, token DPAPI y
+`SCM_OPERATOR_ID` después de `READY`. Solo `PILOT_CONFIG_READY` seguido de
+`UPDATE_COMPLETE` acredita una actualización operativa. Si falta algún dato,
+la actualización falla y aplica rollback; `UPDATE_STAGED` solo se usa en pruebas
+o cuando soporte difiere conscientemente el arranque.
+
+## Incidente de impresión
+
+- `FALLIDA_SIN_EMISION`: el spooler no aceptó bytes; el retry normal es seguro.
+- `IMPRESA` con acuse pendiente: usar **Reanudar acuse central**; esta acción no
+  vuelve a imprimir.
+- `EMISION_INCIERTA` o `PARCIAL`: no usar un retry genérico. Separar el material,
+  conciliar el sticker y tramitar un reemplazo supervisado con motivo y auditoría
+  en Central. Esta versión de la estación no incluye un override local.
 
 Después de la primera instalación versionada, registrar una vez el launcher estable al iniciar sesión:
 

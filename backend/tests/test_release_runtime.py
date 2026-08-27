@@ -288,6 +288,20 @@ def test_windows_launcher_uses_single_release_runtime():
     assert "use_reloader=False" in development_source
 
 
+def test_update_only_completes_after_pilot_central_preflight():
+    update_source = (
+        BACKEND_DIR.parent / "release" / "Update-Station.ps1"
+    ).read_text(encoding="utf-8")
+
+    preflight = update_source.index("validate-pilot-config")
+    completion = update_source.index("UPDATE_COMPLETE")
+    assert preflight < completion
+    assert "PILOT_CONFIG_READY" in update_source
+    assert "SCM_OPERATOR_ID" in (
+        BACKEND_DIR.parent / "release" / "README.md"
+    ).read_text(encoding="utf-8")
+
+
 def test_windows_installer_never_opens_legacy_database():
     installer_source = (BACKEND_DIR.parent / "install-windows.bat").read_text(
         encoding="utf-8"

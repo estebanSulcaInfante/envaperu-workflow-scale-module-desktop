@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -49,25 +50,34 @@ def _pesaje(weight, hour, op, ot, mold, color, machine, shift="DIURNO"):
     )
 
 
-def test_progress_contract_copy_matches_canonical():
+def test_progress_contract_copy_matches_pinned_canonical_hash():
     backend_root = Path(__file__).resolve().parents[1]
-    workspace_root = Path(__file__).resolve().parents[3]
+    lines = (
+        backend_root / "contracts" / "canonical.semantic-sha256"
+    ).read_text(encoding="utf-8").splitlines()
+    expected_hashes = {
+        relative: digest
+        for line in lines
+        if (stripped := line.strip()) and not stripped.startswith("#")
+        for digest, relative in [stripped.split(None, 1)]
+    }
     for filename in ("contract.schema.json", "examples.json"):
-        canonical = (
-            workspace_root
-            / "contracts"
-            / "station-production-progress-v1"
-            / filename
-        )
         consumer = (
             backend_root
             / "contracts"
             / "station-production-progress-v1"
             / filename
         )
-        assert hashlib.sha256(canonical.read_bytes()).digest() == hashlib.sha256(
-            consumer.read_bytes()
-        ).digest()
+        canonical_json = json.dumps(
+            json.loads(consumer.read_text(encoding="utf-8")),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        relative = f"station-production-progress-v1/{filename}"
+        assert hashlib.sha256(canonical_json).hexdigest() == (
+            expected_hashes[relative]
+        )
 
 
 def test_snapshot_groups_two_orders_and_is_stable_until_local_data_changes(

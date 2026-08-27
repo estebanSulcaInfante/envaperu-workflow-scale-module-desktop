@@ -189,6 +189,15 @@ try {
     if (-not (Wait-StationState -Ready $true -TimeoutSeconds 45)) {
         throw 'El nuevo release no alcanzo readiness.'
     }
+    $pilotPreflightOutput = Invoke-CheckedPython $newPython @(
+        (Join-Path $releasePath 'backend\station_control.py'),
+        'validate-pilot-config', '--data-root', $DataRoot
+    ) 'La configuracion central minima del piloto es invalida'
+    $pilotPreflight = Get-LastJson $pilotPreflightOutput
+    if (-not [bool]$pilotPreflight.valid) {
+        throw 'La configuracion central minima del piloto es invalida.'
+    }
+    Write-Output "PILOT_CONFIG_READY station_id=$($pilotPreflight.station_id) operator_id=$($pilotPreflight.scm_operator_id)"
     $launcherRoot = Join-Path $InstallRoot 'launcher'
     New-Item -ItemType Directory -Path $launcherRoot -Force | Out-Null
     @(

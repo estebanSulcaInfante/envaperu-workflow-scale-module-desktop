@@ -1,5 +1,6 @@
 import uuid
 import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -188,9 +189,31 @@ def _component_provider():
     }
 
 
-def test_contract_copies_match_workspace_canonical():
+def _semantic_json_sha256(path):
+    canonical = json.dumps(
+        json.loads(path.read_text(encoding="utf-8")),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _canonical_contract_hashes(backend_root):
+    lines = (
+        backend_root / "contracts" / "canonical.semantic-sha256"
+    ).read_text(encoding="utf-8").splitlines()
+    return {
+        relative: digest
+        for line in lines
+        if (stripped := line.strip()) and not stripped.startswith("#")
+        for digest, relative in [stripped.split(None, 1)]
+    }
+
+
+def test_contract_copies_match_pinned_canonical_hashes():
     backend_root = Path(__file__).resolve().parents[1]
-    workspace_root = Path(__file__).resolve().parents[3]
+    expected_hashes = _canonical_contract_hashes(backend_root)
     for contract in (
         "station-capabilities-v1",
         "station-heartbeat-v1",
@@ -199,11 +222,9 @@ def test_contract_copies_match_workspace_canonical():
         "station-legacy-continuity-v1",
     ):
         for filename in ("contract.schema.json", "examples.json"):
-            canonical = workspace_root / "contracts" / contract / filename
             consumer = backend_root / "contracts" / contract / filename
-            assert hashlib.sha256(canonical.read_bytes()).digest() == hashlib.sha256(
-                consumer.read_bytes()
-            ).digest()
+            relative = f"{contract}/{filename}"
+            assert _semantic_json_sha256(consumer) == expected_hashes[relative]
 
 
 def test_station_token_store_never_writes_plaintext(tmp_path, monkeypatch):

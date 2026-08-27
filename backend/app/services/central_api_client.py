@@ -140,9 +140,22 @@ class CentralApiClient:
 
         if response.status_code != 200:
             retry_after = response.headers.get("Retry-After")
+            central_message = None
+            try:
+                error_payload = response.json()
+                if isinstance(error_payload, dict):
+                    nested = error_payload.get("error")
+                    if isinstance(nested, dict):
+                        central_message = nested.get("message")
+                    if not central_message:
+                        central_message = error_payload.get("message")
+            except (ValueError, TypeError):
+                central_message = None
             raise CentralApiError(
                 self._state_for_status(response.status_code, operation),
-                f"Central rejected {operation} with HTTP {response.status_code}",
+                str(central_message or (
+                    f"Central rejected {operation} with HTTP {response.status_code}"
+                )),
                 retry_after=retry_after,
             )
         try:
@@ -223,6 +236,15 @@ class CentralApiClient:
             "POST",
             "/api/integration/v1/manga-weighings",
             operation="scm_manga_weighing",
+            payload=payload,
+            idempotency_key=operation_id,
+        )
+
+    def record_scm_manga_weighing_control(self, operation_id, payload):
+        return self._request(
+            "POST",
+            "/api/integration/v1/manga-weighing-controls",
+            operation="scm_manga_weighing_control",
             payload=payload,
             idempotency_key=operation_id,
         )

@@ -30,7 +30,11 @@ export default function ScmWeighing({
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [simulatedWeight, setSimulatedWeight] = useState('10.100');
+  const [controlCount, setControlCount] = useState('');
+  const [controlReason, setControlReason] = useState('CAMBIO_TURNO');
+  const [controlResult, setControlResult] = useState(null);
   const operationIdRef = useRef(null);
+  const controlOperationIdRef = useRef(null);
   const online = centralState === 'ONLINE';
   const centralAvailable = online || simulationEnabled || portfolioDemoMode;
   const otContext = context?.manga?.ot;
@@ -40,13 +44,27 @@ export default function ScmWeighing({
     || 'Sin asignación vigente';
   const tare = Number(context?.manga?.tara_nominal_kg || 0);
   const net = Math.max(0, Number(peso || 0) - tare);
+  const validControl = Number(controlCount) > 0 && controlReason.trim().length > 0;
   const canConfirm = Boolean(
     context?.can_weigh
+      && !result
+      && !controlResult
       && listening
       && centralAvailable
       && Number(peso) > tare
       && !busy
       && !context?.demo_only,
+  );
+  const canRecordControl = Boolean(
+    context?.can_register_shift_cut
+      && !result
+      && !controlResult
+      && listening
+      && centralAvailable
+      && Number(peso) > tare
+      && !busy
+      && !context?.demo_only
+      && validControl,
   );
 
   const resolveQr = async (requestedValue = qr) => {
@@ -58,7 +76,11 @@ export default function ScmWeighing({
     try {
       const { data } = await scmWeighingApi.resolve(requestedQr.trim());
       setContext(data);
+      setControlCount('');
+      setControlReason('CAMBIO_TURNO');
+      setControlResult(null);
       operationIdRef.current = null;
+      controlOperationIdRef.current = null;
       setQr('');
     } catch (requestError) {
       setContext(null);
@@ -76,6 +98,7 @@ export default function ScmWeighing({
     if (!operationIdRef.current) operationIdRef.current = newOperationId();
     setBusy(true);
     setError('');
+    setControlResult(null);
     try {
       const { data } = await scmWeighingApi.confirm(
         context.scanned_label_id,
@@ -85,6 +108,7 @@ export default function ScmWeighing({
       setContext((previous) => ({
         ...previous,
         can_weigh: false,
+        can_register_shift_cut: false,
         manga: {
           ...previous.manga,
           estado: data.confirmed.weighing.estado_manga,
@@ -94,6 +118,45 @@ export default function ScmWeighing({
       setError(
         requestError.response?.data?.message
           || 'No se confirmó el pesaje. F2 reutilizará la misma operación.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recordControl = async () => {
+    if (!canRecordControl) return;
+    if (!controlOperationIdRef.current) {
+      controlOperationIdRef.current = newOperationId();
+    }
+    setBusy(true);
+    setError('');
+    setResult(null);
+    try {
+      const { data } = await scmWeighingApi.control(
+        context.scanned_label_id,
+        controlOperationIdRef.current,
+        controlCount,
+        controlReason.trim(),
+      );
+      setControlResult(data);
+      setContext((previous) => ({
+        ...previous,
+        can_weigh: false,
+        can_register_shift_cut: false,
+        manga: {
+          ...previous.manga,
+          ...(data.manga || {}),
+          estado: data.manga?.estado || 'CONTINUIDAD_PENDIENTE',
+        },
+      }));
+      setControlCount('');
+      setControlReason('CAMBIO_TURNO');
+      controlOperationIdRef.current = null;
+    } catch (requestError) {
+      setError(
+        requestError.response?.data?.message
+          || 'No se registró el corte. El reintento reutilizará la misma operación.',
       );
     } finally {
       setBusy(false);
@@ -137,10 +200,11 @@ export default function ScmWeighing({
     if (!centralAvailable) return 'Piloto SCM bloqueado: central sin conexión';
     if (!listening) return 'Conecte la balanza para capturar una lectura NET';
     if (!context) return 'Escanee el QR de PREPESAJE';
+    if (controlResult) return 'Corte registrado · manga pendiente de continuidad';
     if (!context.can_weigh) return 'La manga ya no admite otro pesaje normal';
     if (Number(peso) <= tare) return 'Esperando peso bruto estable';
     return 'Lectura lista · Presione F2';
-  }, [centralAvailable, listening, context, peso, tare]);
+  }, [centralAvailable, listening, context, controlResult, peso, tare]);
 
   return (
     <div className="scm-weighing-layout">
@@ -268,6 +332,54 @@ export default function ScmWeighing({
             <div><span>Tara</span><strong>{tare.toFixed(3)} kg</strong></div>
             <div><span>Neto físico</span><strong>{net.toFixed(3)} kg</strong></div>
           </div>
+          {(context?.can_register_shift_cut || controlResult)
+            && context?.manga?.tipo === 'NORMAL' && !context?.demo_only && (
+            <div className="scm-simulation-box">
+              <strong>Corte de turno · la manga continúa abierta</strong>
+              <span>
+                Registra el peso y conteo acumulados. No confirma producción, no crea inventario y no imprime.
+              </span>
+              <div className="scm-scan-row">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={controlCount}
+                  onChange={(event) => {
+                    setControlCount(event.target.value);
+                    controlOperationIdRef.current = null;
+                  }}
+                  placeholder="Conteo acumulado"
+                  aria-label="Conteo acumulado de unidades"
+                />
+                <input
+                  value={controlReason}
+                  onChange={(event) => {
+                    setControlReason(event.target.value);
+                    controlOperationIdRef.current = null;
+                  }}
+                  placeholder="Motivo del control"
+                  aria-label="Motivo del corte de turno"
+                />
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={!canRecordControl}
+                onClick={recordControl}
+              >
+                {busy ? 'Registrando corte…' : 'Registrar corte de turno — continúa abierta'}
+              </button>
+              {controlResult && (
+                <div className="scm-message success">
+                  <strong>Control de turno registrado</strong>
+                  <span>
+                    Manga abierta · QR preservado · producción confirmada 0 · sin inventario ni impresión.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
           {simulationEnabled && (
             <div className="scm-simulation-box">
               <strong>
@@ -317,6 +429,25 @@ export default function ScmWeighing({
                 Neto {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
                 Producción OT {result.confirmed.weighing.kg_produccion_ot} kg
               </span>
+              {result.confirmed.weighing.cantidad_confirmada != null && (
+                <span>
+                  Cantidad final {result.confirmed.weighing.cantidad_confirmada} un
+                </span>
+              )}
+              {result.confirmed.atribucion_turnos?.length > 0 && (
+                <div className="scm-shift-attribution">
+                  <strong>Atribución por turno</strong>
+                  <ul>
+                    {result.confirmed.atribucion_turnos.map((segment) => (
+                      <li key={segment.id}>
+                        {[segment.maquinista, segment.ot_codigo]
+                          .filter(Boolean).join(' · ')}: {' '}
+                        {segment.cantidad_atribuida_un} un
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <span>Etiqueta final: {printState}</span>
               <small>
                 Estado inventario: NO_INGRESADA · pendiente de recepción

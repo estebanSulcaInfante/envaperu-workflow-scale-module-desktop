@@ -117,10 +117,23 @@ export const scmPrelabelsApi = {
 export const scmWeighingApi = {
   resolve: (qr) =>
     api.post('/local/v1/scm/weighing/resolve', { qr }),
-  confirm: (labelId, operationId, motivoDesfase = null) =>
+  control: (labelId, operationId, conteoAcumuladoUn, motivo = 'CAMBIO_TURNO') =>
+    api.post(
+      '/local/v1/scm/weighing/controls',
+      {
+        label_id: labelId,
+        conteo_acumulado_un: conteoAcumuladoUn,
+        motivo,
+      },
+      { headers: { 'Idempotency-Key': operationId } },
+    ),
+  confirm: (labelId, operationId, options = {}) =>
     api.post(
       '/local/v1/scm/weighing/confirm',
-      { label_id: labelId, motivo_desfase: motivoDesfase },
+      {
+        label_id: labelId,
+        motivo_desfase: options.motivoDesfase || null,
+      },
       { headers: { 'Idempotency-Key': operationId } },
     ),
   recover: (operationId) =>

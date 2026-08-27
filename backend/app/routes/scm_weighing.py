@@ -41,6 +41,21 @@ def confirm_scm_weighing():
         return _error(exc)
 
 
+@scm_weighing_bp.post("/scm/weighing/controls")
+def record_scm_weighing_control():
+    data = request.get_json(silent=True) or {}
+    operation_id = request.headers.get("Idempotency-Key")
+    try:
+        return jsonify(get_scm_weighing_service().record_control(
+            operation_id=operation_id,
+            label_id=data.get("label_id"),
+            conteo_acumulado_un=data.get("conteo_acumulado_un"),
+            motivo=data.get("motivo") or "CAMBIO_TURNO",
+        ))
+    except (ScmWeighingLocalError, CentralApiError) as exc:
+        return _error(exc)
+
+
 @scm_weighing_bp.get("/scm/weighing/operations/<uuid:operation_id>")
 def recover_scm_weighing(operation_id):
     try:

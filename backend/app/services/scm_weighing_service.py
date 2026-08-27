@@ -1,4 +1,4 @@
-"""Connected F2 coordinator. It never persists an offline SCM weighing."""
+"""Connected SCM weighing coordinator; it never persists offline weighings."""
 
 import json
 import uuid
@@ -7,10 +7,11 @@ from decimal import Decimal
 
 from flask import current_app
 
+from app.models.scm_label_print_attempt import ScmLabelPrintAttempt
 from app.models.station_identity import StationIdentity
 from app.routes.balanza import get_last_scale_snapshot
 from app.runtime.token_store import read_configured_station_token
-from app.services.central_api_client import CentralApiClient
+from app.services.central_api_client import CentralApiClient, CentralApiError
 from app.services.scm_prelabel_service import ScmPrelabelService
 
 
@@ -143,7 +144,74 @@ class ScmWeighingService:
         result["scanned_label_id"] = label_id
         return result
 
-    def confirm(self, *, operation_id, label_id, motivo_desfase=None):
+    @staticmethod
+    def _recover_completed_response(
+        client,
+        operation_id,
+        *,
+        response_key,
+        expected_manga_id=None,
+    ):
+        """Recover an accepted central operation without replaying its payload."""
+        try:
+            recovered = client.get_scm_operation(operation_id)
+        except CentralApiError as error:
+            # A 404 means either that the operation was never committed or that
+            # an older Central does not expose recovery. In both cases the
+            # caller should preserve the normal MANGA_NOT_READY response.
+            if error.state == "CENTRAL_INCOMPATIBLE":
+                return None
+            raise
+        response = recovered.get("response") if isinstance(recovered, dict) else None
+        entity = response.get(response_key) if isinstance(response, dict) else None
+        if not isinstance(entity, dict):
+            raise ScmWeighingLocalError(
+                "OPERATION_RESULT_MISMATCH",
+                "La operación recuperada no corresponde a este flujo de pesaje.",
+                status=409,
+            )
+        recovered_manga_id = entity.get("manga_id")
+        if (
+            expected_manga_id
+            and recovered_manga_id
+            and str(recovered_manga_id) != str(expected_manga_id)
+        ):
+            raise ScmWeighingLocalError(
+                "OPERATION_RESULT_MISMATCH",
+                "La operación recuperada pertenece a otra manga.",
+                status=409,
+            )
+        return response
+
+    @staticmethod
+    def _terminal_print_replay(operation_id, print_job_id):
+        """Return a terminal local print result that must never auto-reprint."""
+        attempts = ScmLabelPrintAttempt.query.filter_by(
+            operation_id=operation_id,
+            print_job_id=print_job_id,
+        ).order_by(ScmLabelPrintAttempt.id.desc()).all()
+        states = {attempt.result for attempt in attempts}
+        if "EMISION_INCIERTA" in states:
+            return {
+                "result": "EMISION_INCIERTA",
+                "recovered": True,
+                "auto_reprint_blocked": True,
+            }
+        if states and states == {"IMPRESA"}:
+            return {
+                "result": "IMPRESA",
+                "recovered": True,
+                "already_printed": True,
+            }
+        return None
+
+    def confirm(
+        self,
+        *,
+        operation_id,
+        label_id,
+        motivo_desfase=None,
+    ):
         try:
             operation_id = str(uuid.UUID(str(operation_id)))
             label_id = str(uuid.UUID(str(label_id)))
@@ -153,12 +221,132 @@ class ScmWeighingService:
             ) from error
         client = self.client or self._central_client()
         context = client.resolve_scm_manga_label(label_id)
+        manga_id = context.get("manga", {}).get("public_id")
+        recovered_operation = False
         if not context.get("can_weigh"):
-            raise ScmWeighingLocalError(
-                "MANGA_NOT_READY",
-                "Central indica que la manga no esta lista para pesarse.",
-                status=409,
+            confirmed = self._recover_completed_response(
+                client,
+                operation_id,
+                response_key="weighing",
+                expected_manga_id=manga_id,
             )
+            if confirmed is None:
+                raise ScmWeighingLocalError(
+                    "MANGA_NOT_READY",
+                    "Central indica que la manga no esta lista para pesarse.",
+                    status=409,
+                )
+            recovered_operation = True
+        else:
+            snapshot = (
+                self.scale_snapshot()
+                if self.scale_snapshot is not None
+                else get_last_scale_snapshot()
+            )
+            if snapshot.get("peso_kg") is None or not snapshot.get("stable"):
+                raise ScmWeighingLocalError(
+                    "SCALE_READING_UNSTABLE",
+                    "F2 requiere una lectura NET estable de la balanza.",
+                )
+            gross = Decimal(str(snapshot["peso_kg"])).quantize(Decimal("0.001"))
+            payload = {
+                "label_id": label_id,
+                "capture_id": operation_id,
+                "peso_bruto_kg": format(gross, "f"),
+                "tara_kg": context["manga"]["tara_nominal_kg"],
+                "tara_fuente": "TIPO_MANGA",
+                "pesada_at": datetime.now(timezone.utc).isoformat(),
+                "pesado_por_id": self._operator_id(),
+                "reading_stable": True,
+                "motivo_desfase": (motivo_desfase or "").strip() or None,
+            }
+            confirmed = client.confirm_scm_manga_weighing(
+                operation_id, payload
+            )
+        print_service = ScmPrelabelService(
+            client=client,
+            printer=self.printer,
+        )
+        print_job_id = confirmed["print_job_id"]
+        print_result = (
+            self._terminal_print_replay(operation_id, print_job_id)
+            if recovered_operation else None
+        )
+        if recovered_operation and print_result is None:
+            job = print_service.fetch(print_job_id)
+            if job.get("status") == "PRINTED":
+                print_result = {
+                    "result": "IMPRESA",
+                    "print_job": job,
+                    "recovered": True,
+                    "already_printed": True,
+                }
+            elif job.get("status") == "PARTIAL":
+                print_result = {
+                    "result": "PARCIAL",
+                    "print_job": job,
+                    "recovered": True,
+                    "auto_reprint_blocked": True,
+                }
+        if print_result is None:
+            print_result = print_service.print_job(
+                print_job_id,
+                operation_id=operation_id,
+                capture_id=operation_id,
+                manga_id=manga_id,
+            )
+        return {
+            "operation_id": operation_id,
+            "confirmed": confirmed,
+            "print_result": print_result,
+            "recovered_operation": recovered_operation,
+        }
+
+    def record_control(
+        self,
+        *,
+        operation_id,
+        label_id,
+        conteo_acumulado_un,
+        motivo="CAMBIO_TURNO",
+    ):
+        """Record an accumulated observation without closing or printing."""
+        try:
+            operation_id = str(uuid.UUID(str(operation_id)))
+            label_id = str(uuid.UUID(str(label_id)))
+        except (TypeError, ValueError, AttributeError) as error:
+            raise ScmWeighingLocalError(
+                "INVALID_UUID", "El control o la etiqueta no posee UUID valido."
+            ) from error
+
+        count = str(conteo_acumulado_un or "").strip()
+        if not count:
+            raise ScmWeighingLocalError(
+                "CONTROL_COUNT_REQUIRED",
+                "Indique el conteo acumulado de unidades para el corte.",
+            )
+        reason = str(motivo or "CAMBIO_TURNO").strip() or "CAMBIO_TURNO"
+
+        client = self.client or self._central_client()
+        context = client.resolve_scm_manga_label(label_id)
+        if not context.get("can_register_shift_cut"):
+            controlled = self._recover_completed_response(
+                client,
+                operation_id,
+                response_key="control",
+                expected_manga_id=context.get("manga", {}).get("public_id"),
+            )
+            if controlled is None:
+                raise ScmWeighingLocalError(
+                    "MANGA_NOT_READY",
+                    "Central indica que la manga no esta abierta para registrar controles.",
+                    status=409,
+                )
+            return {
+                "operation_id": operation_id,
+                **controlled,
+                "recovered_operation": True,
+            }
         snapshot = (
             self.scale_snapshot()
             if self.scale_snapshot is not None
@@ -167,7 +355,7 @@ class ScmWeighingService:
         if snapshot.get("peso_kg") is None or not snapshot.get("stable"):
             raise ScmWeighingLocalError(
                 "SCALE_READING_UNSTABLE",
-                "F2 requiere una lectura NET estable de la balanza.",
+                "El corte requiere una lectura NET estable de la balanza.",
             )
         gross = Decimal(str(snapshot["peso_kg"])).quantize(Decimal("0.001"))
         payload = {
@@ -179,26 +367,13 @@ class ScmWeighingService:
             "pesada_at": datetime.now(timezone.utc).isoformat(),
             "pesado_por_id": self._operator_id(),
             "reading_stable": True,
-            "motivo_desfase": (motivo_desfase or "").strip() or None,
+            "conteo_acumulado_un": count,
+            "motivo": reason,
         }
-        confirmed = client.confirm_scm_manga_weighing(
+        controlled = client.record_scm_manga_weighing_control(
             operation_id, payload
         )
-        print_service = ScmPrelabelService(
-            client=client,
-            printer=self.printer,
-        )
-        print_result = print_service.print_job(
-            confirmed["print_job_id"],
-            operation_id=operation_id,
-            capture_id=operation_id,
-            manga_id=context["manga"].get("public_id"),
-        )
-        return {
-            "operation_id": operation_id,
-            "confirmed": confirmed,
-            "print_result": print_result,
-        }
+        return {"operation_id": operation_id, **controlled}
 
     def recover(self, operation_id):
         try:

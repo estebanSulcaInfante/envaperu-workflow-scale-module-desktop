@@ -8,12 +8,14 @@ import ScmWeighing from './ScmWeighing';
 vi.mock('../services/api', () => ({
   scmWeighingApi: {
     resolve: vi.fn(),
+    control: vi.fn(),
     confirm: vi.fn(),
   },
 }));
 
 const context = {
   can_weigh: true,
+  can_register_shift_cut: true,
   scanned_label_id: '10000000-0000-4000-8000-000000000001',
   manga: {
     codigo: 'OP0084-OT001-M001',
@@ -56,7 +58,22 @@ describe('ScmWeighing', () => {
             estado_manga: 'PESADA',
             peso_fisico_neto_kg: '10.000',
             kg_produccion_ot: '10.000',
+            cantidad_confirmada: '50.000',
           },
+          atribucion_turnos: [
+            {
+              id: 'tramo-jose',
+              maquinista: 'Jose Quispe',
+              ot_codigo: 'OT-000001',
+              cantidad_atribuida_un: '20.000',
+            },
+            {
+              id: 'tramo-pedro',
+              maquinista: 'Pedro Ramos',
+              ot_codigo: 'OT-000002',
+              cantidad_atribuida_un: '30.000',
+            },
+          ],
         },
         print_result: { result: 'IMPRESA' },
       },
@@ -95,6 +112,12 @@ describe('ScmWeighing', () => {
     });
     expect(await screen.findByText('Pesaje central confirmado')).toBeTruthy();
     expect(screen.getByText('Etiqueta final: IMPRESA')).toBeTruthy();
+    expect(screen.getByText('Cantidad final 50.000 un')).toBeTruthy();
+    expect(screen.getByText('Jose Quispe · OT-000001: 20.000 un')).toBeTruthy();
+    expect(screen.getByText('Pedro Ramos · OT-000002: 30.000 un')).toBeTruthy();
+    expect(screen.queryByRole('button', {
+      name: 'Registrar corte de turno — continúa abierta',
+    })).toBeNull();
     expect(screen.queryByLabelText(/Operador/)).toBeNull();
     expect(screen.queryByLabelText(/Peso bruto/)).toBeNull();
   });
@@ -114,6 +137,101 @@ describe('ScmWeighing', () => {
     expect(screen.getByRole('button', {
       name: 'Confirmar pesaje (F2)',
     }).disabled).toBe(true);
+  });
+
+  it('no ofrece corte de turno cuando central solo autoriza pesaje final', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: { ...context, can_register_shift_cut: false },
+    });
+    render(
+      <ScmWeighing
+        peso={10.1}
+        listening
+        centralState="ONLINE"
+        onConnect={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('QR de manga SCM'), {
+      target: { value: '{"v":1,"type":"SCM_MANGA_LABEL"}' },
+    });
+    fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
+
+    expect(await screen.findByText('OP0084-OT001-M001')).toBeTruthy();
+    expect(screen.queryByRole('button', {
+      name: 'Registrar corte de turno — continúa abierta',
+    })).toBeNull();
+    expect(screen.getByRole('button', {
+      name: 'Confirmar pesaje (F2)',
+    }).disabled).toBe(false);
+  });
+
+  it('registra un corte acumulado sin cerrar ni imprimir y conserva F2 como cierre final', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({ data: context });
+    scmWeighingApi.control.mockResolvedValue({
+      data: {
+        control: {
+          public_id: '20000000-0000-4000-8000-000000000001',
+          conteo_acumulado_un: '37',
+          peso_fisico_neto_kg: '3.700',
+        },
+        manga: { estado: 'ABIERTA' },
+        produccion_confirmada_un: '0',
+        inventario_creado: false,
+        print_job_id: null,
+        qr_preservado: true,
+      },
+    });
+    scmWeighingApi.confirm.mockResolvedValue({
+      data: {
+        confirmed: {
+          weighing: {
+            estado_manga: 'PESADA',
+            peso_fisico_neto_kg: '3.700',
+            kg_produccion_ot: '10.000',
+          },
+        },
+        print_result: { result: 'IMPRESA' },
+      },
+    });
+    render(
+      <ScmWeighing
+        peso={3.8}
+        listening
+        centralState="ONLINE"
+        onConnect={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('QR de manga SCM'), {
+      target: { value: '{"v":1,"type":"SCM_MANGA_LABEL"}' },
+    });
+    fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
+    await screen.findByText('OP0084-OT001-M001');
+
+    fireEvent.change(screen.getByLabelText('Conteo acumulado de unidades'), {
+      target: { value: '37' },
+    });
+    fireEvent.change(screen.getByLabelText('Motivo del corte de turno'), {
+      target: { value: 'RELEVO_TURNO' },
+    });
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Registrar corte de turno — continúa abierta',
+    }));
+
+    await waitFor(() => expect(scmWeighingApi.control).toHaveBeenCalledWith(
+      context.scanned_label_id,
+      expect.any(String),
+      '37',
+      'RELEVO_TURNO',
+    ));
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+    expect(await screen.findByText('Control de turno registrado')).toBeTruthy();
+    expect(screen.getByText(/QR preservado · producción confirmada 0/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Confirmar pesaje (F2)' }).disabled).toBe(true);
+
+    fireEvent.keyDown(window, { key: 'F2' });
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
   });
 
   it('permite inyectar un peso manual cuando la estación local habilita simulación', async () => {

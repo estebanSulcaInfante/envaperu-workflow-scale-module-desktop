@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ UPDATE_SCRIPT = RELEASE_DIR / "Update-Station.ps1"
 ROLLBACK_SCRIPT = RELEASE_DIR / "Rollback-Station.ps1"
 MIGRATE_LEGACY_SCRIPT = RELEASE_DIR / "Migrate-LegacyStation.ps1"
 INSPECT_SCRIPT = RELEASE_DIR / "Inspect-Station.ps1"
+START_SCRIPT = RELEASE_DIR / "Start-ActiveStation.ps1"
 WINDOWS_POWERSHELL = Path(
     os.environ.get("SystemRoot", r"C:\Windows")
 ) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
@@ -94,6 +96,77 @@ if ($failed) { exit 1 }
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_background_launcher_preserves_arguments_with_spaces(tmp_path):
+    _require_windows_powershell_5()
+    install_root = tmp_path / "Program Files" / "EnvaPeru" / "Pesaje"
+    release_path = install_root / "releases" / "1.2.0-probe"
+    backend_path = release_path / "backend"
+    data_root = tmp_path / "Program Data" / "EnvaPeru" / "Pesaje"
+    marker = tmp_path / "background-launch.json"
+    python_path = backend_path / "venv" / "Scripts" / "python.exe"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "venv",
+            "--without-pip",
+            str(backend_path / "venv"),
+        ],
+        check=True,
+    )
+    (backend_path / "station_main.py").write_text(
+        """import json
+import os
+import sys
+from pathlib import Path
+
+Path(os.environ["LAUNCH_PROBE"]).write_text(
+    json.dumps(sys.argv[1:]), encoding="utf-8"
+)
+""",
+        encoding="utf-8",
+    )
+    (data_root / "run").mkdir(parents=True)
+    (data_root / "run" / "active-release.json").write_text(
+        json.dumps(
+            {
+                "active_version": "1.2.0-probe",
+                "active_path": str(release_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert python_path.is_file()
+
+    env = os.environ.copy()
+    env["LAUNCH_PROBE"] = str(marker)
+    result = _run_windows_powershell(
+        START_SCRIPT,
+        "-InstallRoot",
+        str(install_root),
+        "-DataRoot",
+        str(data_root),
+        "-StationId",
+        "PESAJE PRUEBA 01",
+        "-Port",
+        "5059",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    deadline = time.monotonic() + 5
+    while not marker.is_file() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert marker.is_file(), result.stdout + result.stderr
+    assert json.loads(marker.read_text(encoding="utf-8")) == [
+        "--station-id",
+        "PESAJE PRUEBA 01",
+        "--port",
+        "5059",
+    ]
 
 
 def test_bootstrap_python_detection_executes_with_windows_powershell_5(tmp_path):

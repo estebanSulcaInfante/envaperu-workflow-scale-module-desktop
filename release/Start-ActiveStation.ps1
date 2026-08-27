@@ -50,5 +50,9 @@ if ($Foreground) {
     exit $LASTEXITCODE
 }
 
-$process = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $releasePath -WindowStyle Hidden -PassThru
+$escapedStationMain = $stationMain.Replace('"', '\"')
+$escapedStationId = $StationId.Replace('"', '\"')
+$processArguments = "`"$escapedStationMain`" --station-id `"$escapedStationId`" --port $Port"
+if ($OpenBrowser) { $processArguments += ' --open-browser' }
+$process = Start-Process -FilePath $python -ArgumentList $processArguments -WorkingDirectory $releasePath -WindowStyle Hidden -PassThru
 Write-Output "STATION_START_REQUESTED version=$($state.active_version) pid=$($process.Id) port=$Port"

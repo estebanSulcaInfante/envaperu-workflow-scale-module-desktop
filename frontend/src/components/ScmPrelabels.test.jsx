@@ -83,7 +83,7 @@ describe('ScmPrelabels', () => {
     expect(screen.getByLabelText('ID del trabajo de impresión')).toBeTruthy();
   });
 
-  it('previsualiza una identidad y deja la segunda columna libre', async () => {
+  it('previsualiza dos copias físicas de la misma identidad', async () => {
     scmPrelabelsApi.preview.mockResolvedValue({ data: { print_job: job } });
     render(<ScmPrelabels />);
 
@@ -94,7 +94,7 @@ describe('ScmPrelabels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Previsualizar' }));
 
     expect(await screen.findByText('OP0084-OT001-M001')).toBeTruthy();
-    expect(screen.getByText('Columna libre')).toBeTruthy();
+    expect(screen.getByText('2 copias físicas de la misma identidad')).toBeTruthy();
     expect(screen.getByText('QR: label-001')).toBeTruthy();
   });
 
@@ -136,5 +136,45 @@ describe('ScmPrelabels', () => {
 
     expect(await screen.findByText(/estos stickers ya fueron impresos/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Sticker ya impreso' }).disabled).toBe(true);
+  });
+
+  it('permite reintentar cuando la impresora confirmó que no emitió el sticker', async () => {
+    scmPrelabelsApi.preview.mockResolvedValue({
+      data: {
+        print_job: {
+          ...job,
+          status: 'FALLIDO',
+          labels: [{ ...label, estado: 'FALLIDA_SIN_EMISION' }],
+        },
+      },
+    });
+    scmPrelabelsApi.print.mockResolvedValue({
+      data: { print_job: job, result: 'IMPRESA' },
+    });
+    render(<ScmPrelabels initialJobId="job-001" />);
+
+    const retry = await screen.findByRole('button', { name: 'Reintentar impresión' });
+    expect(retry.disabled).toBe(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(scmPrelabelsApi.print).toHaveBeenCalledWith('job-001'));
+  });
+
+  it('bloquea la reimpresión ciega cuando la emisión quedó incierta', async () => {
+    scmPrelabelsApi.preview.mockResolvedValue({
+      data: {
+        print_job: {
+          ...job,
+          status: 'FALLIDO',
+          labels: [{ ...label, estado: 'EMISION_INCIERTA' }],
+        },
+      },
+    });
+    render(<ScmPrelabels initialJobId="job-001" />);
+
+    expect(await screen.findByText(/no reimprima este trabajo/i)).toBeTruthy();
+    const replacement = screen.getByRole('button', {
+      name: 'Requiere etiqueta de reemplazo',
+    });
+    expect(replacement.disabled).toBe(true);
   });
 });

@@ -109,18 +109,24 @@ class ScmPrelabelService:
         )
         y = 22
         commands = [f"BAR {x},18,{self.STICKER_WIDTH},3"]
+        is_post_weighing = payload["qr"].get("label_type") == "POSTPESAJE"
+        quantity_label = "CANT.REAL" if is_post_weighing else "CANT."
+        quantity = (
+            payload.get("cantidad_confirmada_un")
+            if is_post_weighing else payload["cantidad_planificada_un"]
+        ) or payload["cantidad_planificada_un"]
         rows = [
             ("MANGA", payload["codigo_manga"]),
             (order_label, order_ot),
             ("IMP.", printed_at),
-            ("F.OT", payload["fecha_ot"]),
-            ("MAQ.", payload["maquinista"]),
+            ("F.OT ORIG.", payload["fecha_ot"]),
+            ("MAQ.ORIG.", payload["maquinista"]),
             ("PZA.", payload["pieza_color"]),
             ("COLOR", payload["color"]),
             ("TIPO", payload["tipo_manga"]),
-            ("CANT.", payload["cantidad_planificada_un"]),
+            (quantity_label, quantity),
         ]
-        if payload["qr"].get("label_type") == "POSTPESAJE":
+        if is_post_weighing:
             rows.extend((
                 ("KG FIS.", payload["kg_fisico"]),
                 ("KG OT", payload["kg_produccion_ot"]),
@@ -156,18 +162,24 @@ class ScmPrelabelService:
     def _svg_column(self, x, item, printed_at):
         payload = item["payload"]
         order_label, order_ot = self._order_row(payload)
+        is_post_weighing = payload["qr"].get("label_type") == "POSTPESAJE"
+        quantity_label = "CANT.REAL" if is_post_weighing else "CANT."
+        quantity = (
+            payload.get("cantidad_confirmada_un")
+            if is_post_weighing else payload["cantidad_planificada_un"]
+        ) or payload["cantidad_planificada_un"]
         rows = [
             ("MANGA", payload["codigo_manga"]),
             (order_label, order_ot),
             ("IMP.", printed_at),
-            ("F.OT", payload["fecha_ot"]),
-            ("MAQ.", payload["maquinista"]),
+            ("F.OT ORIG.", payload["fecha_ot"]),
+            ("MAQ.ORIG.", payload["maquinista"]),
             ("PZA.", payload["pieza_color"]),
             ("COLOR", payload["color"]),
             ("TIPO", payload["tipo_manga"]),
-            ("CANT.", payload["cantidad_planificada_un"]),
+            (quantity_label, quantity),
         ]
-        if payload["qr"].get("label_type") == "POSTPESAJE":
+        if is_post_weighing:
             rows.extend((
                 ("KG FIS.", payload["kg_fisico"]),
                 ("KG OT", payload["kg_produccion_ot"]),
@@ -205,27 +217,25 @@ class ScmPrelabelService:
         local_printed_at = actual_printed_at.astimezone(
             _station_timezone(timezone_name)
         ).strftime("%d/%m/%Y %H:%M")
-        columns = [
-            self._svg_column(self.LEFT_X, labels[0], local_printed_at)
-        ]
-        if len(labels) == 2:
-            columns.append(
-                self._svg_column(self.RIGHT_X, labels[1], local_printed_at)
+        sheet_height = 400
+        sheets = []
+        for index, label in enumerate(labels):
+            content = (
+                '<rect width="872" height="400" fill="#e9edf2"/>'
+                + self._svg_column(self.LEFT_X, label, local_printed_at)
+                + self._svg_column(self.RIGHT_X, label, local_printed_at)
             )
-        else:
-            columns.append(
-                '<rect x="464" y="18" width="400" height="364" rx="4" '
-                'fill="#f7f7f7" stroke="#aaa" stroke-dasharray="8 8"/>'
-                '<text x="664" y="200" text-anchor="middle" '
-                'font-family="Arial" font-size="18" fill="#777">'
-                "COLUMNA LIBRE</text>"
+            sheets.append(
+                f'<g transform="translate(0,{index * sheet_height})">'
+                f'{content}</g>'
             )
+        total_height = sheet_height * len(labels)
         return (
             '<svg xmlns="http://www.w3.org/2000/svg" '
-            'viewBox="0 0 872 400" width="109mm" height="50mm" '
+            f'viewBox="0 0 872 {total_height}" width="109mm" '
+            f'height="{50 * len(labels)}mm" '
             'role="img" aria-label="Vista previa física de etiquetas">'
-            '<rect width="872" height="400" fill="#e9edf2"/>'
-            + "".join(columns)
+            + "".join(sheets)
             + "</svg>"
         )
 
@@ -241,12 +251,13 @@ class ScmPrelabelService:
         local_printed_at = actual_printed_at.astimezone(
             _station_timezone(timezone_name)
         ).strftime("%d/%m/%Y %H:%M")
-        columns = [self._column(
-            self.LEFT_X, labels[0], local_printed_at
-        )]
-        if len(labels) == 2:
-            columns.append(self._column(
-                self.RIGHT_X, labels[1], local_printed_at
+        pages = []
+        for label in labels:
+            pages.extend((
+                "CLS",
+                self._column(self.LEFT_X, label, local_printed_at),
+                self._column(self.RIGHT_X, label, local_printed_at),
+                "PRINT 1,1",
             ))
         return "\n".join((
             "SIZE 109 mm, 50 mm",
@@ -255,9 +266,7 @@ class ScmPrelabelService:
             "DIRECTION 1",
             "SET TEAR ON",
             "OFFSET 0 mm",
-            "CLS",
-            *columns,
-            "PRINT 1,1",
+            *pages,
         ))
 
     def print_job(

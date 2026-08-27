@@ -62,7 +62,7 @@ def _assembly_label(code):
     return label
 
 
-def test_lote_impar_deja_segunda_columna_vacia():
+def test_una_identidad_ocupa_ambas_columnas_como_copias_gemelas():
     tspl = ScmPrelabelService().generate_tspl(
         {"labels": [_label("OP0084-OT001-M001")]},
         printed_at=datetime(2026, 7, 28, 12, 30, tzinfo=timezone.utc),
@@ -72,9 +72,13 @@ def test_lote_impar_deja_segunda_columna_vacia():
     assert "GAP 3 mm, 0 mm" in tspl
     assert "OP0084-OT001-M001" in tspl
     assert "IMP.: 28/07/2026 07:30" in tspl
+    assert "F.OT ORIG.: 2026-07-28" in tspl
+    assert "MAQ.ORIG.: Juan Perez" in tspl
     assert "QRCODE 144" in tspl
+    assert "QRCODE 584" in tspl
     assert ",L,4,A,0," in tspl
-    assert "TEXT 469" not in tspl
+    assert "TEXT 469" in tspl
+    assert tspl.count("PRINT 1,1") == 1
 
 
 def test_plantilla_v2_renderiza_of_ot_y_conserva_qr_v1():
@@ -86,6 +90,10 @@ def test_plantilla_v2_renderiza_of_ot_y_conserva_qr_v1():
     assert "OP/OT:" not in tspl
     assert label["payload"]["qr"]["label_id"] in tspl
     assert "OF/OT: OF-000900 - OT-000001" in svg
+    assert "F.OT ORIG.: 2026-07-28" in tspl
+    assert "MAQ.ORIG.: Juan Perez" in tspl
+    assert "F.OT ORIG.: 2026-07-28" in svg
+    assert "MAQ.ORIG.: Juan Perez" in svg
 
 
 def test_trabajo_color_conserva_rotulo_simple_y_contexto_en_qr():
@@ -110,14 +118,15 @@ def test_armado_renderiza_oa_ot_sin_perder_la_identidad():
     assert "OA/OT: OA-000321 - OT-000777" in svg
 
 
-def test_dos_columnas_contienen_identidades_distintas():
+def test_dos_identidades_generan_dos_hojas_duplicadas():
     left = _label("OP0084-OT001-M001")
     right = deepcopy(_label("OP0084-OT001-M002"))
     tspl = ScmPrelabelService().generate_tspl({
         "labels": [left, right]
     })
 
-    assert tspl.count("QRCODE") == 2
+    assert tspl.count("QRCODE") == 4
+    assert tspl.count("PRINT 1,1") == 2
     assert "OP0084-OT001-M001" in tspl
     assert "OP0084-OT001-M002" in tspl
     assert left["payload"]["qr"]["label_id"] in tspl
@@ -135,7 +144,7 @@ def test_preview_web_respeta_hoja_fisica_y_genera_qr():
     assert "OP0084-OT001-M001" in svg
     assert "data:image/png;base64," in svg
     assert 'width="120" height="120"' in svg
-    assert "COLUMNA LIBRE" in svg
+    assert svg.count("OP0084-OT001-M001") == 2
 
 
 def test_bandeja_y_preview_consultan_central_sin_reclamar():

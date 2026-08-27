@@ -6,7 +6,7 @@ import { scmPrelabelsApi } from '../services/api';
 const statusLabel = (job) => {
   const status = String(job?.status || job?.estado || '').toUpperCase();
   if (['PENDING', 'GENERADO', 'GENERADA'].includes(status)) return 'Pendiente de impresión';
-  if (status === 'PARTIAL') return 'Impresión parcial';
+  if (['PARTIAL', 'PARCIAL'].includes(status)) return 'Impresión parcial';
   if (['PRINTED', 'IMPRESA'].includes(status)) return 'Impreso';
   if (['FAILED', 'FALLIDA', 'FALLIDA_SIN_EMISION'].includes(status)) return 'Impresión fallida';
   return 'Estado por confirmar';
@@ -14,6 +14,25 @@ const statusLabel = (job) => {
 
 const jobStatus = (job) => String(job?.status || job?.estado || '').toUpperCase();
 const isPrintedJob = (job) => ['PRINTED', 'PROCESADO', 'IMPRESA'].includes(jobStatus(job));
+const labelStatus = (label) => String(label?.estado || label?.status || '').toUpperCase();
+const hasUncertainEmission = (job) => (job?.labels || []).some(
+  (label) => labelStatus(label) === 'EMISION_INCIERTA',
+);
+const hasMixedEmission = (job) => {
+  const states = new Set((job?.labels || []).map(labelStatus).filter(Boolean));
+  const emitted = [...states].some((state) => ['IMPRESA', 'EMISION_INCIERTA'].includes(state));
+  const pending = [...states].some(
+    (state) => ['GENERADA', 'FALLIDA_SIN_EMISION'].includes(state),
+  );
+  return emitted && pending;
+};
+const requiresReplacement = (job) => hasUncertainEmission(job) || hasMixedEmission(job);
+const isRetryWithoutEmission = (job) => {
+  const labels = job?.labels || [];
+  return labels.length > 0 && labels.every(
+    (label) => labelStatus(label) === 'FALLIDA_SIN_EMISION',
+  );
+};
 
 const jobMangas = (job) => (job?.labels || [])
   .map((label) => label.manga_codigo || label.payload?.codigo_manga)
@@ -64,7 +83,12 @@ export default function ScmPrelabels({ initialJobId = '' }) {
       if (data.preview_svg) setPreviewSvg(data.preview_svg);
       else if (action === 'preview') setPreviewSvg('');
       if (action === 'preview') {
-        if (isPrintedJob(requestedJob)) {
+        if (requiresReplacement(requestedJob)) {
+          setMessage({
+            type: 'error',
+            text: 'No reimprima este trabajo: existe una emisión incierta o parcial. Invalide el sticker afectado y genere una etiqueta de reemplazo desde la OT.',
+          });
+        } else if (isPrintedJob(requestedJob)) {
           setMessage({
             type: 'success',
             text: 'Trabajo recibido por la estación. Estos stickers ya fueron impresos; la vista previa no los reimprime.',
@@ -217,18 +241,26 @@ export default function ScmPrelabels({ initialJobId = '' }) {
                 <span key={label.public_id}>
                   <span>{label.payload?.codigo_manga || label.manga_codigo}</span>
                   <span>{`QR: ${label.payload?.qr?.label_id || label.public_id}`}</span>
+                  <span>2 copias físicas de la misma identidad</span>
                 </span>
               ))}
-              {!job.labels?.[1] && <span>Columna libre</span>}
             </div>
             <div className="scm-print-summary">
-              <span>{job.labels?.length || 0} etiqueta(s) · {job.plantilla_version}</span>
+              <span>
+                {job.labels?.length || 0} identidad(es) · 2 copias por identidad · {job.plantilla_version}
+              </span>
               <button
                 className="btn btn-primary"
-                disabled={loading || isPrintedJob(job)}
+                disabled={loading || isPrintedJob(job) || requiresReplacement(job)}
                 onClick={() => requestJob('print', job.print_job_id)}
               >
-                {isPrintedJob(job) ? 'Sticker ya impreso' : 'Imprimir sticker'}
+                {isPrintedJob(job)
+                  ? 'Sticker ya impreso'
+                  : (requiresReplacement(job)
+                    ? 'Requiere etiqueta de reemplazo'
+                    : (isRetryWithoutEmission(job)
+                      ? 'Reintentar impresión'
+                      : 'Imprimir sticker'))}
               </button>
             </div>
           </section>

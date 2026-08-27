@@ -205,6 +205,67 @@ Write-Output $resolved
     assert "Join-Path $legacyBackend 'venv\\Scripts\\python.exe'" in source
 
 
+def test_hybrid_adoption_archives_and_restores_database_family_on_powershell_5(
+    tmp_path,
+):
+    database = tmp_path / "data" / "pesajes.db"
+    database.parent.mkdir(parents=True)
+    database.write_text("authoritative-db", encoding="utf-8")
+    Path(f"{database}-wal").write_text("authoritative-wal", encoding="utf-8")
+    Path(f"{database}-shm").write_text("authoritative-shm", encoding="utf-8")
+    archive = tmp_path / "backups" / "partial-adoption"
+    harness = tmp_path / "invoke-partial-adoption-recovery.ps1"
+    harness.write_text(
+        """param(
+    [Parameter(Mandatory = $true)][string]$MigrationScript,
+    [Parameter(Mandatory = $true)][string]$DatabasePath,
+    [Parameter(Mandatory = $true)][string]$ArchivePath
+)
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $MigrationScript,
+    [ref]$tokens,
+    [ref]$parseErrors
+)
+if ($parseErrors.Count -gt 0) { exit 2 }
+foreach ($name in @('Move-DatabaseFamilyToArchive', 'Restore-DatabaseFamilyFromArchive')) {
+    $functionAst = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq $name
+    }, $true)
+    if (-not $functionAst) { exit 3 }
+    . ([ScriptBlock]::Create($functionAst.Extent.Text))
+}
+$moved = @(Move-DatabaseFamilyToArchive $DatabasePath $ArchivePath)
+if ($moved.Count -ne 3 -or (Test-Path -LiteralPath $DatabasePath)) { exit 4 }
+Set-Content -LiteralPath $DatabasePath -Value 'failed-import' -Encoding UTF8
+Restore-DatabaseFamilyFromArchive $DatabasePath $ArchivePath
+if ((Get-Content -LiteralPath $DatabasePath -Raw).Trim() -ne 'authoritative-db') { exit 5 }
+if ((Get-Content -LiteralPath "$DatabasePath-wal" -Raw).Trim() -ne 'authoritative-wal') { exit 6 }
+if ((Get-Content -LiteralPath "$DatabasePath-shm" -Raw).Trim() -ne 'authoritative-shm') { exit 7 }
+$failed = @(Get-ChildItem -LiteralPath $ArchivePath -Directory -Filter 'failed-import-*')
+if ($failed.Count -ne 1) { exit 8 }
+Write-Output 'RECOVERY_OK'
+""",
+        encoding="utf-8",
+    )
+
+    result = _run_windows_powershell(
+        harness,
+        "-MigrationScript",
+        str(MIGRATE_LEGACY_SCRIPT),
+        "-DatabasePath",
+        str(database),
+        "-ArchivePath",
+        str(archive),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "RECOVERY_OK"
+
+
 def test_bootstrap_python_falls_back_to_trusted_active_runtime_on_powershell_5(
     tmp_path,
 ):
@@ -720,7 +781,7 @@ def test_legacy_bridge_stages_imports_and_only_then_activates_once():
     stage = source.index("$managerScript, 'stage'", reject_versioned)
     runtime = source.index("-m pip install --no-index", stage)
     provision = source.index("provision-token --data-root", runtime)
-    imported = source.index("'import-legacy', $LegacyDatabasePath", provision)
+    imported = source.index("'import-legacy', $importDatabasePath", provision)
     identity = source.index("initialize-identity", imported)
     activated = source.index("$updateScript", identity)
     complete = source.index("LEGACY_MIGRATION_COMPLETE", activated)
@@ -737,6 +798,34 @@ def test_legacy_bridge_stages_imports_and_only_then_activates_once():
         < activated
         < complete
     )
+
+
+def test_hybrid_bridge_requires_explicit_adoption_and_preserves_recovery_evidence():
+    source = MIGRATE_LEGACY_SCRIPT.read_text(encoding="utf-8")
+
+    same_database = source.index("$sameProgramDataDatabase")
+    explicit_gate = source.index("-not $AdoptExistingProgramDataDatabase", same_database)
+    backup = source.index("pre-partial-adoption-$version", explicit_gate)
+    archive = source.index("Move-DatabaseFamilyToArchive", backup)
+    imported = source.index("'import-legacy', $importDatabasePath", archive)
+    restore = source.index("Restore-DatabaseFamilyFromArchive", imported)
+    evidence = source.index("partial_programdata_adoption", restore)
+
+    assert "[switch]$ReuseExistingToken" in source
+    assert "TOKEN_REUSED" in source
+    assert "PARTIAL_DATABASE_RESTORED" in source
+    assert explicit_gate < backup < archive < imported < restore < evidence
+
+
+def test_update_accepts_an_explicit_python312_without_changing_global_path():
+    source = UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    parameter = source.index("[string]$BootstrapPythonPath")
+    validation = source.index("El runtime indicado no es Python 3.12")
+    resolution = source.index("-ExplicitPython $BootstrapPythonPath", validation)
+
+    assert "SetEnvironmentVariable" not in source[parameter:resolution]
+    assert parameter < validation < resolution
 
 
 def test_inspection_classifies_ambiguous_installations_fail_closed():

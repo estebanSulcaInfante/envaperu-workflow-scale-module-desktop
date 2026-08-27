@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PackagePath,
     [string]$ExpectedSha256,
+    [string]$BootstrapPythonPath,
     [string]$InstallRoot = "$env:ProgramFiles\EnvaPeru\Pesaje",
     [string]$DataRoot = "$env:ProgramData\EnvaPeru\Pesaje",
     [string]$StationId = 'PESAJE-PLANTA-01',
@@ -84,7 +85,22 @@ function Resolve-AccountSid {
 }
 
 function Find-BootstrapPython {
-    param([string]$TrustedActivePython)
+    param(
+        [string]$TrustedActivePython,
+        [string]$ExplicitPython
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPython)) {
+        $resolvedExplicit = [IO.Path]::GetFullPath($ExplicitPython)
+        if (-not (Test-Path -LiteralPath $resolvedExplicit -PathType Leaf)) {
+            throw "No existe el Python 3.12 indicado en $resolvedExplicit"
+        }
+        & $resolvedExplicit -c 'import sys; sys.exit(sys.version_info[:2] != (3, 12))' 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "El runtime indicado no es Python 3.12: $resolvedExplicit"
+        }
+        return $resolvedExplicit
+    }
     $candidate = Get-Command python -ErrorAction SilentlyContinue
     if ($candidate) {
         & $candidate.Source -c 'import sys; sys.exit(sys.version_info[:2] != (3, 12))' 2>$null
@@ -291,7 +307,9 @@ if (-not $databaseExists -and -not $AllowEmptyStation) {
 }
 
 $trustedActivePython = Get-TrustedActivePython -State $previousState -Root $InstallRoot
-$bootstrapPython = Find-BootstrapPython -TrustedActivePython $trustedActivePython
+$bootstrapPython = Find-BootstrapPython `
+    -TrustedActivePython $trustedActivePython `
+    -ExplicitPython $BootstrapPythonPath
 
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $currentUserSid = Resolve-AccountSid $currentUser

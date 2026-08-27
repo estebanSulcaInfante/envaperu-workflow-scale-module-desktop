@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PackagePath,
     [string]$ExpectedSha256,
+    [string]$BootstrapPythonPath,
     [Parameter(Mandatory = $true)]
     [string]$LegacyDatabasePath,
     [string]$LegacyEnvironmentPath,
@@ -16,7 +17,9 @@ param(
     [string]$InstallRoot = "$env:ProgramFiles\EnvaPeru\Pesaje",
     [string]$DataRoot = "$env:ProgramData\EnvaPeru\Pesaje",
     [int]$Port = 5050,
-    [string]$RunAsUser
+    [string]$RunAsUser,
+    [switch]$AdoptExistingProgramDataDatabase,
+    [switch]$ReuseExistingToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -135,6 +138,104 @@ function Test-PortListening {
     }
 }
 
+function Test-StationTokenReadable {
+    param(
+        [string]$Python,
+        [string]$ReleasePath,
+        [string]$TokenPath
+    )
+    if (-not (Test-Path -LiteralPath $TokenPath -PathType Leaf)) {
+        return $false
+    }
+    $backendPath = Join-Path $ReleasePath 'backend'
+    Push-Location $backendPath
+    try {
+        $tokenProbe = @'
+import sys
+from app.runtime.token_store import StationTokenStore
+
+try:
+    token = StationTokenStore(sys.argv[1]).read()
+except Exception:
+    sys.exit(2)
+sys.exit(0 if token else 3)
+'@
+        & $Python -c $tokenProbe $TokenPath *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Move-DatabaseFamilyToArchive {
+    param(
+        [string]$DatabasePath,
+        [string]$ArchivePath
+    )
+    if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) {
+        throw "No existe la base parcial que se debe adoptar: $DatabasePath"
+    }
+    New-Item -ItemType Directory -Path $ArchivePath -Force | Out-Null
+    $moved = @()
+    try {
+        foreach ($candidate in @($DatabasePath, "$DatabasePath-wal", "$DatabasePath-shm")) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $destination = Join-Path $ArchivePath (Split-Path -Leaf $candidate)
+                Move-Item -LiteralPath $candidate -Destination $destination
+                $moved += $destination
+            }
+        }
+        if (Test-Path -LiteralPath $DatabasePath -PathType Leaf) {
+            throw 'No se pudo retirar la base parcial antes de la importación verificada.'
+        }
+    }
+    catch {
+        foreach ($archived in @($moved)) {
+            if (Test-Path -LiteralPath $archived -PathType Leaf) {
+                Move-Item -LiteralPath $archived -Destination (
+                    Join-Path (Split-Path -Parent $DatabasePath) (Split-Path -Leaf $archived)
+                )
+            }
+        }
+        throw
+    }
+    return $moved
+}
+
+function Restore-DatabaseFamilyFromArchive {
+    param(
+        [string]$DatabasePath,
+        [string]$ArchivePath
+    )
+    $failedPath = Join-Path $ArchivePath (
+        'failed-import-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
+    )
+    $failedCreated = $false
+    foreach ($candidate in @($DatabasePath, "$DatabasePath-wal", "$DatabasePath-shm")) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            if (-not $failedCreated) {
+                New-Item -ItemType Directory -Path $failedPath -Force | Out-Null
+                $failedCreated = $true
+            }
+            Move-Item -LiteralPath $candidate -Destination (
+                Join-Path $failedPath (Split-Path -Leaf $candidate)
+            )
+        }
+    }
+    foreach ($name in @('pesajes.db', 'pesajes.db-wal', 'pesajes.db-shm')) {
+        $archived = Join-Path $ArchivePath $name
+        if (Test-Path -LiteralPath $archived -PathType Leaf) {
+            Move-Item -LiteralPath $archived -Destination (
+                Join-Path (Split-Path -Parent $DatabasePath) $name
+            )
+        }
+    }
+    if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) {
+        throw 'La recuperación de la base parcial no pudo restaurar pesajes.db.'
+    }
+}
+
 $PackagePath = [IO.Path]::GetFullPath($PackagePath)
 $LegacyDatabasePath = [IO.Path]::GetFullPath($LegacyDatabasePath)
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
@@ -159,14 +260,29 @@ if (-not (Test-Path -LiteralPath $LegacyDatabasePath -PathType Leaf)) {
     throw "No existe la base legacy $LegacyDatabasePath"
 }
 $destinationDatabase = Join-Path $DataRoot 'data\pesajes.db'
-if ([IO.Path]::GetFullPath($destinationDatabase) -eq $LegacyDatabasePath) {
+$sameProgramDataDatabase = (
+    [IO.Path]::GetFullPath($destinationDatabase) -eq $LegacyDatabasePath
+)
+if ($sameProgramDataDatabase -and -not $AdoptExistingProgramDataDatabase) {
     throw 'La base legacy y el destino versionado no pueden ser el mismo archivo.'
+}
+if ($AdoptExistingProgramDataDatabase -and -not $sameProgramDataDatabase) {
+    throw '-AdoptExistingProgramDataDatabase exige seleccionar exactamente DataRoot\data\pesajes.db.'
+}
+if (
+    $AdoptExistingProgramDataDatabase -and
+    (-not $LegacyEnvironmentPath -or -not (Test-Path -LiteralPath $LegacyEnvironmentPath -PathType Leaf))
+) {
+    throw 'La adopción de ProgramData exige -LegacyEnvironmentPath explícito para conservar solo la configuración física aprobada.'
 }
 $statePath = Join-Path $DataRoot 'run\active-release.json'
 if (Test-Path -LiteralPath $statePath -PathType Leaf) {
     throw 'La estación ya tiene active-release.json. Use Update-Station.ps1; no reimporte la base legacy.'
 }
-if (Test-Path -LiteralPath $destinationDatabase -PathType Leaf) {
+if (
+    (Test-Path -LiteralPath $destinationDatabase -PathType Leaf) -and
+    -not $AdoptExistingProgramDataDatabase
+) {
     throw 'ProgramData ya contiene pesajes.db sin release activo. Es una instalación parcial: detenerse, respaldar y conciliar; no reimportar automáticamente.'
 }
 if (Test-PortListening $Port) {
@@ -204,6 +320,7 @@ if ($ExpectedSha256 -notmatch '^[0-9a-f]{64}$') {
 }
 
 $legacyPythonCandidates = @(
+    $BootstrapPythonPath,
     (Join-Path $legacyBackend '.venv\Scripts\python.exe'),
     (Join-Path $legacyBackend 'venv\Scripts\python.exe'),
     (Join-Path $legacyRoot '.venv\Scripts\python.exe'),
@@ -284,31 +401,87 @@ Set-Content -LiteralPath $stationEnvironmentPath -Value $environmentLines -Encod
 
 Write-Output "PACKAGE_STAGED version=$version path=$releasePath"
 Write-Output "CONFIG_PREPARED path=$stationEnvironmentPath legacy_env=$LegacyEnvironmentPath"
-Write-Output 'Ingrese ahora el token de la estación provisto por Central. No se mostrará ni se guardará en station.env.'
-& $newPython (Join-Path $releasePath 'backend\station_control.py') `
-    provision-token --data-root $DataRoot
-if ($LASTEXITCODE -ne 0) { throw 'No se pudo provisionar el token DPAPI.' }
+$tokenPath = Join-Path $DataRoot 'secrets\station-token.dpapi'
+if ($ReuseExistingToken) {
+    if (-not (Test-StationTokenReadable $newPython $releasePath $tokenPath)) {
+        throw 'El token DPAPI existente no puede reutilizarse con el usuario operativo actual.'
+    }
+    Write-Output "TOKEN_REUSED path=$tokenPath user=$currentUser"
+}
+else {
+    Write-Output 'Ingrese ahora el token de la estación provisto por Central. No se mostrará ni se guardará en station.env.'
+    & $newPython (Join-Path $releasePath 'backend\station_control.py') `
+        provision-token --data-root $DataRoot
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo provisionar el token DPAPI.' }
+}
 if (Test-PortListening $Port) {
     throw "La estación legacy volvió a iniciar en el puerto $Port. Deshabilite su arranque automático antes de importar."
 }
 
-$importOutput = Invoke-CheckedPython $newPython @(
-    (Join-Path $releasePath 'backend\station_storage.py'),
-    '--data-root', $DataRoot, '--station-id', $StationCode,
-    'import-legacy', $LegacyDatabasePath
-) 'La base legacy no superó la importación segura'
-$importResult = Get-LastJson $importOutput
-if (
-    [string]$importResult.event -ne 'LEGACY_IMPORT_COMPLETE' -or
-    -not [bool]$importResult.source_unchanged -or
-    [string]$importResult.destination.integrity_check -ne 'ok'
-) {
-    throw 'La importación no produjo evidencia completa: LEGACY_IMPORT_COMPLETE, source_unchanged=true e integrity_check=ok son obligatorios.'
+$storageScript = Join-Path $releasePath 'backend\station_storage.py'
+$importDatabasePath = $LegacyDatabasePath
+$partialArchivePath = $null
+$partialBackup = $null
+$partialMovedFiles = @()
+if ($AdoptExistingProgramDataDatabase) {
+    $backupOutput = Invoke-CheckedPython $newPython @(
+        $storageScript,
+        '--data-root', $DataRoot,
+        '--database-path', $destinationDatabase,
+        '--station-id', $StationCode,
+        'backup', '--reason', "pre-partial-adoption-$version"
+    ) 'No se pudo crear el respaldo autoritativo previo a la adopción'
+    $partialBackup = Get-LastJson $backupOutput
+    if (
+        [string]$partialBackup.event -ne 'BACKUP_VALID' -or
+        [string]$partialBackup.backup.integrity_check -ne 'ok'
+    ) {
+        throw 'El respaldo previo a la adopción no produjo BACKUP_VALID con integridad ok.'
+    }
+    $importDatabasePath = [IO.Path]::GetFullPath([string]$partialBackup.backup.path)
+    $partialArchivePath = Join-Path $backupRoot (
+        'partial-versioned-adoption-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
+    )
+    $partialMovedFiles = @(
+        Move-DatabaseFamilyToArchive $destinationDatabase $partialArchivePath
+    )
+    Write-Output "PARTIAL_DATABASE_ARCHIVED path=$partialArchivePath backup=$importDatabasePath"
+}
+
+try {
+    $importOutput = Invoke-CheckedPython $newPython @(
+        $storageScript,
+        '--data-root', $DataRoot, '--station-id', $StationCode,
+        'import-legacy', $importDatabasePath
+    ) 'La base legacy no superó la importación segura'
+    $importResult = Get-LastJson $importOutput
+    if (
+        [string]$importResult.event -ne 'LEGACY_IMPORT_COMPLETE' -or
+        -not [bool]$importResult.source_unchanged -or
+        [string]$importResult.destination.integrity_check -ne 'ok'
+    ) {
+        throw 'La importación no produjo evidencia completa: LEGACY_IMPORT_COMPLETE, source_unchanged=true e integrity_check=ok son obligatorios.'
+    }
+}
+catch {
+    if ($AdoptExistingProgramDataDatabase -and $partialArchivePath) {
+        Restore-DatabaseFamilyFromArchive $destinationDatabase $partialArchivePath
+        Write-Output "PARTIAL_DATABASE_RESTORED path=$destinationDatabase"
+    }
+    throw
 }
 $evidencePath = Join-Path $backupRoot (
     'legacy-migration-evidence-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '.json'
 )
-$importResult | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $evidencePath -Encoding UTF8
+$migrationEvidence = [ordered]@{
+    import = $importResult
+    token_reused = [bool]$ReuseExistingToken
+    partial_programdata_adoption = [bool]$AdoptExistingProgramDataDatabase
+    partial_source_backup = $partialBackup
+    partial_archive_path = $partialArchivePath
+    partial_archived_files = $partialMovedFiles
+}
+$migrationEvidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidencePath -Encoding UTF8
 Write-Output "LEGACY_IMPORT_VERIFIED evidence=$evidencePath"
 if (Test-PortListening $Port) {
     throw "La estación legacy volvió a iniciar en el puerto $Port. La fuente quedó intacta y el release nuevo no fue activado."
@@ -332,6 +505,7 @@ $updateOutput = @(& $updateScript `
     -DataRoot $DataRoot `
     -StationId $StationCode `
     -Port $Port `
+    -BootstrapPythonPath $bootstrapPython `
     -PreparedLegacyMigration 2>&1)
 $updateOutput | Out-Host
 if (-not @($updateOutput | Where-Object { $_.ToString() -like 'PILOT_CONFIG_READY*' })) {

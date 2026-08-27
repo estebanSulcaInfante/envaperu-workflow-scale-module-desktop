@@ -55,7 +55,7 @@ puente desde el paquete extraído, pasando UUID e ID de operador reales:
 
 ```powershell
 .\release\Migrate-LegacyStation.ps1 `
-  -PackagePath C:\Soporte\envaperu-pesaje-1.2.0-pilot.3-win-x64.zip `
+  -PackagePath C:\Soporte\envaperu-pesaje-1.2.0-pilot.4-win-x64.zip `
   -ExpectedSha256 <sha256-comunicado-por-soporte> `
   -LegacyDatabasePath C:\EnvaPeru\modulo-pesaje\backend\instance\pesajes.db `
   -LegacyEnvironmentPath C:\EnvaPeru\modulo-pesaje\.env `
@@ -70,6 +70,30 @@ importada y recién entonces realiza una activación completa.
 Puede reutilizar un Python 3.12 de `backend\.venv` o `backend\venv` de la
 instalación seleccionada cuando no está publicado en `PATH`. La cuenta que
 ejecuta el puente debe ser la misma de la tarea programada.
+
+Una instalación híbrida puede ejecutar código legacy pero tener su única base
+autoritativa en `ProgramData`, sin `active-release.json`. Solo después de
+conciliar las demás SQLite y confirmar que esa base es la activa se permite el
+carril explícito de adopción. El puente crea un backup verificado, archiva la
+familia SQLite original, importa el backup y restaura automáticamente los
+archivos originales si la importación falla. También puede reutilizar el token
+DPAPI cuando la misma cuenta Windows puede descifrarlo:
+
+```powershell
+.\release\Migrate-LegacyStation.ps1 `
+  -PackagePath C:\Soporte\envaperu-pesaje-1.2.0-pilot.4-win-x64.zip `
+  -ExpectedSha256 <sha256-comunicado-por-soporte> `
+  -BootstrapPythonPath C:\Users\USER\AppData\Local\Programs\Python\Python312\python.exe `
+  -LegacyDatabasePath C:\ProgramData\EnvaPeru\Pesaje\data\pesajes.db `
+  -LegacyEnvironmentPath C:\ruta\legacy\.env `
+  -StationUuid <uuid-real-de-central> `
+  -ScmOperatorId 123 `
+  -AdoptExistingProgramDataDatabase `
+  -ReuseExistingToken
+```
+
+Los dos switches son deliberadamente explícitos: sin ellos una instalación
+parcial o un token preexistente siguen fallando de forma cerrada.
 
 Antes de la primera activación SCM, completar
 `C:\ProgramData\EnvaPeru\Pesaje\config\station.env`:

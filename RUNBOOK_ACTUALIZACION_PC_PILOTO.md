@@ -1,6 +1,6 @@
 # Actualización de la PC de pesaje — piloto SCM
 
-Este procedimiento instala `1.2.0-pilot.3` sin modificar la base antigua a
+Este procedimiento instala `1.2.0-pilot.4` sin modificar la base antigua a
 ciegas. El paquete es inmutable, funciona sin Internet para instalar sus
 dependencias y conserva código, datos, configuración y secretos en ubicaciones
 separadas.
@@ -23,8 +23,8 @@ La respuesta `READY` por sí sola no acredita Central ni el hardware.
 
 Llevar en una misma carpeta de soporte:
 
-- `envaperu-pesaje-1.2.0-pilot.3-win-x64.zip`;
-- `envaperu-pesaje-1.2.0-pilot.3-win-x64.zip.sha256`;
+- `envaperu-pesaje-1.2.0-pilot.4-win-x64.zip`;
+- `envaperu-pesaje-1.2.0-pilot.4-win-x64.zip.sha256`;
 - este runbook;
 - el SHA-256 comunicado por un segundo canal;
 - UUID real de la estación en Central;
@@ -56,8 +56,8 @@ Abrir Windows PowerShell 5.1 como administrador, usando la **misma cuenta
 Windows que operará la estación**:
 
 ```powershell
-$Kit = 'C:\Soporte\EnvaPeru-Piloto-1.2.0-pilot.3'
-$Zip = Join-Path $Kit 'envaperu-pesaje-1.2.0-pilot.3-win-x64.zip'
+$Kit = 'C:\Soporte\EnvaPeru-Piloto-1.2.0-pilot.4'
+$Zip = Join-Path $Kit 'envaperu-pesaje-1.2.0-pilot.4-win-x64.zip'
 certutil -hashfile $Zip SHA256
 ```
 
@@ -96,8 +96,8 @@ La salida decide el carril:
 |---|---|
 | `VERSIONED` | Seguir la sección 5. Nunca reimportar la base legacy. |
 | `LEGACY` | Seguir la sección 6. |
-| `PARTIAL_VERSIONED` | Detenerse. Respaldar y completar la instalación parcial; no reimportar. |
-| `CONFLICT` | Detenerse. Hay dos bases candidatas y deben conciliarse. |
+| `PARTIAL_VERSIONED` | Detenerse. Respaldar y conciliar; solo soporte puede adoptar la base de `ProgramData` con el carril 6.1. |
+| `CONFLICT` | Detenerse. Hay dos bases candidatas; conciliarlas antes de elegir cualquier carril. |
 | `UNKNOWN` | Detenerse y localizar la instalación/base real. |
 
 La existencia de un `.db` no basta: registrar también `-wal`, `-shm`, tamaño,
@@ -189,11 +189,13 @@ modificar la base; soporte debe instalar el runtime aprobado y repetir.
 
 El puente ejecuta, en orden:
 
-1. bloquea una estación activa, versionada, parcial o ambigua;
+1. bloquea una estación activa, versionada o ambigua, y exige un switch
+   explícito para una base parcial ya conciliada;
 2. valida el ZIP/manifiesto sin activar un puntero;
 3. crea y verifica el runtime desde los wheels offline;
 4. genera `station.env` con una lista permitida;
-5. solicita el token y lo cifra con DPAPI del usuario operativo;
+5. solicita el token y lo cifra con DPAPI, o reutiliza uno existente solo si el
+   usuario operativo puede descifrarlo;
 6. respalda, migra y activa una copia consistente de la SQLite legacy;
 7. exige fuente sin cambios, integridad `ok`, conteos e IDs conservados;
 8. fija en la copia importada el UUID y código provisionados por Central;
@@ -202,6 +204,34 @@ El puente ejecuta, en orden:
 
 La base fuente legacy nunca se modifica. La evidencia queda en
 `C:\ProgramData\EnvaPeru\Pesaje\backups`.
+
+### 6.1 Carril híbrido conciliado — base autoritativa ya en ProgramData
+
+Este carril solo aplica cuando soporte ya demostró que
+`C:\ProgramData\EnvaPeru\Pesaje\data\pesajes.db` es la base activa y que las
+otras SQLite son históricas. La estación debe estar detenida, el puerto 5050
+libre y el `.env` legacy debe pasarse explícitamente:
+
+```powershell
+& "$Kit\extraido\release\Migrate-LegacyStation.ps1" `
+  -PackagePath $Zip `
+  -ExpectedSha256 '<sha256-aprobado>' `
+  -BootstrapPythonPath 'C:\Users\USER\AppData\Local\Programs\Python\Python312\python.exe' `
+  -LegacyDatabasePath 'C:\ProgramData\EnvaPeru\Pesaje\data\pesajes.db' `
+  -LegacyEnvironmentPath 'C:\ruta\modulo-pesaje\.env' `
+  -StationUuid '<uuid-real-de-central>' `
+  -ScmOperatorId <id-numerico-real> `
+  -StationCode 'PESAJE-PLANTA-01' `
+  -AdoptExistingProgramDataDatabase `
+  -ReuseExistingToken
+```
+
+`-AdoptExistingProgramDataDatabase` obliga al puente a crear y verificar un
+backup antes de archivar `pesajes.db`, `-wal` y `-shm`. Si la importación falla,
+restaura automáticamente esa familia de archivos y conserva el intento fallido
+como evidencia. `-ReuseExistingToken` solo continúa si el mismo usuario Windows
+puede descifrar el DPAPI; nunca imprime el token. Sin cualquiera de estas
+condiciones el puente se detiene.
 
 No usar `Update-Station.ps1 -NoStart` como puente: esa opción ya crea el puntero
 activo y no representa una migración legacy.

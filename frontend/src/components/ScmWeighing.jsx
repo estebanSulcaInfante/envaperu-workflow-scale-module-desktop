@@ -124,6 +124,26 @@ export default function ScmWeighing({
     }
   };
 
+  const resumePrintAcknowledgement = async () => {
+    if (!result?.print_result?.ack_pending || busy || !operationIdRef.current) return;
+    setBusy(true);
+    setError('');
+    try {
+      const { data } = await scmWeighingApi.confirm(
+        context.scanned_label_id,
+        operationIdRef.current,
+      );
+      setResult(data);
+    } catch (requestError) {
+      setError(
+        requestError.response?.data?.message
+          || 'El acuse central sigue pendiente. El sticker no se volvió a imprimir.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const recordControl = async () => {
     if (!canRecordControl) return;
     if (!controlOperationIdRef.current) {
@@ -423,7 +443,11 @@ export default function ScmWeighing({
             {busy ? 'Confirmando…' : 'Confirmar pesaje (F2)'}
           </button>
           {result && (
-            <div className={`scm-result ${printState === 'IMPRESA' ? 'success' : 'warning'}`}>
+            <div className={`scm-result ${
+              printState === 'IMPRESA' && !result.print_result?.ack_pending
+                ? 'success'
+                : 'warning'
+            }`}>
               <strong>{result.portfolio_demo ? 'Pesaje demo confirmado' : 'Pesaje central confirmado'}</strong>
               <span>
                 Neto {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
@@ -449,6 +473,33 @@ export default function ScmWeighing({
                 </div>
               )}
               <span>Etiqueta final: {printState}</span>
+              {result.print_result?.ack_pending && (
+                <div className="scm-message error">
+                  <strong>Sticker aceptado; acuse central pendiente.</strong>
+                  <span>
+                    No vuelva a imprimir. Reanudar el acuse solo registra la evidencia local.
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busy}
+                    onClick={resumePrintAcknowledgement}
+                  >
+                    {busy ? 'Reanudando…' : 'Reanudar acuse central'}
+                  </button>
+                </div>
+              )}
+              {result.print_result?.ack_recovered && (
+                <div className="scm-message success">
+                  Acuse central recuperado sin volver a imprimir el sticker.
+                </div>
+              )}
+              {result.print_result?.auto_reprint_blocked && (
+                <div className="scm-message error">
+                  Emisión incierta o parcial: la reimpresión automática está bloqueada.
+                  Concilie el material y gestione un reemplazo supervisado con motivo.
+                </div>
+              )}
               <small>
                 Estado inventario: NO_INGRESADA · pendiente de recepción
               </small>

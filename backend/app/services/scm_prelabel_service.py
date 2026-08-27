@@ -4,6 +4,8 @@ import json
 import hashlib
 import base64
 import io
+import threading
+from copy import deepcopy
 from html import escape
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -15,8 +17,11 @@ from app import db
 from app.models.scm_label_print_attempt import ScmLabelPrintAttempt
 from app.models.station_identity import StationIdentity
 from app.runtime.token_store import read_configured_station_token
-from app.services.central_api_client import CentralApiClient
-from app.services.printer_service import get_printer_service
+from app.services.central_api_client import CentralApiClient, CentralApiError
+from app.services.printer_service import (
+    PrinterEmissionResult,
+    get_printer_service,
+)
 
 
 def _safe(value, limit=32):
@@ -45,6 +50,7 @@ class ScmPrelabelService:
     RIGHT_X = 464
     STICKER_WIDTH = 400
     LINE_HEIGHT = 22
+    _physical_print_lock = threading.RLock()
 
     def __init__(self, *, client=None, printer=None):
         self.client = client
@@ -80,15 +86,92 @@ class ScmPrelabelService:
 
     def fetch(self, print_job_id):
         client = self.client or self._central_client()
-        return client.get_scm_print_job(self._station_id(), print_job_id)
+        job = client.get_scm_print_job(self._station_id(), print_job_id)
+        return self._with_local_evidence(job)
 
     def list_jobs(self, *, status="PENDING", limit=20):
         client = self.client or self._central_client()
-        return client.list_scm_print_jobs(
+        response = client.list_scm_print_jobs(
             self._station_id(),
             status=status,
             limit=limit,
         )
+        if not isinstance(response, dict):
+            return response
+        enriched = deepcopy(response)
+        enriched["print_jobs"] = [
+            self._with_local_evidence(job)
+            for job in response.get("print_jobs", [])
+        ]
+        return enriched
+
+    @staticmethod
+    def _latest_attempts(print_job_id):
+        if not has_app_context():
+            return {}
+        attempts = ScmLabelPrintAttempt.query.filter_by(
+            print_job_id=print_job_id,
+        ).order_by(ScmLabelPrintAttempt.id.desc()).all()
+        latest = {}
+        for attempt in attempts:
+            latest.setdefault(attempt.label_id, attempt)
+        return latest
+
+    @staticmethod
+    def _visible_state(state):
+        if state == "EMISION_EN_PROGRESO":
+            return "EMISION_INCIERTA"
+        return state
+
+    @classmethod
+    def _aggregate_local_state(cls, latest):
+        states = {
+            cls._visible_state(attempt.result)
+            for attempt in latest.values()
+        }
+        if not states:
+            return None
+        if "EMISION_INCIERTA" in states:
+            return "EMISION_INCIERTA"
+        if states == {"IMPRESA"}:
+            return "IMPRESA"
+        if states == {"FALLIDA_SIN_EMISION"}:
+            return "FALLIDA_SIN_EMISION"
+        return "PARCIAL"
+
+    @classmethod
+    def _with_local_evidence(cls, job, *, latest=None, ack_pending=None):
+        if not isinstance(job, dict):
+            return job
+        enriched = deepcopy(job)
+        print_job_id = enriched.get("print_job_id")
+        latest = latest if latest is not None else cls._latest_attempts(
+            print_job_id
+        )
+        for label in enriched.get("labels") or []:
+            attempt = latest.get(str(label.get("public_id")))
+            if attempt is not None:
+                label["local_print_state"] = cls._visible_state(
+                    attempt.result
+                )
+        local_state = cls._aggregate_local_state(latest)
+        if local_state:
+            enriched["local_print_state"] = local_state
+        blocked = local_state in {"EMISION_INCIERTA", "PARCIAL"}
+        if blocked:
+            enriched["auto_reprint_blocked"] = True
+        central_status = str(
+            enriched.get("status") or enriched.get("estado") or ""
+        ).upper()
+        inferred_ack_pending = (
+            local_state == "IMPRESA"
+            and central_status not in {"PRINTED", "PROCESADO", "IMPRESA"}
+        )
+        if ack_pending is not None:
+            inferred_ack_pending = bool(ack_pending)
+        if local_state == "IMPRESA" or ack_pending is not None:
+            enriched["ack_pending"] = inferred_ack_pending
+        return enriched
 
     @staticmethod
     def _order_row(payload):
@@ -277,9 +360,211 @@ class ScmPrelabelService:
         capture_id=None,
         manga_id=None,
     ):
+        # La estación es de instancia única, y este lock evita dos requests
+        # concurrentes que atraviesen el ledger antes de que alguna lo escriba.
+        with self._physical_print_lock:
+            return self._print_job_locked(
+                print_job_id,
+                operation_id=operation_id,
+                capture_id=capture_id,
+                manga_id=manga_id,
+            )
+
+    @staticmethod
+    def _ack_results(latest):
+        return [
+            {
+                "label_id": attempt.label_id,
+                "estado": ScmPrelabelService._visible_state(attempt.result),
+                "printer_name": attempt.printer_name,
+                "error": attempt.error_detail,
+            }
+            for attempt in sorted(latest.values(), key=lambda item: item.id)
+        ]
+
+    def _acknowledge_local_result(
+        self,
+        *,
+        client,
+        print_job_id,
+        latest,
+        job,
+        tspl=None,
+        printer_emission=None,
+        recovered=False,
+    ):
+        state = self._aggregate_local_state(latest)
+        try:
+            acknowledgement = client.acknowledge_scm_print_job(
+                self._station_id(),
+                print_job_id,
+                {"results": self._ack_results(latest)},
+            )
+            ack_pending = False
+            ack_error = None
+        except CentralApiError as exc:
+            # La emisión ya tiene evidencia durable. Un fallo de acuse no
+            # modifica ese hecho y jamás debe provocar otra impresión.
+            acknowledgement = None
+            ack_pending = True
+            ack_error = {"code": exc.state, "message": str(exc)}
+
+        enriched_job = self._with_local_evidence(
+            job,
+            latest=latest,
+            ack_pending=ack_pending,
+        )
+        blocked = state in {"EMISION_INCIERTA", "PARCIAL"}
+        result = {
+            "print_job": enriched_job,
+            "tspl": tspl,
+            "result": state,
+            "central_ack": acknowledgement,
+            "ack_pending": ack_pending,
+            "ack_recovered": bool(recovered and not ack_pending),
+            "auto_reprint_blocked": blocked,
+        }
+        if state == "IMPRESA" and recovered:
+            result["already_printed"] = True
+        if ack_error:
+            result["central_ack_error"] = ack_error
+        if printer_emission is not None:
+            result["printer_emission"] = printer_emission.to_dict()
+        return result
+
+    @staticmethod
+    def _local_job_snapshot(print_job_id, latest):
+        return {
+            "print_job_id": print_job_id,
+            "labels": [
+                {
+                    "public_id": attempt.label_id,
+                    "local_print_state": (
+                        ScmPrelabelService._visible_state(attempt.result)
+                    ),
+                }
+                for attempt in sorted(
+                    latest.values(), key=lambda item: item.id
+                )
+            ],
+        }
+
+    def _resume_from_ledger(self, client, print_job_id):
+        latest = self._latest_attempts(print_job_id)
+        if not latest:
+            return None
+
+        incomplete = [
+            attempt
+            for attempt in latest.values()
+            if attempt.result == "EMISION_EN_PROGRESO"
+        ]
+        if incomplete:
+            completed = datetime.now(timezone.utc)
+            for attempt in incomplete:
+                attempt.result = "EMISION_INCIERTA"
+                attempt.completed_at_utc = completed
+                attempt.error_detail = (
+                    "La estación se interrumpió entre el registro previo y "
+                    "la confirmación del spooler; no reimprimir automáticamente"
+                )
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                raise
+            latest = self._latest_attempts(print_job_id)
+
+        state = self._aggregate_local_state(latest)
+        if state == "FALLIDA_SIN_EMISION":
+            return None
+
+        # IMPRESA, PARCIAL o EMISION_INCIERTA son terminales para el envío
+        # físico. El endpoint se convierte exclusivamente en retry del acuse.
+        return self._acknowledge_local_result(
+            client=client,
+            print_job_id=print_job_id,
+            latest=latest,
+            job=self._local_job_snapshot(print_job_id, latest),
+            recovered=True,
+        )
+
+    @staticmethod
+    def _emit(printer, tspl):
+        detailed_print = getattr(printer, "print_tspl_result", None)
+        if callable(detailed_print):
+            try:
+                result = detailed_print(tspl)
+            except Exception as exc:
+                return PrinterEmissionResult(
+                    status=PrinterEmissionResult.UNCERTAIN,
+                    expected_bytes=len(tspl.encode("utf-8")),
+                    error=str(exc)[:500],
+                )
+            if isinstance(result, PrinterEmissionResult):
+                return result
+            status = getattr(result, "status", None)
+            if status in {
+                PrinterEmissionResult.ACCEPTED,
+                PrinterEmissionResult.NOT_EMITTED,
+                PrinterEmissionResult.UNCERTAIN,
+            }:
+                return PrinterEmissionResult(
+                    status=status,
+                    expected_bytes=getattr(
+                        result, "expected_bytes", len(tspl.encode("utf-8"))
+                    ),
+                    bytes_written=getattr(result, "bytes_written", None),
+                    document_started=bool(
+                        getattr(result, "document_started", False)
+                    ),
+                    write_attempted=bool(
+                        getattr(result, "write_attempted", False)
+                    ),
+                    simulated=bool(getattr(result, "simulated", False)),
+                    job_id=getattr(result, "job_id", None),
+                    error=getattr(result, "error", None),
+                )
+            return PrinterEmissionResult(
+                status=PrinterEmissionResult.UNCERTAIN,
+                expected_bytes=len(tspl.encode("utf-8")),
+                error="La impresora devolvió un resultado no reconocido",
+            )
+
+        # Adaptador para impresoras de prueba/legacy. El PrinterService real
+        # siempre expone el resultado detallado.
+        try:
+            success = bool(printer.print_tspl(tspl))
+        except Exception as exc:
+            return PrinterEmissionResult(
+                status=PrinterEmissionResult.UNCERTAIN,
+                expected_bytes=len(tspl.encode("utf-8")),
+                error=str(exc)[:500],
+            )
+        return PrinterEmissionResult(
+            status=(
+                PrinterEmissionResult.ACCEPTED
+                if success else PrinterEmissionResult.NOT_EMITTED
+            ),
+            expected_bytes=len(tspl.encode("utf-8")),
+            error=None if success else "La impresora rechazó el trabajo",
+        )
+
+    def _print_job_locked(
+        self,
+        print_job_id,
+        *,
+        operation_id=None,
+        capture_id=None,
+        manga_id=None,
+    ):
         client = self.client or self._central_client()
-        # Preview is deliberately read-only. The reservation happens here,
-        # immediately before the irreversible interaction with the printer.
+        resumed = self._resume_from_ledger(client, print_job_id)
+        if resumed is not None:
+            return resumed
+
+        # Preview es read-only. La reserva ocurre inmediatamente antes del
+        # pre-registro durable y de la interacción irreversible con el spooler.
         job = client.claim_scm_print_job(
             self._station_id(), print_job_id
         )
@@ -292,16 +577,8 @@ class ScmPrelabelService:
             "SCM_PRELABEL_PRINTER"
         ) or get_printer_service()
         printer_name = getattr(printer, "printer_name", None)
-        try:
-            success = bool(printer.print_tspl(tspl))
-            state = "IMPRESA" if success else "FALLIDA_SIN_EMISION"
-            error = None if success else "La impresora rechazo el trabajo"
-        except Exception as exc:
-            state = "EMISION_INCIERTA"
-            error = str(exc)[:500]
 
-        completed = datetime.now(timezone.utc)
-        results = []
+        attempts = []
         for label in job["labels"]:
             attempt = ScmLabelPrintAttempt(
                 print_job_id=job["print_job_id"],
@@ -316,30 +593,55 @@ class ScmPrelabelService:
                 payload_hash=label["payload_hash"],
                 rendered_payload_hash=rendered_payload_hash,
                 attempted_at_utc=attempted_at,
-                completed_at_utc=completed,
+                completed_at_utc=None,
                 printer_name=printer_name,
-                result=state,
-                error_detail=error,
+                result="EMISION_EN_PROGRESO",
+                error_detail=None,
             )
             db.session.add(attempt)
-            results.append({
-                "label_id": label["public_id"],
-                "estado": state,
-                "printer_name": printer_name,
-                "error": error,
-            })
-        db.session.commit()
-        acknowledgement = client.acknowledge_scm_print_job(
-            self._station_id(),
-            job["print_job_id"],
-            {"results": results},
-        )
-        return {
-            "print_job": job,
-            "tspl": tspl,
-            "result": state,
-            "central_ack": acknowledgement,
+            attempts.append(attempt)
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+
+        emission = self._emit(printer, tspl)
+        state_by_emission = {
+            PrinterEmissionResult.ACCEPTED: "IMPRESA",
+            PrinterEmissionResult.NOT_EMITTED: "FALLIDA_SIN_EMISION",
+            PrinterEmissionResult.UNCERTAIN: "EMISION_INCIERTA",
         }
+        state = state_by_emission.get(
+            emission.status, "EMISION_INCIERTA"
+        )
+        error = emission.error
+        if state == "EMISION_INCIERTA" and not error:
+            error = "El spooler no confirmó la emisión completa"
+        completed = datetime.now(timezone.utc)
+        actual_printer_name = getattr(printer, "printer_name", None)
+        for attempt in attempts:
+            attempt.completed_at_utc = completed
+            attempt.printer_name = actual_printer_name
+            attempt.result = state
+            attempt.error_detail = error
+        try:
+            db.session.commit()
+        except Exception:
+            # EMISION_EN_PROGRESO ya es durable. Si este commit falla, un
+            # próximo intento lo convertirá en incierto y no enviará otra copia.
+            db.session.rollback()
+            raise
+
+        latest = self._latest_attempts(print_job_id)
+        return self._acknowledge_local_result(
+            client=client,
+            print_job_id=print_job_id,
+            latest=latest,
+            job=job,
+            tspl=tspl,
+            printer_emission=emission,
+        )
 
 
 def get_scm_prelabel_service():

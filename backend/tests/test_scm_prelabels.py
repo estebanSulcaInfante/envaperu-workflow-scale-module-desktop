@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from app import create_app, db
 from app.models.scm_label_print_attempt import ScmLabelPrintAttempt
+from app.services.central_api_client import CentralApiError
+from app.services.printer_service import PrinterEmissionResult
 from app.services.scm_prelabel_service import ScmPrelabelService
 
 
@@ -316,6 +318,231 @@ def test_fallo_sin_emision_se_puede_reintentar_sin_borrar_evidencia(tmp_path):
             assert all(
                 len(attempt.rendered_payload_hash) == 64
                 for attempt in attempts
+            )
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_fallo_de_acuse_reanuda_solo_central_sin_reimprimir(tmp_path):
+    label = _label("OP0084-OT001-M001")
+    job = {"print_job_id": str(uuid4()), "labels": [label]}
+
+    class Central:
+        def __init__(self):
+            self.claims = 0
+            self.acks = 0
+
+        def claim_scm_print_job(self, _station_id, _job_id):
+            self.claims += 1
+            return job
+
+        def acknowledge_scm_print_job(
+            self, _station_id, _job_id, payload
+        ):
+            self.acks += 1
+            if self.acks == 1:
+                raise CentralApiError(
+                    "CENTRAL_UNREACHABLE", "acuse no disponible"
+                )
+            return {"results": payload["results"]}
+
+    class Printer:
+        printer_name = "TSC"
+
+        def __init__(self):
+            self.calls = 0
+
+        def print_tspl_result(self, payload):
+            self.calls += 1
+            byte_count = len(payload.encode("utf-8"))
+            return PrinterEmissionResult(
+                status=PrinterEmissionResult.ACCEPTED,
+                expected_bytes=byte_count,
+                bytes_written=byte_count,
+                document_started=True,
+                write_attempted=True,
+            )
+
+    database = tmp_path / "ack-retry.db"
+    app = create_app(
+        config_overrides={
+            "TESTING": True,
+            "SYNC_ENABLED": False,
+            "MONITORING_ENABLED": False,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
+            "STATION_DATABASE_PATH": str(database),
+            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
+            "STATION_ID": "PESAJE-ACK-01",
+        },
+        start_workers=False,
+    )
+    central = Central()
+    printer = Printer()
+    try:
+        with app.app_context():
+            service = ScmPrelabelService(client=central, printer=printer)
+            first = service.print_job(job["print_job_id"])
+            second = service.print_job(job["print_job_id"])
+
+            assert first["result"] == "IMPRESA"
+            assert first["ack_pending"] is True
+            assert first["central_ack_error"]["code"] == "CENTRAL_UNREACHABLE"
+            assert second["result"] == "IMPRESA"
+            assert second["ack_recovered"] is True
+            assert second["already_printed"] is True
+            assert second["ack_pending"] is False
+            assert printer.calls == 1
+            assert central.claims == 1
+            assert central.acks == 2
+            attempts = ScmLabelPrintAttempt.query.all()
+            assert len(attempts) == 1
+            assert attempts[0].result == "IMPRESA"
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_emision_en_progreso_tras_caida_se_vuelve_incierta_y_bloquea_retry(
+    tmp_path,
+):
+    print_job_id = str(uuid4())
+    label_id = str(uuid4())
+
+    class Central:
+        def __init__(self):
+            self.acks = []
+
+        def claim_scm_print_job(self, *_args, **_kwargs):
+            raise AssertionError("No debe reclamar un trabajo incierto")
+
+        def acknowledge_scm_print_job(
+            self, _station_id, _job_id, payload
+        ):
+            self.acks.append(payload)
+            return {"results": payload["results"]}
+
+    class Printer:
+        def print_tspl(self, _payload):
+            raise AssertionError("No debe reimprimir un trabajo incierto")
+
+    database = tmp_path / "interrupted-print.db"
+    app = create_app(
+        config_overrides={
+            "TESTING": True,
+            "SYNC_ENABLED": False,
+            "MONITORING_ENABLED": False,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
+            "STATION_DATABASE_PATH": str(database),
+            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
+            "STATION_ID": "PESAJE-CRASH-01",
+        },
+        start_workers=False,
+    )
+    central = Central()
+    try:
+        with app.app_context():
+            db.session.add(ScmLabelPrintAttempt(
+                print_job_id=print_job_id,
+                label_id=label_id,
+                label_type="POSTPESAJE",
+                payload_hash="a" * 64,
+                result="EMISION_EN_PROGRESO",
+            ))
+            db.session.commit()
+
+            result = ScmPrelabelService(
+                client=central,
+                printer=Printer(),
+            ).print_job(print_job_id)
+
+            attempt = ScmLabelPrintAttempt.query.one()
+            assert attempt.result == "EMISION_INCIERTA"
+            assert attempt.completed_at_utc is not None
+            assert result["result"] == "EMISION_INCIERTA"
+            assert result["auto_reprint_blocked"] is True
+            assert result["ack_recovered"] is True
+            assert central.acks[0]["results"][0]["estado"] == (
+                "EMISION_INCIERTA"
+            )
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_escritura_parcial_nunca_se_clasifica_sin_emision_ni_se_reimprime(
+    tmp_path,
+):
+    label = _label("OP0084-OT001-M001")
+    job = {"print_job_id": str(uuid4()), "labels": [label]}
+
+    class Central:
+        def __init__(self):
+            self.claims = 0
+            self.acks = 0
+
+        def claim_scm_print_job(self, _station_id, _job_id):
+            self.claims += 1
+            return job
+
+        def acknowledge_scm_print_job(self, *_args):
+            self.acks += 1
+            return {"estado": "PARCIAL"}
+
+    class Printer:
+        printer_name = "TSC"
+
+        def __init__(self):
+            self.calls = 0
+
+        def print_tspl_result(self, payload):
+            self.calls += 1
+            expected = len(payload.encode("utf-8"))
+            return PrinterEmissionResult(
+                status=PrinterEmissionResult.UNCERTAIN,
+                expected_bytes=expected,
+                bytes_written=expected - 1,
+                document_started=True,
+                write_attempted=True,
+                error="Escritura RAW incompleta",
+            )
+
+    database = tmp_path / "partial-write.db"
+    app = create_app(
+        config_overrides={
+            "TESTING": True,
+            "SYNC_ENABLED": False,
+            "MONITORING_ENABLED": False,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
+            "STATION_DATABASE_PATH": str(database),
+            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
+            "STATION_ID": "PESAJE-PARTIAL-01",
+        },
+        start_workers=False,
+    )
+    central = Central()
+    printer = Printer()
+    try:
+        with app.app_context():
+            service = ScmPrelabelService(client=central, printer=printer)
+            first = service.print_job(job["print_job_id"])
+            second = service.print_job(job["print_job_id"])
+
+            assert first["result"] == "EMISION_INCIERTA"
+            assert first["auto_reprint_blocked"] is True
+            assert first["printer_emission"]["bytes_written"] == (
+                first["printer_emission"]["expected_bytes"] - 1
+            )
+            assert second["result"] == "EMISION_INCIERTA"
+            assert second["ack_recovered"] is True
+            assert printer.calls == 1
+            assert central.claims == 1
+            assert central.acks == 2
+            assert ScmLabelPrintAttempt.query.one().result == (
+                "EMISION_INCIERTA"
             )
     finally:
         with app.app_context():

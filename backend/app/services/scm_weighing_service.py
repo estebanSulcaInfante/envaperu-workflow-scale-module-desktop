@@ -191,7 +191,7 @@ class ScmWeighingService:
             print_job_id=print_job_id,
         ).order_by(ScmLabelPrintAttempt.id.desc()).all()
         states = {attempt.result for attempt in attempts}
-        if "EMISION_INCIERTA" in states:
+        if states.intersection({"EMISION_INCIERTA", "EMISION_EN_PROGRESO"}):
             return {
                 "result": "EMISION_INCIERTA",
                 "recovered": True,
@@ -202,6 +202,12 @@ class ScmWeighingService:
                 "result": "IMPRESA",
                 "recovered": True,
                 "already_printed": True,
+            }
+        if "IMPRESA" in states:
+            return {
+                "result": "PARCIAL",
+                "recovered": True,
+                "auto_reprint_blocked": True,
             }
         return None
 
@@ -268,10 +274,23 @@ class ScmWeighingService:
             printer=self.printer,
         )
         print_job_id = confirmed["print_job_id"]
-        print_result = (
+        local_replay = (
             self._terminal_print_replay(operation_id, print_job_id)
             if recovered_operation else None
         )
+        print_result = None
+        if local_replay is not None:
+            # print_job consulta primero el ledger. En estos estados solo
+            # reanuda el acuse central y nunca vuelve a tocar la impresora.
+            print_result = print_service.print_job(
+                print_job_id,
+                operation_id=operation_id,
+                capture_id=operation_id,
+                manga_id=manga_id,
+            )
+            print_result["recovered"] = True
+            if print_result.get("result") == "IMPRESA":
+                print_result["already_printed"] = True
         if recovered_operation and print_result is None:
             job = print_service.fetch(print_job_id)
             if job.get("status") == "PRINTED":

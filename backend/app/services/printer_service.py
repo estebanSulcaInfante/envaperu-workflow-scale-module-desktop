@@ -2,10 +2,35 @@
 Servicio de impresión de etiquetas/stickers.
 Soporta impresoras TSC (TSPL), Zebra (ZPL) y térmicas (ESC/POS).
 """
+from dataclasses import asdict, dataclass
 from typing import Optional, List
 import threading
 import time
 from flask import current_app
+
+
+@dataclass(frozen=True)
+class PrinterEmissionResult:
+    """Resultado con suficiente evidencia para decidir si es seguro reintentar."""
+
+    ACCEPTED = "ACCEPTED"
+    NOT_EMITTED = "NOT_EMITTED"
+    UNCERTAIN = "UNCERTAIN"
+
+    status: str
+    expected_bytes: int
+    bytes_written: Optional[int] = None
+    document_started: bool = False
+    write_attempted: bool = False
+    simulated: bool = False
+    job_id: Optional[int] = None
+    error: Optional[str] = None
+
+    def __bool__(self):
+        return self.status == self.ACCEPTED
+
+    def to_dict(self):
+        return asdict(self)
 
 
 class PrinterService:
@@ -106,63 +131,140 @@ class PrinterService:
         self.disconnect()
         return drained
     
-    def print_tspl(self, tspl_code: str) -> bool:
+    def print_tspl_result(self, tspl_code: str) -> PrinterEmissionResult:
+        """Envía TSPL y conserva la frontera entre fallo seguro e incierto.
+
+        Una vez que ``StartDocPrinter`` fue aceptado, cualquier fallo posterior
+        se clasifica como incierto. En particular, una escritura parcial nunca
+        puede habilitar una reimpresión automática.
         """
-        Imprime código TSPL (para impresoras TSC) via Windows RAW.
-        """
+        payload = tspl_code.encode('utf-8')
+        expected_bytes = len(payload)
         try:
             if current_app.config.get('SIMULATE_PRINTER', False):
                 print(
-                    f"[PRINTER] Simulacion local: {len(tspl_code)} bytes TSPL "
+                    f"[PRINTER] Simulacion local: {expected_bytes} bytes TSPL "
                     "aceptados sin enviar al spooler"
                 )
-                return True
+                return PrinterEmissionResult(
+                    status=PrinterEmissionResult.ACCEPTED,
+                    expected_bytes=expected_bytes,
+                    bytes_written=expected_bytes,
+                    simulated=True,
+                )
         except RuntimeError:
             pass
 
         if not self._begin_print():
-            return False
+            return PrinterEmissionResult(
+                status=PrinterEmissionResult.NOT_EMITTED,
+                expected_bytes=expected_bytes,
+                error="El servicio de impresión se está deteniendo",
+            )
 
+        handle = None
+        document_started = False
+        page_started = False
+        write_attempted = False
+        bytes_written = None
+        job_id = None
         try:
-            import win32print
-            
-            # Asegurar conexión
-            if not self._connected:
-                self.connect()
-            
-            if not self.printer_name:
-                print("[PRINTER] No se encontró impresora TSC")
-                return False
-            
-            # Abrir impresora
-            handle = win32print.OpenPrinter(self.printer_name)
-            
             try:
-                # Iniciar documento RAW
-                win32print.StartDocPrinter(handle, 1, ("Label", None, "RAW"))
-                
-                try:
-                    win32print.StartPagePrinter(handle)
-                    win32print.WritePrinter(handle, tspl_code.encode('utf-8'))
-                    win32print.EndPagePrinter(handle)
-                    print(f"[PRINTER] ✅ Sticker enviado a {self.printer_name}")
-                    return True
-                finally:
-                    win32print.EndDocPrinter(handle)
-            finally:
-                win32print.ClosePrinter(handle)
-                
-        except ImportError:
-            print("[PRINTER] 🖥️ Simulando impresión en Linux/OSX (win32print no disponible)")
-            print("-" * 40)
-            print(tspl_code)
-            print("-" * 40)
-            return True
-        except Exception as e:
-            print(f"[PRINTER] ❌ Error: {e}")
-            return False
+                import win32print
+            except ImportError as exc:
+                print("[PRINTER] win32print no disponible; no se emitió el trabajo")
+                return PrinterEmissionResult(
+                    status=PrinterEmissionResult.NOT_EMITTED,
+                    expected_bytes=expected_bytes,
+                    error=str(exc) or "win32print no disponible",
+                )
+
+            try:
+                if not self._connected:
+                    self.connect()
+                if not self.printer_name:
+                    raise RuntimeError("No se encontró impresora TSC")
+                handle = win32print.OpenPrinter(self.printer_name)
+            except Exception as exc:
+                print(f"[PRINTER] ❌ Fallo previo a emisión: {exc}")
+                return PrinterEmissionResult(
+                    status=PrinterEmissionResult.NOT_EMITTED,
+                    expected_bytes=expected_bytes,
+                    error=str(exc)[:500],
+                )
+
+            try:
+                job_id = win32print.StartDocPrinter(
+                    handle, 1, ("Label", None, "RAW")
+                )
+                document_started = True
+                win32print.StartPagePrinter(handle)
+                page_started = True
+                write_attempted = True
+                bytes_written = win32print.WritePrinter(handle, payload)
+                if bytes_written != expected_bytes:
+                    raise IOError(
+                        "Escritura RAW incompleta: "
+                        f"{bytes_written!r} de {expected_bytes} bytes"
+                    )
+                win32print.EndPagePrinter(handle)
+                page_started = False
+                win32print.EndDocPrinter(handle)
+                document_started = False
+            except Exception as exc:
+                status = (
+                    PrinterEmissionResult.UNCERTAIN
+                    if document_started
+                    else PrinterEmissionResult.NOT_EMITTED
+                )
+                qualifier = (
+                    "Emisión incierta"
+                    if status == PrinterEmissionResult.UNCERTAIN
+                    else "Fallo previo a emisión"
+                )
+                print(f"[PRINTER] ⚠️ {qualifier}: {exc}")
+                return PrinterEmissionResult(
+                    status=status,
+                    expected_bytes=expected_bytes,
+                    bytes_written=bytes_written,
+                    document_started=document_started,
+                    write_attempted=write_attempted,
+                    job_id=job_id,
+                    error=str(exc)[:500],
+                )
+
+            print(f"[PRINTER] ✅ Sticker aceptado por {self.printer_name}")
+            return PrinterEmissionResult(
+                status=PrinterEmissionResult.ACCEPTED,
+                expected_bytes=expected_bytes,
+                bytes_written=bytes_written,
+                document_started=True,
+                write_attempted=True,
+                job_id=job_id,
+            )
         finally:
+            if handle is not None:
+                # El cleanup puede terminar entregando al spooler bytes que ya
+                # habían sido aceptados. Por eso nunca vuelve seguro un fallo.
+                if page_started:
+                    try:
+                        win32print.EndPagePrinter(handle)
+                    except Exception as exc:
+                        print(f"[PRINTER] Error cerrando página RAW: {exc}")
+                if document_started:
+                    try:
+                        win32print.EndDocPrinter(handle)
+                    except Exception as exc:
+                        print(f"[PRINTER] Error cerrando documento RAW: {exc}")
+                try:
+                    win32print.ClosePrinter(handle)
+                except Exception as exc:
+                    print(f"[PRINTER] Error cerrando impresora: {exc}")
             self._end_print()
+
+    def print_tspl(self, tspl_code: str) -> bool:
+        """Compatibilidad legacy; SCM consume ``print_tspl_result``."""
+        return bool(self.print_tspl_result(tspl_code))
     
     def print_raw(self, data: bytes) -> bool:
         """Envía datos raw a la impresora"""

@@ -569,6 +569,7 @@ def test_reintento_f2_no_reimprime_si_emision_local_fue_incierta(tmp_path):
         "weighing": {"manga_id": manga_id},
         "print_job_id": print_job_id,
     }
+    acknowledgements = []
 
     class Central:
         def resolve_scm_manga_label(self, _label_id):
@@ -586,6 +587,12 @@ def test_reintento_f2_no_reimprime_si_emision_local_fue_incierta(tmp_path):
 
         def get_scm_print_job(self, *_args, **_kwargs):
             raise AssertionError("La evidencia local incierta debe bloquear reimpresión")
+
+        def acknowledge_scm_print_job(
+            self, _station_id, requested_job_id, payload
+        ):
+            acknowledgements.append((requested_job_id, payload))
+            return {"results": payload["results"]}
 
     database = tmp_path / "uncertain-replay.db"
     app = create_app(
@@ -620,11 +627,99 @@ def test_reintento_f2_no_reimprime_si_emision_local_fue_incierta(tmp_path):
                     AssertionError("El replay no debe releer la balanza")
                 ),
             ).confirm(operation_id=operation_id, label_id=label_id)
-        assert result["print_result"] == {
-            "result": "EMISION_INCIERTA",
-            "recovered": True,
-            "auto_reprint_blocked": True,
-        }
+        assert result["print_result"]["result"] == "EMISION_INCIERTA"
+        assert result["print_result"]["recovered"] is True
+        assert result["print_result"]["auto_reprint_blocked"] is True
+        assert result["print_result"]["ack_recovered"] is True
+        assert acknowledgements[0][0] == print_job_id
+        assert acknowledgements[0][1]["results"][0]["estado"] == (
+            "EMISION_INCIERTA"
+        )
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_reintento_f2_con_impresion_local_reanuda_solo_acuse(tmp_path):
+    operation_id = str(uuid4())
+    label_id = str(uuid4())
+    post_label_id = str(uuid4())
+    manga_id = str(uuid4())
+    print_job_id = str(uuid4())
+    acknowledgements = []
+    response = {
+        "weighing": {"manga_id": manga_id},
+        "print_job_id": print_job_id,
+    }
+
+    class Central:
+        def resolve_scm_manga_label(self, _label_id):
+            return {
+                "can_weigh": False,
+                "manga": {"public_id": manga_id, "tara_nominal_kg": "0.100"},
+            }
+
+        def get_scm_operation(self, _operation_id):
+            return {"status": 200, "response": response}
+
+        def get_scm_print_job(self, *_args, **_kwargs):
+            raise AssertionError("La evidencia IMPRESA evita consultar/reclamar")
+
+        def claim_scm_print_job(self, *_args, **_kwargs):
+            raise AssertionError("La evidencia IMPRESA evita reclamar")
+
+        def acknowledge_scm_print_job(
+            self, _station_id, requested_job_id, payload
+        ):
+            acknowledgements.append((requested_job_id, payload))
+            return {"results": payload["results"]}
+
+    class Printer:
+        def print_tspl(self, _payload):
+            raise AssertionError("El retry del acuse no debe reimprimir")
+
+    database = tmp_path / "printed-ack-replay.db"
+    app = create_app(
+        config_overrides={
+            "TESTING": True,
+            "SYNC_ENABLED": False,
+            "MONITORING_ENABLED": False,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
+            "STATION_DATABASE_PATH": str(database),
+            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
+            "STATION_UUID": str(uuid4()),
+            "SCM_OPERATOR_ID": "7",
+        },
+        start_workers=False,
+    )
+    try:
+        with app.app_context():
+            db.session.add(ScmLabelPrintAttempt(
+                print_job_id=print_job_id,
+                label_id=post_label_id,
+                label_type="POSTPESAJE",
+                operation_id=operation_id,
+                capture_id=operation_id,
+                manga_id=manga_id,
+                payload_hash="a" * 64,
+                result="IMPRESA",
+            ))
+            db.session.commit()
+
+            result = ScmWeighingService(
+                client=Central(),
+                printer=Printer(),
+                scale_snapshot=lambda: (_ for _ in ()).throw(
+                    AssertionError("El retry no debe releer la balanza")
+                ),
+            ).confirm(operation_id=operation_id, label_id=label_id)
+
+            assert result["print_result"]["result"] == "IMPRESA"
+            assert result["print_result"]["ack_recovered"] is True
+            assert result["print_result"]["already_printed"] is True
+            assert acknowledgements[0][0] == print_job_id
+            assert acknowledgements[0][1]["results"][0]["estado"] == "IMPRESA"
     finally:
         with app.app_context():
             db.session.remove()

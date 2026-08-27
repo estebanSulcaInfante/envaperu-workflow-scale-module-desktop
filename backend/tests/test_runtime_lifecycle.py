@@ -95,6 +95,7 @@ def test_printer_shutdown_drains_active_print_before_disconnect(monkeypatch):
         def WritePrinter(self, handle, data):
             write_started.set()
             release_write.wait(timeout=2)
+            return len(data)
 
         def EndPagePrinter(self, handle):
             return None

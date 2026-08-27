@@ -122,6 +122,66 @@ describe('ScmWeighing', () => {
     expect(screen.queryByLabelText(/Peso bruto/)).toBeNull();
   });
 
+  it('reanuda el acuse pendiente de F2 sin presentar una reimpresión', async () => {
+    const confirmed = {
+      weighing: {
+        estado_manga: 'PESADA',
+        peso_fisico_neto_kg: '10.000',
+        kg_produccion_ot: '10.000',
+      },
+    };
+    scmWeighingApi.resolve.mockResolvedValue({ data: context });
+    scmWeighingApi.confirm
+      .mockResolvedValueOnce({
+        data: {
+          confirmed,
+          print_result: {
+            result: 'IMPRESA',
+            ack_pending: true,
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          confirmed,
+          print_result: {
+            result: 'IMPRESA',
+            ack_pending: false,
+            ack_recovered: true,
+            already_printed: true,
+          },
+        },
+      });
+    render(
+      <ScmWeighing
+        peso={10.1}
+        listening
+        centralState="ONLINE"
+        onConnect={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('QR de manga SCM'), {
+      target: { value: '{"v":1,"type":"SCM_MANGA_LABEL"}' },
+    });
+    fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
+    await screen.findByText('OP0084-OT001-M001');
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar pesaje (F2)' }));
+
+    const resume = await screen.findByRole('button', {
+      name: 'Reanudar acuse central',
+    });
+    expect(screen.getByText(/sticker aceptado; acuse central pendiente/i)).toBeTruthy();
+    fireEvent.click(resume);
+
+    await waitFor(() => expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(2));
+    const firstCall = scmWeighingApi.confirm.mock.calls[0];
+    const secondCall = scmWeighingApi.confirm.mock.calls[1];
+    expect(secondCall).toEqual(firstCall);
+    expect(await screen.findByText(/sin volver a imprimir el sticker/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reanudar acuse central' })).toBeNull();
+  });
+
   it('bloquea F2 cuando central no esta en linea', () => {
     render(
       <ScmWeighing

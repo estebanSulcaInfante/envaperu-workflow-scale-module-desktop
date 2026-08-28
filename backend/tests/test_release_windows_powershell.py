@@ -799,6 +799,14 @@ def test_update_waits_for_port_release_before_automatic_restore():
     assert stop_wait < rollback < restore
 
 
+def test_port_fallback_does_not_treat_time_wait_as_a_listener():
+    for script in (UPDATE_SCRIPT, ROLLBACK_SCRIPT):
+        source = script.read_text(encoding="utf-8")
+
+        assert r"\s+LISTENING\s+\d+" in source
+        assert r"\s+\S+\s+\d+\s*$" not in source
+
+
 def test_update_omits_empty_preupdate_backup_argument_on_first_install():
     source = UPDATE_SCRIPT.read_text(encoding="utf-8")
 

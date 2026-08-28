@@ -46,7 +46,7 @@ function Test-LoopbackPortOpen {
     catch {
         $netstatLines = @(netstat -ano -p tcp 2>$null)
         if ($LASTEXITCODE -eq 0) {
-            $pattern = "^\s*TCP\s+\S+:$Port\s+\S+\s+\S+\s+\d+\s*$"
+            $pattern = "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING\s+\d+\s*$"
             return @($netstatLines | Select-String -Pattern $pattern).Count -gt 0
         }
     }

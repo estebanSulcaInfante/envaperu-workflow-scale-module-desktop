@@ -4,6 +4,7 @@ import json
 import re
 from uuid import uuid4
 
+import pytest
 import qrcode
 from qrcode.constants import ERROR_CORRECT_L
 
@@ -202,6 +203,16 @@ def test_dos_identidades_generan_dos_hojas_duplicadas():
     assert "OP0084-OT001-M002" in tspl
     assert left["payload"]["qr"]["label_id"] in tspl
     assert right["payload"]["qr"]["label_id"] in tspl
+
+
+@pytest.mark.parametrize("labels", [
+    [_label("OF0014-OT006-M009")],
+    [_label("OF0014-OT006-M009"), _label("OF0014-OT006-M010")],
+])
+def test_tspl_termina_el_ultimo_print_con_crlf(labels):
+    tspl = ScmPrelabelService().generate_tspl({"labels": labels})
+
+    assert tspl.endswith("PRINT 1,1\r\n")
 
 
 def test_preview_web_respeta_hoja_fisica_y_genera_qr():

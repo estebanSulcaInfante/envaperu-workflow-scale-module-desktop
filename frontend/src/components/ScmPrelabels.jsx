@@ -20,10 +20,9 @@ const statusLabel = (job) => {
 
 const jobStatus = (job) => String(job?.status || job?.estado || '').toUpperCase();
 const localJobStatus = (job) => String(job?.local_print_state || '').toUpperCase();
-const isPrintedJob = (job) => (
-  ['PRINTED', 'PROCESADO', 'IMPRESA'].includes(jobStatus(job))
-  || localJobStatus(job) === 'IMPRESA'
-);
+const isPrintedJob = (job) => Boolean(job?.uiPrintAccepted)
+  || ['PRINTED', 'PROCESADO', 'IMPRESA'].includes(jobStatus(job))
+  || localJobStatus(job) === 'IMPRESA';
 const labelStatus = (label) => String(
   label?.local_print_state || label?.estado || label?.status || '',
 ).toUpperCase();
@@ -73,6 +72,64 @@ const mergeJobEvidence = (current, incoming) => {
   };
 };
 
+const firstPayload = (job) => job?.labels?.[0]?.payload || {};
+
+const jobContext = (job) => {
+  const payload = firstPayload(job);
+  const piece = payload.pieza_color
+    || payload.articulo_nombre
+    || payload.nombre_articulo
+    || payload.articulo?.nombre
+    || payload.articulo?.descripcion
+    || '';
+  const color = payload.color || payload.color_nombre || payload.nombre_color || '';
+  const order = payload.of_ot || payload.oa_ot || payload.op_ot || '';
+  const quantity = payload.cantidad_planificada_un || payload.cantidad_confirmada_un || '';
+  const operator = payload.maquinista || payload.responsable || '';
+  const mangas = jobMangas(job);
+  const title = [piece, color].filter(Boolean).join(' · ') || mangas || 'Trabajo sin descripción';
+  let createdTime = '';
+  if (job?.created_at) {
+    const createdAt = new Date(job.created_at);
+    if (!Number.isNaN(createdAt.getTime())) {
+      createdTime = new Intl.DateTimeFormat('es-PE', {
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(createdAt);
+    }
+  }
+  return {
+    title,
+    piece,
+    color,
+    order,
+    quantity,
+    operator,
+    mangas,
+    createdTime,
+  };
+};
+
+const normalizeSearch = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase();
+
+const jobMatches = (job, query) => {
+  const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const context = jobContext(job);
+  const haystack = normalizeSearch([
+    context.title,
+    context.order,
+    context.mangas,
+    context.quantity,
+    context.operator,
+    job?.print_job_id,
+  ].join(' '));
+  return terms.every((term) => haystack.includes(term));
+};
+
 export default function ScmPrelabels({ initialJobId = '' }) {
   const [jobId, setJobId] = useState(String(initialJobId || '').trim());
   const [job, setJob] = useState(null);
@@ -82,6 +139,10 @@ export default function ScmPrelabels({ initialJobId = '' }) {
   const [pendingJobs, setPendingJobs] = useState([]);
   const [pendingLoading, setPendingLoading] = useState(true);
   const [pendingUnavailable, setPendingUnavailable] = useState(false);
+  const [filterQuery, setFilterQuery] = useState('');
+  const [selectedJobId, setSelectedJobId] = useState('');
+  const [activeAction, setActiveAction] = useState('');
+  const [technicalSearchOpen, setTechnicalSearchOpen] = useState(false);
   const initialPreviewStarted = useRef(false);
 
   const loadPending = useCallback(async () => {
@@ -93,6 +154,7 @@ export default function ScmPrelabels({ initialJobId = '' }) {
     } catch (error) {
       setPendingJobs([]);
       setPendingUnavailable(true);
+      setTechnicalSearchOpen(true);
       if (![404, 501].includes(error.response?.status)) {
         setMessage({
           type: 'error',
@@ -108,12 +170,22 @@ export default function ScmPrelabels({ initialJobId = '' }) {
     const normalizedJobId = String(requestedJobId || '').trim();
     if (!normalizedJobId) return;
     setJobId(normalizedJobId);
+    setSelectedJobId(normalizedJobId);
     setLoading(true);
+    setActiveAction(action);
     setMessage(null);
+    if (action === 'preview') {
+      setJob(null);
+      setPreviewSvg('');
+    }
     try {
       const { data } = await scmPrelabelsApi[action](normalizedJobId);
       const requestedJob = data.print_job && action === 'print'
-        ? { ...data.print_job, ack_pending: Boolean(data.ack_pending) }
+        ? {
+          ...data.print_job,
+          ack_pending: Boolean(data.ack_pending),
+          uiPrintAccepted: data.result === 'IMPRESA',
+        }
         : data.print_job;
       setJob((current) => mergeJobEvidence(current, requestedJob));
       if (data.preview_svg) setPreviewSvg(data.preview_svg);
@@ -164,18 +236,23 @@ export default function ScmPrelabels({ initialJobId = '' }) {
         } else {
           setMessage({
             type: 'success',
-            text: 'Sticker aceptado por el spooler y acuse central registrado.',
+            text: 'Trabajo enviado y acuse técnico registrado. Verifique que salieron todas las hojas.',
           });
         }
         await loadPending();
       }
     } catch (error) {
+      if (action === 'preview') {
+        setJob(null);
+        setPreviewSvg('');
+      }
       setMessage({
         type: 'error',
         text: error.response?.data?.message || 'No se pudo abrir el trabajo central.',
       });
     } finally {
       setLoading(false);
+      setActiveAction('');
     }
   }, [loadPending]);
 
@@ -197,6 +274,13 @@ export default function ScmPrelabels({ initialJobId = '' }) {
     [previewSvg],
   );
 
+  const filteredPendingJobs = useMemo(
+    () => pendingJobs.filter((pendingJob) => jobMatches(pendingJob, filterQuery)),
+    [filterQuery, pendingJobs],
+  );
+
+  const selectedContext = useMemo(() => jobContext(job), [job]);
+
   return (
     <div className="panel">
       <div className="panel-header">ETIQUETAS SCM · VISTA PREVIA E IMPRESIÓN</div>
@@ -205,135 +289,247 @@ export default function ScmPrelabels({ initialJobId = '' }) {
           Previsualizar es una consulta: no imprime ni cambia el estado de las etiquetas.
           Solo «Imprimir sticker» envía el trabajo a la impresora.
         </p>
-
-        <section className="scm-pending-section" aria-labelledby="scm-pending-title">
-          <div className="scm-section-heading">
-            <div>
-              <h2 id="scm-pending-title">Pendientes de impresión</h2>
-              <p>Trabajos centrales disponibles para esta estación.</p>
-            </div>
-            <button
-              className="btn btn-secondary btn-sm"
-              type="button"
-              disabled={pendingLoading}
-              onClick={loadPending}
-            >
-              {pendingLoading ? 'Actualizando…' : 'Actualizar bandeja'}
-            </button>
-          </div>
-
-          {pendingUnavailable && (
-            <div className="scm-message info" role="status">
-              La bandeja no está disponible en esta versión; la búsqueda manual sigue disponible.
-            </div>
-          )}
-          {!pendingLoading && !pendingUnavailable && pendingJobs.length === 0 && (
-            <p className="scm-empty-state">No hay trabajos pendientes para esta estación.</p>
-          )}
-          {pendingJobs.length > 0 && (
-            <ul className="scm-pending-list">
-              {pendingJobs.map((pendingJob) => (
-                <li key={pendingJob.print_job_id}>
-                  <div>
-                    <strong>{jobMangas(pendingJob) || pendingJob.print_job_id}</strong>
-                    <span>{statusLabel(pendingJob)}</span>
-                    <small>
-                      {pendingJob.labels?.length || 0} etiqueta(s) · {pendingJob.print_job_id}
-                    </small>
-                  </div>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    type="button"
-                    disabled={loading}
-                    aria-label={`Previsualizar trabajo ${pendingJob.print_job_id}`}
-                    onClick={() => requestJob('preview', pendingJob.print_job_id)}
-                  >
-                    Ver
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="scm-manual-search" aria-labelledby="scm-manual-title">
-          <h2 id="scm-manual-title">Buscar por ID</h2>
-          <p>Úsalo como respaldo si el trabajo no aparece en la bandeja.</p>
-          <div className="scm-job-search">
-            <label htmlFor="scm-print-job-id">ID del trabajo de impresión</label>
-            <div>
-              <input
-                id="scm-print-job-id"
-                value={jobId}
-                onChange={(event) => setJobId(event.target.value)}
-                placeholder="UUID del trabajo de impresión"
-                autoComplete="off"
-              />
-              <button
-                className="btn btn-primary"
-                disabled={loading || !jobId.trim()}
-                onClick={() => requestJob('preview', jobId)}
-              >
-                {loading ? 'Consultando…' : 'Previsualizar'}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {message && (
-          <div className={`scm-message ${message.type}`} role="status" aria-live="polite">
-            {message.text}
-          </div>
-        )}
-        {job && (
-          <section className="scm-preview-section" aria-labelledby="scm-preview-title">
+        <div className="scm-print-workspace">
+          <section className="scm-pending-section" aria-labelledby="scm-pending-title">
             <div className="scm-section-heading">
               <div>
-                <h2 id="scm-preview-title">Vista previa de la hoja</h2>
-                <p>{statusLabel(job)} · Trabajo {job.print_job_id}</p>
+                <h2 id="scm-pending-title">Pendientes de impresión</h2>
+                <p>Elija por pieza, color y OF/OT; el código técnico es secundario.</p>
               </div>
-            </div>
-            <figure className="scm-render-preview">
-              <img src={previewSrc} alt="Simulación física 109 × 50 mm de la hoja TSPL" />
-              <figcaption>
-                Simulación web del layout TSPL · 109 × 50 mm · 203 DPI
-              </figcaption>
-            </figure>
-            <div className="sr-only" aria-live="polite">
-              {(job.labels || []).map((label) => (
-                <span key={label.public_id}>
-                  <span>{label.payload?.codigo_manga || label.manga_codigo}</span>
-                  <span>{`QR: ${label.payload?.qr?.label_id || label.public_id}`}</span>
-                  <span>2 copias físicas de la misma identidad</span>
-                </span>
-              ))}
-            </div>
-            <div className="scm-print-summary">
-              <span>
-                {job.labels?.length || 0} identidad(es) · 2 copias por identidad · {job.plantilla_version}
-              </span>
               <button
-                className="btn btn-primary"
-                disabled={
-                  loading
-                  || (isPrintedJob(job) && !hasAckPending(job))
-                  || requiresReplacement(job)
-                }
-                onClick={() => requestJob('print', job.print_job_id)}
+                className="btn btn-secondary btn-sm"
+                type="button"
+                disabled={pendingLoading || loading}
+                onClick={loadPending}
               >
-                {hasAckPending(job)
-                  ? 'Reanudar acuse central'
-                  : (isPrintedJob(job)
-                  ? 'Sticker ya impreso'
-                  : (requiresReplacement(job)
-                    ? 'Requiere etiqueta de reemplazo'
-                    : (isRetryWithoutEmission(job)
-                      ? 'Reintentar impresión'
-                      : 'Imprimir sticker')))}
+                {pendingLoading ? 'Actualizando…' : 'Actualizar'}
               </button>
             </div>
+
+            <div className="scm-pending-filter">
+              <label htmlFor="scm-pending-filter">
+                Buscar por pieza, color, OF/OT, manga o maquinista
+              </label>
+              <input
+                id="scm-pending-filter"
+                type="search"
+                value={filterQuery}
+                onChange={(event) => setFilterQuery(event.target.value)}
+                placeholder="Ej.: florero blanco u OF-000014"
+                autoComplete="off"
+                aria-describedby="scm-filter-scope"
+              />
+              <small id="scm-filter-scope">
+                Busca dentro de los {pendingJobs.length} trabajos cargados en esta estación.
+              </small>
+            </div>
+
+            {pendingLoading && (
+              <p className="scm-empty-state" role="status">Cargando trabajos…</p>
+            )}
+            {pendingUnavailable && (
+              <div className="scm-message info" role="status">
+                La bandeja no está disponible en esta versión; la búsqueda manual sigue disponible.
+              </div>
+            )}
+            {!pendingLoading && !pendingUnavailable && pendingJobs.length === 0 && (
+              <p className="scm-empty-state">No hay trabajos pendientes para esta estación.</p>
+            )}
+            {!pendingLoading && pendingJobs.length > 0 && filteredPendingJobs.length === 0 && (
+              <p className="scm-empty-state">
+                Ningún trabajo cargado coincide. Limpie la búsqueda o actualice la bandeja.
+              </p>
+            )}
+            {filteredPendingJobs.length > 0 && (
+              <ul className="scm-pending-list" aria-label="Trabajos de impresión cargados">
+                {filteredPendingJobs.map((pendingJob) => {
+                  const context = jobContext(pendingJob);
+                  const isSelected = selectedJobId === pendingJob.print_job_id;
+                  return (
+                    <li
+                      key={pendingJob.print_job_id}
+                      className={isSelected ? 'selected' : ''}
+                    >
+                      <button
+                        className="scm-pending-job"
+                        type="button"
+                        disabled={loading}
+                        aria-pressed={isSelected}
+                        aria-label={`Seleccionar ${context.title}${context.order ? `, ${context.order}` : ''}`}
+                        onClick={() => requestJob('preview', pendingJob.print_job_id)}
+                      >
+                        <span className="scm-job-card-heading">
+                          <strong>{context.title}</strong>
+                          <span>{statusLabel(pendingJob)}</span>
+                        </span>
+                        {context.order && <b>{context.order}</b>}
+                        <small>
+                          {context.mangas || `${pendingJob.labels?.length || 0} etiqueta(s)`}
+                        </small>
+                        {(context.quantity || context.operator || context.createdTime) && (
+                          <small>
+                            {[
+                              context.quantity ? `${context.quantity} un.` : '',
+                              context.operator,
+                              context.createdTime,
+                            ].filter(Boolean).join(' · ')}
+                          </small>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            <details
+              className="scm-manual-search"
+              open={technicalSearchOpen}
+              onToggle={(event) => setTechnicalSearchOpen(event.currentTarget.open)}
+            >
+              <summary>Búsqueda por ID técnico</summary>
+              <p>Respaldo para soporte si el trabajo no aparece en la bandeja.</p>
+              <div className="scm-job-search">
+                <label htmlFor="scm-print-job-id">ID del trabajo de impresión</label>
+                <div>
+                  <input
+                    id="scm-print-job-id"
+                    value={jobId}
+                    onChange={(event) => setJobId(event.target.value)}
+                    placeholder="UUID del trabajo de impresión"
+                    autoComplete="off"
+                  />
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    disabled={loading || !jobId.trim()}
+                    onClick={() => requestJob('preview', jobId)}
+                  >
+                    {activeAction === 'preview' ? 'Consultando…' : 'Previsualizar'}
+                  </button>
+                </div>
+              </div>
+            </details>
           </section>
-        )}
+
+          <section
+            className="scm-preview-section scm-selected-job"
+            aria-label="Trabajo seleccionado"
+            aria-busy={activeAction === 'preview'}
+          >
+            <div className="scm-section-heading">
+              <div>
+                <h2 id="scm-preview-title">Trabajo seleccionado</h2>
+                <p>Revise el contenido antes de enviar stickers a la impresora.</p>
+              </div>
+              {job && <span className="scm-selected-status">{statusLabel(job)}</span>}
+            </div>
+
+            {message && (
+              <div className={`scm-message ${message.type}`} role="status" aria-live="polite">
+                {message.text}
+              </div>
+            )}
+
+            {activeAction === 'preview' && !job && (
+              <div className="scm-selected-empty" role="status">
+                <strong>Cargando vista previa…</strong>
+                <span>La selección anterior se retiró para evitar imprimir otro trabajo.</span>
+              </div>
+            )}
+
+            {!job && activeAction !== 'preview' && (
+              <div className="scm-selected-empty">
+                <strong>Seleccione un trabajo de la bandeja</strong>
+                <span>Aquí aparecerán su descripción, hoja y acción de impresión.</span>
+              </div>
+            )}
+
+            {job && (
+              <>
+                <div className="scm-selected-context">
+                  <strong>{selectedContext.title}</strong>
+                  <span>
+                    {[selectedContext.order, selectedContext.mangas].filter(Boolean).join(' · ')}
+                  </span>
+                  {(selectedContext.quantity || selectedContext.operator) && (
+                    <small>
+                      {[
+                        selectedContext.quantity ? `${selectedContext.quantity} un.` : '',
+                        selectedContext.operator,
+                      ].filter(Boolean).join(' · ')}
+                    </small>
+                  )}
+                </div>
+
+                {previewSrc ? (
+                  <figure className="scm-render-preview">
+                    <img src={previewSrc} alt="Simulación física 109 × 50 mm de la hoja TSPL" />
+                    <figcaption>
+                      Simulación web del layout TSPL · 109 × 50 mm · 203 DPI
+                    </figcaption>
+                  </figure>
+                ) : (
+                  <div className="scm-preview-unavailable">
+                    Vista previa gráfica no disponible; revise el resumen antes de imprimir.
+                  </div>
+                )}
+
+                <div className="sr-only" aria-live="polite">
+                  {(job.labels || []).map((label) => (
+                    <span key={label.public_id}>
+                      <span>{label.payload?.codigo_manga || label.manga_codigo}</span>
+                      <span>{`QR: ${label.payload?.qr?.label_id || label.public_id}`}</span>
+                      <span>2 copias físicas de la misma identidad</span>
+                    </span>
+                  ))}
+                </div>
+
+                <details className="scm-technical-details">
+                  <summary>Detalles técnicos</summary>
+                  <dl>
+                    <div>
+                      <dt>ID del trabajo</dt>
+                      <dd>{job.print_job_id}</dd>
+                    </div>
+                    <div>
+                      <dt>Plantilla</dt>
+                      <dd>{job.plantilla_version || 'Por confirmar'}</dd>
+                    </div>
+                  </dl>
+                </details>
+
+                <div className="scm-print-summary">
+                  <span>
+                    {job.labels?.length || 0} identidad(es) · 2 copias por identidad
+                  </span>
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    disabled={
+                      loading
+                      || (isPrintedJob(job) && !hasAckPending(job))
+                      || requiresReplacement(job)
+                    }
+                    onClick={() => requestJob('print', job.print_job_id)}
+                  >
+                    {activeAction === 'print'
+                      ? 'Imprimiendo…'
+                      : (hasAckPending(job)
+                        ? 'Reanudar acuse central'
+                        : (isPrintedJob(job)
+                          ? 'Sticker ya impreso'
+                          : (requiresReplacement(job)
+                            ? 'Requiere etiqueta de reemplazo'
+                            : (isRetryWithoutEmission(job)
+                              ? 'Reintentar impresión'
+                              : 'Imprimir sticker'))))}
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );

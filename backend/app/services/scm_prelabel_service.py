@@ -367,7 +367,7 @@ class ScmPrelabelService:
             "OFFSET 0 mm",
             "CODEPAGE UTF-8",
             *pages,
-        ))
+        )) + "\r\n"
 
     def print_job(
         self,

@@ -1,6 +1,11 @@
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
+import re
 from uuid import uuid4
+
+import qrcode
+from qrcode.constants import ERROR_CORRECT_L
 
 from app import create_app, db
 from app.models.scm_label_print_attempt import ScmLabelPrintAttempt
@@ -62,6 +67,33 @@ def _assembly_label(code):
     label["payload"].pop("op_ot")
     label["payload"]["oa_ot"] = "OA-000321 - OT-000777"
     return label
+
+
+def _post_weighing_label(code):
+    label = _color_work_label(code)
+    label["payload"]["qr"]["label_type"] = "POSTPESAJE"
+    label["payload"]["cantidad_confirmada_un"] = "100"
+    label["payload"]["kg_fisico"] = "8.950"
+    label["payload"]["kg_produccion_ot"] = "8.750"
+    label["payload"]["maquinista"] = "Cristóbal Lázaro"
+    return label
+
+
+def _qr_size_dots(payload):
+    qr_text = json.dumps(
+        payload["qr"],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    qr = qrcode.QRCode(
+        error_correction=ERROR_CORRECT_L,
+        box_size=4,
+        border=0,
+    )
+    qr.add_data(qr_text)
+    qr.make(fit=True)
+    return qr.modules_count * 4
 
 
 def test_una_identidad_ocupa_ambas_columnas_como_copias_gemelas():
@@ -136,8 +168,9 @@ def test_dos_identidades_generan_dos_hojas_duplicadas():
 
 
 def test_preview_web_respeta_hoja_fisica_y_genera_qr():
+    label = _label("OP0084-OT001-M001")
     svg = ScmPrelabelService().generate_preview_svg(
-        {"labels": [_label("OP0084-OT001-M001")]},
+        {"labels": [label]},
         printed_at=datetime(2026, 7, 28, 12, 30, tzinfo=timezone.utc),
     )
 
@@ -145,8 +178,30 @@ def test_preview_web_respeta_hoja_fisica_y_genera_qr():
     assert 'width="109mm" height="50mm"' in svg
     assert "OP0084-OT001-M001" in svg
     assert "data:image/png;base64," in svg
-    assert 'width="120" height="120"' in svg
+    qr_size = _qr_size_dots(label["payload"])
+    assert f'width="{qr_size}" height="{qr_size}"' in svg
     assert svg.count("OP0084-OT001-M001") == 2
+
+
+def test_postpesaje_reserva_qr_y_declara_utf8_para_nombre_acentuado():
+    label = _post_weighing_label("OF000900-OT001-M001")
+    service = ScmPrelabelService()
+
+    tspl = service.generate_tspl({"labels": [label]})
+    svg = service.generate_preview_svg({"labels": [label]})
+
+    qr_y_positions = [
+        int(value)
+        for value in re.findall(r"QRCODE \d+,(\d+),L,4,A,0,", tspl)
+    ]
+    qr_size = _qr_size_dots(label["payload"])
+
+    assert len(qr_y_positions) == 2
+    assert all(y + qr_size <= 400 for y in qr_y_positions)
+    assert "CODEPAGE UTF-8" in tspl
+    assert "MAQ.ORIG.: Cristóbal Lázaro" in tspl
+    assert "MAQ.ORIG.: Cristóbal Lázaro" in svg
+    assert "Cristóbal Lázaro".encode("utf-8") in tspl.encode("utf-8")
 
 
 def test_bandeja_y_preview_consultan_central_sin_reclamar():

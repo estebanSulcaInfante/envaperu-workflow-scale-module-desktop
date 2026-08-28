@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import qrcode
+from qrcode.constants import ERROR_CORRECT_L
 from flask import current_app, has_app_context
 
 from app import db
@@ -49,7 +50,12 @@ class ScmPrelabelService:
     LEFT_X = 24
     RIGHT_X = 464
     STICKER_WIDTH = 400
-    LINE_HEIGHT = 22
+    LABEL_HEIGHT_DOTS = 400
+    TOP_BAR_Y = 14
+    TEXT_START_Y = 18
+    LINE_HEIGHT = 13
+    QR_GAP_Y = 4
+    QR_MODULE_DOTS = 4
     _physical_print_lock = threading.RLock()
 
     def __init__(self, *, client=None, printer=None):
@@ -181,17 +187,29 @@ class ScmPrelabelService:
             return "OA/OT", payload["oa_ot"]
         return "OP/OT", payload.get("op_ot")
 
-    def _column(self, x, item, printed_at):
-        payload = item["payload"]
-        order_label, order_ot = self._order_row(payload)
-        qr = json.dumps(
+    @staticmethod
+    def _qr_text(payload):
+        return json.dumps(
             payload["qr"],
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
         )
-        y = 22
-        commands = [f"BAR {x},18,{self.STICKER_WIDTH},3"]
+
+    @classmethod
+    def _qr_code(cls, payload):
+        qr = qrcode.QRCode(
+            error_correction=ERROR_CORRECT_L,
+            box_size=cls.QR_MODULE_DOTS,
+            border=0,
+        )
+        qr.add_data(cls._qr_text(payload))
+        qr.make(fit=True)
+        return qr
+
+    @classmethod
+    def _rows(cls, payload, printed_at):
+        order_label, order_ot = cls._order_row(payload)
         is_post_weighing = payload["qr"].get("label_type") == "POSTPESAJE"
         quantity_label = "CANT.REAL" if is_post_weighing else "CANT."
         quantity = (
@@ -214,6 +232,16 @@ class ScmPrelabelService:
                 ("KG FIS.", payload["kg_fisico"]),
                 ("KG OT", payload["kg_produccion_ot"]),
             ))
+        return rows
+
+    def _column(self, x, item, printed_at):
+        payload = item["payload"]
+        qr = self._qr_text(payload)
+        y = self.TEXT_START_Y
+        commands = [
+            f"BAR {x},{self.TOP_BAR_Y},{self.STICKER_WIDTH},3"
+        ]
+        rows = self._rows(payload, printed_at)
         for label, value in rows:
             commands.append(
                 f'TEXT {x + 5},{y},"1",0,1,1,'
@@ -221,56 +249,40 @@ class ScmPrelabelService:
             )
             y += self.LINE_HEIGHT
         commands.append(f"BAR {x},{y},{self.STICKER_WIDTH},2")
+        qr_y = y + self.QR_GAP_Y
+        qr_size = self._qr_code(payload).modules_count * self.QR_MODULE_DOTS
+        if qr_y + qr_size > self.LABEL_HEIGHT_DOTS:
+            raise ValueError(
+                "El QR SCM excede la altura fisica disponible de la etiqueta"
+            )
         commands.append(
-            f'QRCODE {x + 120},{y + 10},L,4,A,0,'
+            f'QRCODE {x + 120},{qr_y},L,'
+            f'{self.QR_MODULE_DOTS},A,0,'
             f'"{_tspl_quoted(qr)}"'
         )
         return "\n".join(commands)
 
-    @staticmethod
-    def _qr_data_uri(payload):
-        qr_text = json.dumps(
-            payload["qr"],
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        image = qrcode.make(qr_text)
+    @classmethod
+    def _qr_data_uri(cls, payload):
+        qr = cls._qr_code(payload)
+        image = qr.make_image(fill_color="black", back_color="white")
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
-        return "data:image/png;base64," + base64.b64encode(
-            buffer.getvalue()
-        ).decode("ascii")
+        return (
+            "data:image/png;base64," + base64.b64encode(
+                buffer.getvalue()
+            ).decode("ascii"),
+            qr.modules_count * cls.QR_MODULE_DOTS,
+        )
 
     def _svg_column(self, x, item, printed_at):
         payload = item["payload"]
-        order_label, order_ot = self._order_row(payload)
-        is_post_weighing = payload["qr"].get("label_type") == "POSTPESAJE"
-        quantity_label = "CANT.REAL" if is_post_weighing else "CANT."
-        quantity = (
-            payload.get("cantidad_confirmada_un")
-            if is_post_weighing else payload["cantidad_planificada_un"]
-        ) or payload["cantidad_planificada_un"]
-        rows = [
-            ("MANGA", payload["codigo_manga"]),
-            (order_label, order_ot),
-            ("IMP.", printed_at),
-            ("F.OT ORIG.", payload["fecha_ot"]),
-            ("MAQ.ORIG.", payload["maquinista"]),
-            ("PZA.", payload["pieza_color"]),
-            ("COLOR", payload["color"]),
-            ("TIPO", payload["tipo_manga"]),
-            (quantity_label, quantity),
-        ]
-        if is_post_weighing:
-            rows.extend((
-                ("KG FIS.", payload["kg_fisico"]),
-                ("KG OT", payload["kg_produccion_ot"]),
-            ))
-        y = 34
+        rows = self._rows(payload, printed_at)
+        y = self.TEXT_START_Y + 11
         parts = [
             f'<rect x="{x}" y="18" width="{self.STICKER_WIDTH}" '
-            'height="364" rx="4" fill="white" stroke="#111" stroke-width="2"/>',
+            f'height="{self.LABEL_HEIGHT_DOTS - 18}" rx="4" '
+            'fill="white" stroke="#111" stroke-width="2"/>',
         ]
         for label, value in rows:
             parts.append(
@@ -279,11 +291,15 @@ class ScmPrelabelService:
                 f'{escape(f"{label}: {_safe(value)}")}</text>'
             )
             y += self.LINE_HEIGHT
+        separator_y = self.TEXT_START_Y + len(rows) * self.LINE_HEIGHT
+        qr_data_uri, qr_size = self._qr_data_uri(payload)
         parts.extend((
-            f'<line x1="{x}" y1="{y}" x2="{x + self.STICKER_WIDTH}" '
-            f'y2="{y}" stroke="#111" stroke-width="2"/>',
-            f'<image href="{self._qr_data_uri(payload)}" '
-            f'x="{x + 120}" y="{y + 8}" width="120" height="120"/>',
+            f'<line x1="{x}" y1="{separator_y}" '
+            f'x2="{x + self.STICKER_WIDTH}" y2="{separator_y}" '
+            'stroke="#111" stroke-width="2"/>',
+            f'<image href="{qr_data_uri}" x="{x + 120}" '
+            f'y="{separator_y + self.QR_GAP_Y}" '
+            f'width="{qr_size}" height="{qr_size}"/>',
         ))
         return "".join(parts)
 
@@ -349,6 +365,7 @@ class ScmPrelabelService:
             "DIRECTION 1",
             "SET TEAR ON",
             "OFFSET 0 mm",
+            "CODEPAGE UTF-8",
             *pages,
         ))
 

@@ -225,10 +225,13 @@ class ScmPrelabelService:
             (quantity_label, quantity),
         ]
         if is_post_weighing:
-            rows.extend((
-                ("KG FIS.", payload["kg_fisico"]),
-                ("KG OT", payload["kg_produccion_ot"]),
-            ))
+            if payload.get("oa_ot"):
+                rows.append(("NETO TOTAL ARM.", payload["kg_fisico"]))
+            else:
+                rows.extend((
+                    ("KG FIS.", payload["kg_fisico"]),
+                    ("KG OT", payload["kg_produccion_ot"]),
+                ))
         return rows
 
     def _column(self, x, item, printed_at):

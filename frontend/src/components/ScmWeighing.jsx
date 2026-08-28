@@ -39,6 +39,10 @@ export default function ScmWeighing({
   const centralAvailable = online || simulationEnabled || portfolioDemoMode;
   const otContext = context?.manga?.ot;
   const colorWork = context?.manga?.trabajo_color;
+  const isAssembly = Boolean(
+    context?.manga?.oa_ot
+      || context?.manga?.cantidad_fuente === 'RESPONSABLE_ARMADO',
+  );
   const currentMachinist = context?.manga?.asignacion_vigente?.maquinista
     || context?.manga?.maquinista
     || 'Sin asignación vigente';
@@ -321,11 +325,18 @@ export default function ScmWeighing({
               )}
               <div><dt>Fecha OT</dt><dd>{context.manga.fecha_operativa}</dd></div>
               <div><dt>Maquinista asignado</dt><dd>{currentMachinist}</dd></div>
-              <div><dt>Pieza-color</dt><dd>{context.manga.pieza_color}</dd></div>
+              <div>
+                <dt>{isAssembly ? 'Artículo armado' : 'Pieza-color'}</dt>
+                <dd>{context.manga.pieza_color}</dd>
+              </div>
               <div><dt>Color</dt><dd>{context.manga.color || 'Sin color'}</dd></div>
               <div><dt>Tipo</dt><dd>{context.manga.tipo}</dd></div>
               <div>
-                <dt>Cantidad confirmada por plan</dt>
+                <dt>
+                  {isAssembly
+                    ? 'Cantidad confirmada por Armado'
+                    : 'Cantidad confirmada por plan'}
+                </dt>
                 <dd>{context.manga.cantidad_asignada_un} un</dd>
               </div>
               </dl>
@@ -350,7 +361,10 @@ export default function ScmWeighing({
           </div>
           <div className="scm-weight-grid scm-weight-breakdown">
             <div><span>Tara</span><strong>{tare.toFixed(3)} kg</strong></div>
-            <div><span>Neto físico</span><strong>{net.toFixed(3)} kg</strong></div>
+            <div>
+              <span>{isAssembly ? 'Neto total de Armado' : 'Neto físico'}</span>
+              <strong>{net.toFixed(3)} kg</strong>
+            </div>
           </div>
           {(context?.can_register_shift_cut || controlResult)
             && context?.manga?.tipo === 'NORMAL' && !context?.demo_only && (
@@ -449,10 +463,16 @@ export default function ScmWeighing({
                 : 'warning'
             }`}>
               <strong>{result.portfolio_demo ? 'Pesaje demo confirmado' : 'Pesaje central confirmado'}</strong>
-              <span>
-                Neto {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
-                Producción OT {result.confirmed.weighing.kg_produccion_ot} kg
-              </span>
+              {isAssembly ? (
+                <span>
+                  Neto total de Armado {result.confirmed.weighing.peso_fisico_neto_kg} kg
+                </span>
+              ) : (
+                <span>
+                  Neto {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
+                  Producción OT {result.confirmed.weighing.kg_produccion_ot} kg
+                </span>
+              )}
               {result.confirmed.weighing.cantidad_confirmada != null && (
                 <span>
                   Cantidad final {result.confirmed.weighing.cantidad_confirmada} un

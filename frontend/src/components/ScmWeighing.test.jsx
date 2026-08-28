@@ -122,6 +122,60 @@ describe('ScmWeighing', () => {
     expect(screen.queryByLabelText(/Peso bruto/)).toBeNull();
   });
 
+  it('presenta el pesaje de Armado como neto total y no como produccion de fabricacion', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: {
+        ...context,
+        can_register_shift_cut: false,
+        manga: {
+          ...context.manga,
+          codigo: 'OA000321-OT777-M001',
+          op_ot: undefined,
+          oa_ot: 'OA-000321 - OT-000777',
+          cantidad_fuente: 'RESPONSABLE_ARMADO',
+          pieza_color: 'BASE ORG. #5 ARMADA - ASAS PLOMO',
+        },
+      },
+    });
+    scmWeighingApi.confirm.mockResolvedValue({
+      data: {
+        confirmed: {
+          weighing: {
+            estado_manga: 'PESADA',
+            peso_fisico_neto_kg: '20.300',
+            kg_produccion_ot: '20.000',
+            cantidad_confirmada: '100.000',
+          },
+        },
+        print_result: { result: 'IMPRESA' },
+      },
+    });
+    render(
+      <ScmWeighing
+        peso={20.4}
+        listening
+        centralState="ONLINE"
+        onConnect={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('QR de manga SCM'), {
+      target: { value: '{"v":1,"type":"SCM_MANGA_LABEL"}' },
+    });
+    fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
+    await screen.findByText('OA000321-OT777-M001');
+
+    expect(screen.getByText('Artículo armado')).toBeTruthy();
+    expect(screen.getByText('Cantidad confirmada por Armado')).toBeTruthy();
+    expect(screen.getByText('Neto total de Armado')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'F2' });
+
+    expect(await screen.findByText('Pesaje central confirmado')).toBeTruthy();
+    expect(screen.getByText('Neto total de Armado 20.300 kg')).toBeTruthy();
+    expect(screen.queryByText(/Producción OT/)).toBeNull();
+  });
+
   it('reanuda el acuse pendiente de F2 sin presentar una reimpresión', async () => {
     const confirmed = {
       weighing: {

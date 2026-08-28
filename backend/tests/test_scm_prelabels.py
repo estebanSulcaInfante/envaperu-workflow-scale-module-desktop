@@ -79,6 +79,16 @@ def _post_weighing_label(code):
     return label
 
 
+def _post_weighing_assembly_label(code):
+    label = _post_weighing_label(code)
+    label["payload"].pop("of_ot", None)
+    label["payload"]["oa_ot"] = "OA-000321 - OT-000777"
+    label["payload"]["pieza_color"] = (
+        "BASE ORG. #5 ARMADA - ASAS PLOMO"
+    )
+    return label
+
+
 def _qr_size_dots(payload):
     qr_text = json.dumps(
         payload["qr"],
@@ -229,6 +239,30 @@ def test_postpesaje_reserva_qr_y_declara_utf8_para_nombre_acentuado():
     assert "MAQ.ORIG.: Cristóbal Lázaro" in tspl
     assert "MAQ.ORIG.: Cristóbal Lázaro" in svg
     assert "Cristóbal Lázaro".encode("utf-8") in tspl.encode("utf-8")
+
+
+def test_postpesaje_armado_declara_neto_total_sin_presentarlo_como_kg_ot():
+    label = _post_weighing_assembly_label("OA000321-OT777-M001")
+    service = ScmPrelabelService()
+
+    tspl = service.generate_tspl({"labels": [label]})
+    svg = service.generate_preview_svg({"labels": [label]})
+
+    assert "NETO TOTAL ARM.: 8.950" in tspl
+    assert "NETO TOTAL ARM.: 8.950" in svg
+    assert "KG OT:" not in tspl
+    assert "KG OT:" not in svg
+    assert "KG FIS.:" not in tspl
+    assert "KG FIS.:" not in svg
+
+
+def test_postpesaje_fabricacion_conserva_peso_fisico_y_kg_ot():
+    label = _post_weighing_label("OF000900-OT001-M001")
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "KG FIS.: 8.950" in tspl
+    assert "KG OT: 8.750" in tspl
+    assert "NETO TOTAL ARM.:" not in tspl
 
 
 def test_bandeja_y_preview_consultan_central_sin_reclamar():

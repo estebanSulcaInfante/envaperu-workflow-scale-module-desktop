@@ -110,7 +110,7 @@ def test_una_identidad_ocupa_ambas_columnas_como_copias_gemelas():
     assert "MAQ.ORIG.: Juan Perez" in tspl
     assert "QRCODE 144" in tspl
     assert "QRCODE 584" in tspl
-    assert ",L,4,A,0," in tspl
+    assert ",L,4,A,0,M2," in tspl
     assert "TEXT 469" in tspl
     assert tspl.count("PRINT 1,1") == 1
 
@@ -128,6 +128,33 @@ def test_plantilla_v2_renderiza_of_ot_y_conserva_qr_v1():
     assert "MAQ.ORIG.: Juan Perez" in tspl
     assert "F.OT ORIG.: 2026-07-28" in svg
     assert "MAQ.ORIG.: Juan Perez" in svg
+
+
+def test_qr_json_usa_escape_de_comillas_nativo_tspl2():
+    label = _canonical_label("OF000011-OT002-M030")
+    label["payload"]["qr"]["verificacion"] = "Cristóbal"
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+    qr_text = json.dumps(
+        label["payload"]["qr"],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    qr_commands = [
+        line for line in tspl.splitlines() if line.startswith("QRCODE ")
+    ]
+
+    assert len(qr_commands) == 2
+    assert all(
+        command.count(r'\["]') == qr_text.count('"')
+        for command in qr_commands
+    )
+    assert all(r'\"' not in command for command in qr_commands)
+    printer_qr_text = (
+        qr_commands[0].split(',M2,"', 1)[1][:-1]
+        .replace(r'\["]', '"')
+    )
+    assert json.loads(printer_qr_text) == label["payload"]["qr"]
 
 
 def test_trabajo_color_conserva_rotulo_simple_y_contexto_en_qr():
@@ -192,7 +219,7 @@ def test_postpesaje_reserva_qr_y_declara_utf8_para_nombre_acentuado():
 
     qr_y_positions = [
         int(value)
-        for value in re.findall(r"QRCODE \d+,(\d+),L,4,A,0,", tspl)
+        for value in re.findall(r"QRCODE \d+,(\d+),L,4,A,0,M2,", tspl)
     ]
     qr_size = _qr_size_dots(label["payload"])
 

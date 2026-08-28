@@ -29,12 +29,9 @@ def _safe(value, limit=32):
     return str(value or "").replace('"', "'")[:limit]
 
 
-def _tspl_quoted(value, limit=600):
-    return (
-        str(value or "")[:limit]
-        .replace("\\", "\\\\")
-        .replace('"', '\\"')
-    )
+def _tspl_quoted(value):
+    """Escape embedded quotes using the sequence required by TSPL2."""
+    return str(value or "").replace('"', r'\["]')
 
 
 def _station_timezone(name):
@@ -257,7 +254,7 @@ class ScmPrelabelService:
             )
         commands.append(
             f'QRCODE {x + 120},{qr_y},L,'
-            f'{self.QR_MODULE_DOTS},A,0,'
+            f'{self.QR_MODULE_DOTS},A,0,M2,'
             f'"{_tspl_quoted(qr)}"'
         )
         return "\n".join(commands)

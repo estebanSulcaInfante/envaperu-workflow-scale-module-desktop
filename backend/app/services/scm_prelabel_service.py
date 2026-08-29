@@ -193,6 +193,18 @@ class ScmPrelabelService:
             separators=(",", ":"),
         )
 
+    @staticmethod
+    def _document_type(payload):
+        if payload.get("document_type"):
+            return str(payload["document_type"]).upper()
+        return str(
+            (payload.get("qr") or {}).get("label_type") or "PREPESAJE"
+        ).upper()
+
+    @classmethod
+    def _requires_qr(cls, payload):
+        return cls._document_type(payload) == "PREPESAJE"
+
     @classmethod
     def _qr_code(cls, payload):
         qr = qrcode.QRCode(
@@ -207,13 +219,7 @@ class ScmPrelabelService:
     @classmethod
     def _rows(cls, payload, printed_at):
         order_label, order_ot = cls._order_row(payload)
-        is_post_weighing = payload["qr"].get("label_type") == "POSTPESAJE"
-        quantity_label = "CANT.REAL" if is_post_weighing else "CANT."
-        quantity = (
-            payload.get("cantidad_confirmada_un")
-            if is_post_weighing else payload["cantidad_planificada_un"]
-        ) or payload["cantidad_planificada_un"]
-        rows = [
+        return [
             ("MANGA", payload["codigo_manga"]),
             (order_label, order_ot),
             ("IMP.", printed_at),
@@ -222,20 +228,63 @@ class ScmPrelabelService:
             ("PZA.", payload["pieza_color"]),
             ("COLOR", payload["color"]),
             ("TIPO", payload["tipo_manga"]),
-            (quantity_label, quantity),
+            ("CANT.", payload["cantidad_planificada_un"]),
         ]
-        if is_post_weighing:
-            if payload.get("oa_ot"):
-                rows.append(("NETO TOTAL ARM.", payload["kg_fisico"]))
-            else:
-                rows.extend((
-                    ("KG FIS.", payload["kg_fisico"]),
-                    ("KG OT", payload["kg_produccion_ot"]),
-                ))
-        return rows
+
+    @classmethod
+    def _weight_values(cls, payload):
+        document_type = cls._document_type(payload)
+        is_final = document_type == "POSTPESAJE"
+        return {
+            "title": (
+                "FINAL · MANGA CERRADA"
+                if is_final else "CONTROL · CONTINUA ABIERTA"
+            ),
+            "net_label": (
+                "PESO NETO FINAL (kg)"
+                if is_final else "PESO NETO REAL (kg)"
+            ),
+            "net": payload.get("peso_neto_real_kg") or payload.get("kg_fisico"),
+            "contribution_label": (
+                "APORTE ULTIMO TRAMO (kg)"
+                if is_final else "APORTE DESDE CONTROL ANTERIOR (kg)"
+            ),
+            "contribution": payload.get("aporte_desde_control_anterior_kg"),
+            "quantity_label": "CONTEO FINAL" if is_final else "CONTEO ACUMULADO",
+            "quantity": (
+                payload.get("cantidad_confirmada_un")
+                if is_final else payload.get("cantidad_acumulada_un")
+            ),
+            "standard": (
+                payload.get("peso_estandar_segun_unidades_kg")
+                or payload.get("kg_produccion_ot")
+            ),
+        }
+
+    def _weight_column(self, x, item, printed_at):
+        payload = item["payload"]
+        values = self._weight_values(payload)
+        return "\n".join((
+            f"BAR {x},{self.TOP_BAR_Y},{self.STICKER_WIDTH},4",
+            f'TEXT {x + 8},24,"3",0,1,1,"{_safe(values["title"], 38)}"',
+            f'TEXT {x + 8},52,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
+            f'TEXT {x + 8},76,"1",0,1,1,"{_safe(payload.get("pieza_color"), 46)}"',
+            f'TEXT {x + 8},101,"2",0,1,1,"{values["net_label"]}"',
+            f'TEXT {x + 62},130,"4",0,3,3,"{_safe(values["net"], 10)}"',
+            f'BAR {x + 8},210,{self.STICKER_WIDTH - 16},2',
+            f'TEXT {x + 8},220,"1",0,1,1,"{values["contribution_label"]}"',
+            f'TEXT {x + 248},242,"3",0,1,2,"+{_safe(values["contribution"], 9)}"',
+            f'TEXT {x + 8},278,"2",0,1,1,"{values["quantity_label"]}: {_safe(values["quantity"], 10)} UN"',
+            f'TEXT {x + 8},306,"1",0,1,1,"PESO ESTANDAR SEGUN UNIDADES (kg): {_safe(values["standard"], 9)}"',
+            f'TEXT {x + 8},329,"1",0,1,1,"RESP.: {_safe(payload.get("maquinista"), 34)}"',
+            f'TEXT {x + 8},352,"1",0,1,1,"IMP.: {_safe(printed_at, 20)}"',
+            f'TEXT {x + 8},375,"1",0,1,1,"SIN QR · CONSERVAR PREETIQUETA"',
+        ))
 
     def _column(self, x, item, printed_at):
         payload = item["payload"]
+        if not self._requires_qr(payload):
+            return self._weight_column(x, item, printed_at)
         qr = self._qr_text(payload)
         y = self.TEXT_START_Y
         commands = [
@@ -277,6 +326,8 @@ class ScmPrelabelService:
 
     def _svg_column(self, x, item, printed_at):
         payload = item["payload"]
+        if not self._requires_qr(payload):
+            return self._svg_weight_column(x, item, printed_at)
         rows = self._rows(payload, printed_at)
         y = self.TEXT_START_Y + 11
         parts = [
@@ -302,6 +353,38 @@ class ScmPrelabelService:
             f'width="{qr_size}" height="{qr_size}"/>',
         ))
         return "".join(parts)
+
+    def _svg_weight_column(self, x, item, printed_at):
+        payload = item["payload"]
+        values = self._weight_values(payload)
+
+        def text(y, value, size=15, weight=600, anchor="start", x_pos=None):
+            return (
+                f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '
+                f'font-family="Arial, sans-serif" font-size="{size}" '
+                f'font-weight="{weight}" text-anchor="{anchor}">'
+                f'{escape(str(value or ""))}</text>'
+            )
+
+        return "".join((
+            f'<rect x="{x}" y="18" width="{self.STICKER_WIDTH}" '
+            f'height="{self.LABEL_HEIGHT_DOTS - 18}" rx="4" '
+            'fill="white" stroke="#111" stroke-width="3"/>',
+            text(43, values["title"], 20, 900),
+            text(67, f'MANGA: {_safe(payload.get("codigo_manga"), 32)}', 15, 700),
+            text(90, _safe(payload.get("pieza_color"), 46), 13, 600),
+            text(119, values["net_label"], 18, 800),
+            text(191, values["net"], 58, 900, "middle", x + 200),
+            f'<line x1="{x + 8}" y1="210" x2="{x + 392}" y2="210" '
+            'stroke="#111" stroke-width="2"/>',
+            text(232, values["contribution_label"], 13, 700),
+            text(267, f'+{values["contribution"]}', 30, 900, "end", x + 392),
+            text(294, f'{values["quantity_label"]}: {values["quantity"]} UN', 17, 800),
+            text(317, f'PESO ESTÁNDAR SEGÚN UNIDADES (kg): {values["standard"]}', 12, 600),
+            text(340, f'RESP.: {_safe(payload.get("maquinista"), 34)}', 12, 600),
+            text(363, f'IMP.: {printed_at}', 12, 600),
+            text(386, 'SIN QR · CONSERVAR PREETIQUETA', 12, 800),
+        ))
 
     def generate_preview_svg(self, job, *, printed_at=None):
         """Render web-preview from the same coordinates as the TSPL."""
@@ -597,15 +680,22 @@ class ScmPrelabelService:
 
         attempts = []
         for label in job["labels"]:
+            payload = label["payload"]
+            qr_payload = payload.get("qr") or {}
             attempt = ScmLabelPrintAttempt(
                 print_job_id=job["print_job_id"],
                 label_id=label["public_id"],
-                label_type=label["payload"]["qr"].get("label_type"),
+                label_type=(
+                    payload.get("document_type")
+                    or qr_payload.get("label_type")
+                    or label.get("tipo")
+                ),
                 operation_id=operation_id,
                 capture_id=capture_id,
                 manga_id=(
                     manga_id
-                    or label["payload"]["qr"].get("manga_id")
+                    or payload.get("manga_id")
+                    or qr_payload.get("manga_id")
                 ),
                 payload_hash=label["payload_hash"],
                 rendered_payload_hash=rendered_payload_hash,

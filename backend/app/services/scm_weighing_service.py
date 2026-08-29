@@ -329,7 +329,7 @@ class ScmWeighingService:
         conteo_acumulado_un,
         motivo="CAMBIO_TURNO",
     ):
-        """Record an accumulated observation without closing or printing."""
+        """Record an accumulated control and print its immutable receipt."""
         try:
             operation_id = str(uuid.UUID(str(operation_id)))
             label_id = str(uuid.UUID(str(label_id)))
@@ -348,12 +348,14 @@ class ScmWeighingService:
 
         client = self.client or self._central_client()
         context = client.resolve_scm_manga_label(label_id)
+        manga_id = context.get("manga", {}).get("public_id")
+        recovered_operation = False
         if not context.get("can_register_shift_cut"):
             controlled = self._recover_completed_response(
                 client,
                 operation_id,
                 response_key="control",
-                expected_manga_id=context.get("manga", {}).get("public_id"),
+                expected_manga_id=manga_id,
             )
             if controlled is None:
                 raise ScmWeighingLocalError(
@@ -361,38 +363,94 @@ class ScmWeighingService:
                     "Central indica que la manga no esta abierta para registrar controles.",
                     status=409,
                 )
+            recovered_operation = True
+        else:
+            snapshot = (
+                self.scale_snapshot()
+                if self.scale_snapshot is not None
+                else get_last_scale_snapshot()
+            )
+            if snapshot.get("peso_kg") is None or not snapshot.get("stable"):
+                raise ScmWeighingLocalError(
+                    "SCALE_READING_UNSTABLE",
+                    "El control requiere una lectura estable de la balanza.",
+                )
+            gross = Decimal(str(snapshot["peso_kg"])).quantize(
+                Decimal("0.001")
+            )
+            payload = {
+                "label_id": label_id,
+                "capture_id": operation_id,
+                "peso_bruto_kg": format(gross, "f"),
+                "tara_kg": context["manga"]["tara_nominal_kg"],
+                "tara_fuente": "TIPO_MANGA",
+                "pesada_at": datetime.now(timezone.utc).isoformat(),
+                "pesado_por_id": self._operator_id(),
+                "reading_stable": True,
+                "conteo_acumulado_un": count,
+                "motivo": reason,
+            }
+            controlled = client.record_scm_manga_weighing_control(
+                operation_id, payload
+            )
+
+        print_job_id = controlled.get("print_job_id")
+        if not print_job_id:
             return {
                 "operation_id": operation_id,
                 **controlled,
-                "recovered_operation": True,
+                "recovered_operation": recovered_operation,
             }
-        snapshot = (
-            self.scale_snapshot()
-            if self.scale_snapshot is not None
-            else get_last_scale_snapshot()
+        print_service = ScmPrelabelService(
+            client=client,
+            printer=self.printer,
         )
-        if snapshot.get("peso_kg") is None or not snapshot.get("stable"):
-            raise ScmWeighingLocalError(
-                "SCALE_READING_UNSTABLE",
-                "El corte requiere una lectura NET estable de la balanza.",
+        local_replay = (
+            self._terminal_print_replay(operation_id, print_job_id)
+            if recovered_operation else None
+        )
+        print_result = None
+        if local_replay is not None:
+            # The local ledger is authoritative for physical emission.  This
+            # path only resumes Central acknowledgement; it never prints again.
+            print_result = print_service.print_job(
+                print_job_id,
+                operation_id=operation_id,
+                capture_id=operation_id,
+                manga_id=manga_id,
             )
-        gross = Decimal(str(snapshot["peso_kg"])).quantize(Decimal("0.001"))
-        payload = {
-            "label_id": label_id,
-            "capture_id": operation_id,
-            "peso_bruto_kg": format(gross, "f"),
-            "tara_kg": context["manga"]["tara_nominal_kg"],
-            "tara_fuente": "TIPO_MANGA",
-            "pesada_at": datetime.now(timezone.utc).isoformat(),
-            "pesado_por_id": self._operator_id(),
-            "reading_stable": True,
-            "conteo_acumulado_un": count,
-            "motivo": reason,
+            print_result["recovered"] = True
+            if print_result.get("result") == "IMPRESA":
+                print_result["already_printed"] = True
+        if recovered_operation and print_result is None:
+            job = print_service.fetch(print_job_id)
+            if job.get("status") == "PRINTED":
+                print_result = {
+                    "result": "IMPRESA",
+                    "print_job": job,
+                    "recovered": True,
+                    "already_printed": True,
+                }
+            elif job.get("status") == "PARTIAL":
+                print_result = {
+                    "result": "PARCIAL",
+                    "print_job": job,
+                    "recovered": True,
+                    "auto_reprint_blocked": True,
+                }
+        if print_result is None:
+            print_result = print_service.print_job(
+                print_job_id,
+                operation_id=operation_id,
+                capture_id=operation_id,
+                manga_id=manga_id,
+            )
+        return {
+            "operation_id": operation_id,
+            **controlled,
+            "print_result": print_result,
+            "recovered_operation": recovered_operation,
         }
-        controlled = client.record_scm_manga_weighing_control(
-            operation_id, payload
-        )
-        return {"operation_id": operation_id, **controlled}
 
     def recover(self, operation_id):
         try:

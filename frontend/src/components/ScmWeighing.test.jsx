@@ -133,6 +133,8 @@ describe('ScmWeighing', () => {
           op_ot: undefined,
           oa_ot: 'OA-000321 - OT-000777',
           cantidad_fuente: 'RESPONSABLE_ARMADO',
+          articulo_clase: 'SUBENSAMBLE_WIP',
+          articulo_codigo: 'WIP-ORG5-ARMADA-PLOMO',
           pieza_color: 'BASE ORG. #5 ARMADA - ASAS PLOMO',
         },
       },
@@ -165,9 +167,12 @@ describe('ScmWeighing', () => {
     fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
     await screen.findByText('OA000321-OT777-M001');
 
-    expect(screen.getByText('Artículo armado')).toBeTruthy();
+    expect(screen.getByText(
+      'WIP · WIP-ORG5-ARMADA-PLOMO · BASE ORG. #5 ARMADA - ASAS PLOMO',
+    )).toBeTruthy();
+    expect(screen.queryByText('Artículo armado')).toBeNull();
     expect(screen.getByText('Cantidad confirmada por Armado')).toBeTruthy();
-    expect(screen.getByText('Neto total de Armado')).toBeTruthy();
+    expect(screen.getByText('Peso neto total de Armado (kg)')).toBeTruthy();
 
     fireEvent.keyDown(window, { key: 'F2' });
 
@@ -273,26 +278,66 @@ describe('ScmWeighing', () => {
 
     expect(await screen.findByText('OP0084-OT001-M001')).toBeTruthy();
     expect(screen.queryByRole('button', {
-      name: 'Registrar corte de turno — continúa abierta',
+      name: 'Registrar control — continúa abierta',
     })).toBeNull();
     expect(screen.getByRole('button', {
       name: 'Confirmar pesaje (F2)',
     }).disabled).toBe(false);
   });
 
-  it('registra un corte acumulado sin cerrar ni imprimir y conserva F2 como cierre final', async () => {
+  it('identifica de forma dominante una salida de Producto terminado', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: {
+        ...context,
+        can_register_shift_cut: false,
+        manga: {
+          ...context.manga,
+          codigo: 'OA000322-OT778-M001',
+          op_ot: undefined,
+          oa_ot: 'OA-000322 - OT-000778',
+          cantidad_fuente: 'RESPONSABLE_ARMADO',
+          articulo_clase: 'PRODUCTO_TERMINADO',
+          articulo_codigo: 'PT-000120',
+          pieza_color: 'Jarra grande armada',
+        },
+      },
+    });
+    render(
+      <ScmWeighing
+        peso={20.4}
+        listening
+        centralState="ONLINE"
+        onConnect={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('QR de manga SCM'), {
+      target: { value: '{"v":1,"type":"SCM_MANGA_LABEL"}' },
+    });
+    fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
+
+    expect(await screen.findByText(
+      'Producto terminado · PT-000120 · Jarra grande armada',
+    )).toBeTruthy();
+    expect(screen.getByText('Peso neto total de Armado (kg)')).toBeTruthy();
+    expect(screen.queryByText(/peso de tapas|peso de picos/i)).toBeNull();
+  });
+
+  it('registra un control, imprime sin QR y conserva F2 como cierre final', async () => {
     scmWeighingApi.resolve.mockResolvedValue({ data: context });
     scmWeighingApi.control.mockResolvedValue({
       data: {
         control: {
           public_id: '20000000-0000-4000-8000-000000000001',
           conteo_acumulado_un: '37',
-          peso_fisico_neto_kg: '3.700',
+          peso_neto_kg: '3.700',
+          aporte_desde_control_anterior_kg: '1.500',
         },
         manga: { estado: 'ABIERTA' },
         produccion_confirmada_un: '0',
         inventario_creado: false,
-        print_job_id: null,
+        print_job_id: '30000000-0000-4000-8000-000000000001',
+        print_result: { result: 'IMPRESA' },
         qr_preservado: true,
       },
     });
@@ -330,7 +375,7 @@ describe('ScmWeighing', () => {
       target: { value: 'RELEVO_TURNO' },
     });
     fireEvent.click(screen.getByRole('button', {
-      name: 'Registrar corte de turno — continúa abierta',
+      name: 'Registrar control — continúa abierta',
     }));
 
     await waitFor(() => expect(scmWeighingApi.control).toHaveBeenCalledWith(
@@ -341,7 +386,12 @@ describe('ScmWeighing', () => {
     ));
     expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
     expect(await screen.findByText('Control de turno registrado')).toBeTruthy();
-    expect(screen.getByText(/QR preservado · producción confirmada 0/i)).toBeTruthy();
+    expect(screen.getByText(
+      /Peso neto real 3.700 kg · aporte desde control anterior 1.500 kg/i,
+    )).toBeTruthy();
+    expect(screen.getByText(
+      /QR de preetiqueta preservado · producción confirmada 0 · impresión IMPRESA/i,
+    )).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Confirmar pesaje (F2)' }).disabled).toBe(true);
 
     fireEvent.keyDown(window, { key: 'F2' });

@@ -43,6 +43,18 @@ export default function ScmWeighing({
     context?.manga?.oa_ot
       || context?.manga?.cantidad_fuente === 'RESPONSABLE_ARMADO',
   );
+  const canonicalArticleKind = context?.manga?.articulo_clase === 'SUBENSAMBLE_WIP'
+    ? 'WIP'
+    : context?.manga?.articulo_clase === 'PRODUCTO_TERMINADO'
+      ? 'Producto terminado'
+      : null;
+  const canonicalArticleIdentity = canonicalArticleKind
+    ? [
+        canonicalArticleKind,
+        context?.manga?.articulo_codigo,
+        context?.manga?.pieza_color,
+      ].filter(Boolean).join(' · ')
+    : null;
   const currentMachinist = context?.manga?.asignacion_vigente?.maquinista
     || context?.manga?.maquinista
     || 'Sin asignación vigente';
@@ -216,19 +228,36 @@ export default function ScmWeighing({
   }, [canConfirm, context, busy]);
 
   const printState = result?.print_result?.result;
+  const controlPrintState = controlResult?.print_result?.result;
   const printPreviewSrc = useMemo(() => {
     const svg = result?.print_result?.preview_svg;
     return svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : '';
   }, [result]);
+  const controlPrintPreviewSrc = useMemo(() => {
+    const svg = controlResult?.print_result?.preview_svg;
+    return svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : '';
+  }, [controlResult]);
   const statusText = useMemo(() => {
     if (!centralAvailable) return 'Piloto SCM bloqueado: central sin conexión';
     if (!listening) return 'Conecte la balanza para capturar una lectura NET';
     if (!context) return 'Escanee el QR de PREPESAJE';
-    if (controlResult) return 'Corte registrado · manga pendiente de continuidad';
+    if (controlResult) {
+      return controlPrintState === 'IMPRESA'
+        ? 'Control guardado · sticker impreso · manga pendiente de relevo'
+        : `Control guardado · impresión ${controlPrintState || 'pendiente'}`;
+    }
     if (!context.can_weigh) return 'La manga ya no admite otro pesaje normal';
     if (Number(peso) <= tare) return 'Esperando peso bruto estable';
     return 'Lectura lista · Presione F2';
-  }, [centralAvailable, listening, context, controlResult, peso, tare]);
+  }, [
+    centralAvailable,
+    listening,
+    context,
+    controlResult,
+    controlPrintState,
+    peso,
+    tare,
+  ]);
 
   return (
     <div className="scm-weighing-layout">
@@ -298,6 +327,12 @@ export default function ScmWeighing({
                   Contexto sintetico del piloto. La confirmacion y la impresion permanecen aisladas.
                 </div>
               )}
+              {canonicalArticleIdentity && (
+                <div className="scm-article-identity" aria-label="Artículo a pesar">
+                  <span>Identidad del contenido</span>
+                  <strong>{canonicalArticleIdentity}</strong>
+                </div>
+              )}
               <dl className="scm-context-grid">
               <div><dt>Manga</dt><dd>{context.manga.codigo}</dd></div>
               {otContext ? (
@@ -325,10 +360,12 @@ export default function ScmWeighing({
               )}
               <div><dt>Fecha OT</dt><dd>{context.manga.fecha_operativa}</dd></div>
               <div><dt>Maquinista asignado</dt><dd>{currentMachinist}</dd></div>
-              <div>
-                <dt>{isAssembly ? 'Artículo armado' : 'Pieza-color'}</dt>
-                <dd>{context.manga.pieza_color}</dd>
-              </div>
+              {!canonicalArticleIdentity && (
+                <div>
+                  <dt>{isAssembly ? 'Artículo armado' : 'Pieza-color'}</dt>
+                  <dd>{context.manga.pieza_color}</dd>
+                </div>
+              )}
               <div><dt>Color</dt><dd>{context.manga.color || 'Sin color'}</dd></div>
               <div><dt>Tipo</dt><dd>{context.manga.tipo}</dd></div>
               <div>
@@ -362,16 +399,16 @@ export default function ScmWeighing({
           <div className="scm-weight-grid scm-weight-breakdown">
             <div><span>Tara</span><strong>{tare.toFixed(3)} kg</strong></div>
             <div>
-              <span>{isAssembly ? 'Neto total de Armado' : 'Neto físico'}</span>
+              <span>{isAssembly ? 'Peso neto total de Armado (kg)' : 'Peso neto real (kg)'}</span>
               <strong>{net.toFixed(3)} kg</strong>
             </div>
           </div>
           {(context?.can_register_shift_cut || controlResult)
             && context?.manga?.tipo === 'NORMAL' && !context?.demo_only && (
             <div className="scm-simulation-box">
-              <strong>Corte de turno · la manga continúa abierta</strong>
+              <strong>Control de peso · la manga continúa abierta</strong>
               <span>
-                Registra el peso y conteo acumulados. No confirma producción, no crea inventario y no imprime.
+                Registra peso y conteo acumulados. No confirma producción ni crea inventario; imprime un comprobante sin QR.
               </span>
               <div className="scm-scan-row">
                 <input
@@ -402,14 +439,23 @@ export default function ScmWeighing({
                 disabled={!canRecordControl}
                 onClick={recordControl}
               >
-                {busy ? 'Registrando corte…' : 'Registrar corte de turno — continúa abierta'}
+                {busy ? 'Registrando control…' : 'Registrar control — continúa abierta'}
               </button>
               {controlResult && (
                 <div className="scm-message success">
                   <strong>Control de turno registrado</strong>
                   <span>
-                    Manga abierta · QR preservado · producción confirmada 0 · sin inventario ni impresión.
+                    Peso neto real {controlResult.control?.peso_neto_kg} kg · aporte desde control anterior {controlResult.control?.aporte_desde_control_anterior_kg} kg.
                   </span>
+                  <span>
+                    Manga abierta · QR de preetiqueta preservado · producción confirmada 0 · impresión {controlPrintState || 'pendiente'}.
+                  </span>
+                  {controlPrintPreviewSrc && (
+                    <figure className="portfolio-postlabel-preview">
+                      <img src={controlPrintPreviewSrc} alt="Sticker de control sin QR" />
+                      <figcaption>CONTROL · sin QR · conservar preetiqueta</figcaption>
+                    </figure>
+                  )}
                 </div>
               )}
             </div>
@@ -469,8 +515,8 @@ export default function ScmWeighing({
                 </span>
               ) : (
                 <span>
-                  Neto {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
-                  Producción OT {result.confirmed.weighing.kg_produccion_ot} kg
+                  Peso neto real {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
+                  Peso estándar según unidades {result.confirmed.weighing.kg_produccion_ot} kg
                 </span>
               )}
               {result.confirmed.weighing.cantidad_confirmada != null && (

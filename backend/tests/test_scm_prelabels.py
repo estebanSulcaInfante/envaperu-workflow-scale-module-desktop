@@ -1,7 +1,6 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
-import re
 from uuid import uuid4
 
 import pytest
@@ -72,11 +71,28 @@ def _assembly_label(code):
 
 def _post_weighing_label(code):
     label = _color_work_label(code)
-    label["payload"]["qr"]["label_type"] = "POSTPESAJE"
+    label["payload"].pop("qr")
+    label["payload"]["document_type"] = "POSTPESAJE"
+    label["payload"]["manga_id"] = str(uuid4())
     label["payload"]["cantidad_confirmada_un"] = "100"
     label["payload"]["kg_fisico"] = "8.950"
     label["payload"]["kg_produccion_ot"] = "8.750"
+    label["payload"]["peso_neto_real_kg"] = "8.950"
+    label["payload"]["peso_estandar_segun_unidades_kg"] = "8.750"
+    label["payload"]["aporte_desde_control_anterior_kg"] = "4.150"
     label["payload"]["maquinista"] = "Cristóbal Lázaro"
+    return label
+
+
+def _control_weight_label(code):
+    label = _post_weighing_label(code)
+    label["payload"].update({
+        "document_type": "CONTROL_PESO",
+        "cantidad_acumulada_un": "35",
+        "peso_neto_real_kg": "8.950",
+        "aporte_desde_control_anterior_kg": "4.150",
+    })
+    label["payload"].pop("cantidad_confirmada_un", None)
     return label
 
 
@@ -231,49 +247,69 @@ def test_preview_web_respeta_hoja_fisica_y_genera_qr():
     assert svg.count("OP0084-OT001-M001") == 2
 
 
-def test_postpesaje_reserva_qr_y_declara_utf8_para_nombre_acentuado():
+def test_postpesaje_no_crea_segundo_qr_y_declara_utf8_para_nombre_acentuado():
     label = _post_weighing_label("OF000900-OT001-M001")
     service = ScmPrelabelService()
 
     tspl = service.generate_tspl({"labels": [label]})
     svg = service.generate_preview_svg({"labels": [label]})
 
-    qr_y_positions = [
-        int(value)
-        for value in re.findall(r"QRCODE \d+,(\d+),L,4,A,0,M2,", tspl)
-    ]
-    qr_size = _qr_size_dots(label["payload"])
-
-    assert len(qr_y_positions) == 2
-    assert all(y + qr_size <= 400 for y in qr_y_positions)
+    assert "QRCODE" not in tspl
+    assert "data:image/png;base64," not in svg
     assert "CODEPAGE UTF-8" in tspl
-    assert "MAQ.ORIG.: Cristóbal Lázaro" in tspl
-    assert "MAQ.ORIG.: Cristóbal Lázaro" in svg
+    assert "RESP.: Cristóbal Lázaro" in tspl
+    assert "RESP.: Cristóbal Lázaro" in svg
     assert "Cristóbal Lázaro".encode("utf-8") in tspl.encode("utf-8")
 
 
-def test_postpesaje_armado_declara_neto_total_sin_presentarlo_como_kg_ot():
+def test_postpesaje_armado_declara_peso_neto_final_sin_siglas_ambiguas():
     label = _post_weighing_assembly_label("OA000321-OT777-M001")
     service = ScmPrelabelService()
 
     tspl = service.generate_tspl({"labels": [label]})
     svg = service.generate_preview_svg({"labels": [label]})
 
-    assert "NETO TOTAL ARM.: 8.950" in tspl
-    assert "NETO TOTAL ARM.: 8.950" in svg
+    assert "PESO NETO FINAL (kg)" in tspl
+    assert "PESO NETO FINAL (kg)" in svg
+    assert '"8.950"' in tspl
     assert "KG OT:" not in tspl
     assert "KG OT:" not in svg
     assert "KG FIS.:" not in tspl
     assert "KG FIS.:" not in svg
 
 
-def test_postpesaje_fabricacion_conserva_peso_fisico_y_kg_ot():
+def test_postpesaje_fabricacion_distingue_neto_aporte_y_estandar():
     label = _post_weighing_label("OF000900-OT001-M001")
     tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
 
-    assert "KG FIS.: 8.950" in tspl
-    assert "KG OT: 8.750" in tspl
-    assert "NETO TOTAL ARM.:" not in tspl
+    assert "PESO NETO FINAL (kg)" in tspl
+    assert "APORTE ULTIMO TRAMO (kg)" in tspl
+    assert "PESO ESTANDAR SEGUN UNIDADES (kg): 8.750" in tspl
+    assert "KG FIS.:" not in tspl
+    assert "KG OT:" not in tspl
+
+
+@pytest.mark.parametrize("labels", [
+    [_control_weight_label("OF0014-OT006-M009")],
+    [
+        _control_weight_label("OF0014-OT006-M009"),
+        _control_weight_label("OF0014-OT006-M010"),
+    ],
+])
+def test_control_sin_qr_prioriza_neto_aporte_y_termina_con_crlf(labels):
+    service = ScmPrelabelService()
+    job = {"labels": labels}
+
+    tspl = service.generate_tspl(job)
+    svg = service.generate_preview_svg(job)
+
+    assert "CONTROL · CONTINUA ABIERTA" in tspl
+    assert "PESO NETO REAL (kg)" in tspl
+    assert "APORTE DESDE CONTROL ANTERIOR (kg)" in tspl
+    assert "PESO ESTANDAR SEGUN UNIDADES (kg): 8.750" in tspl
+    assert "QRCODE" not in tspl
+    assert "data:image/png;base64," not in svg
+    assert tspl.endswith("PRINT 1,1\r\n")
 
 
 def test_bandeja_y_preview_consultan_central_sin_reclamar():

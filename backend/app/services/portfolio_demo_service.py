@@ -56,26 +56,34 @@ def _label(*, label_id, label_type, gross=None, net=None):
         "cantidad_planificada_un": "67",
         "template": {
             "version": (
-                "POSTPESAJE_TSPL_3"
+                "POSTPESAJE_TSPL_4"
                 if label_type == "POSTPESAJE"
                 else "PREPESAJE_TSPL_3"
             )
         },
-        "qr": {
+    }
+    if label_type == "PREPESAJE":
+        payload["qr"] = {
             "v": 1,
             "type": "SCM_MANGA_LABEL",
             "manga_id": DEMO_MANGA_ID,
             "label_id": label_id,
             "label_type": label_type,
             "label_version": 1,
-        },
-    }
-    if label_type == "POSTPESAJE":
+        }
+    else:
         payload.update(
             {
+                "document_type": "POSTPESAJE",
+                "manga_id": DEMO_MANGA_ID,
+                "cantidad_confirmada_un": "67",
                 "kg_fisico": format(net, "f"),
                 "kg_produccion_ot": format(net, "f"),
+                "peso_neto_real_kg": format(net, "f"),
+                "peso_estandar_segun_unidades_kg": format(net, "f"),
+                "aporte_desde_control_anterior_kg": format(net, "f"),
                 "peso_bruto_kg": format(gross, "f"),
+                "qr_required": False,
             }
         )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -225,7 +233,7 @@ class PortfolioDemoWeighingService:
                 "estado": "PROCESADO",
                 "created_at": _now_iso(),
                 "processed_at": _now_iso(),
-                "plantilla_version": "POSTPESAJE_TSPL_3",
+                "plantilla_version": "POSTPESAJE_TSPL_4",
                 "labels": [
                     _label(
                         label_id=DEMO_POSTLABEL_ID,

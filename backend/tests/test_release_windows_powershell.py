@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -920,6 +921,10 @@ def test_inspection_classifies_ambiguous_installations_fail_closed():
 
 
 def test_inspection_executes_in_powershell_5_and_separates_legacy_bridge(tmp_path):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        inspection_port = str(probe.getsockname()[1])
+
     legacy_root = tmp_path / "legacy"
     legacy_database = legacy_root / "backend" / "instance" / "pesajes.db"
     legacy_database.parent.mkdir(parents=True)
@@ -939,7 +944,7 @@ def test_inspection_executes_in_powershell_5_and_separates_legacy_bridge(tmp_pat
         "-DataRoot", str(data_root),
         "-LegacyRoot", str(legacy_root),
         "-LegacyDatabasePath", str(legacy_database),
-        "-Port", "59998",
+        "-Port", inspection_port,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -960,7 +965,7 @@ def test_inspection_executes_in_powershell_5_and_separates_legacy_bridge(tmp_pat
         "-DataRoot", str(data_root),
         "-LegacyRoot", str(legacy_root),
         "-LegacyDatabasePath", str(legacy_database),
-        "-Port", "59998",
+        "-Port", inspection_port,
     )
 
     assert conflict.returncode == 0, conflict.stdout + conflict.stderr

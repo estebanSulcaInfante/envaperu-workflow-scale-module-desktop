@@ -1324,6 +1324,31 @@ body {
   min-width: 0;
 }
 
+.scm-article-identity {
+  display: grid;
+  gap: 0.3rem;
+  margin: 1rem 0;
+  padding: 1rem 1.1rem;
+  border: 2px solid #1d5b89;
+  border-left-width: 8px;
+  border-radius: 8px;
+  background: #eef6fc;
+  color: #123d5c;
+}
+
+.scm-article-identity span {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scm-article-identity strong {
+  overflow-wrap: anywhere;
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+  line-height: 1.25;
+}
+
 .scm-context-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

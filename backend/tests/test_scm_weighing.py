@@ -23,22 +23,33 @@ def _post_label(label_id, manga_id):
         "color": "FUCSIA SOLIDO",
         "tipo_manga": "NORMAL",
         "cantidad_planificada_un": "100",
+        "cantidad_confirmada_un": "100",
         "kg_fisico": "10.000",
         "kg_produccion_ot": "10.000",
-        "qr": {
-            "v": 1,
-            "type": "SCM_MANGA_LABEL",
-            "manga_id": manga_id,
-            "label_id": label_id,
-            "label_type": "POSTPESAJE",
-            "label_version": 1,
-        },
+        "document_type": "POSTPESAJE",
+        "manga_id": manga_id,
+        "peso_neto_real_kg": "10.000",
+        "peso_estandar_segun_unidades_kg": "10.000",
+        "aporte_desde_control_anterior_kg": "4.000",
     }
     return {
         "public_id": label_id,
         "payload_hash": "d" * 64,
         "payload": payload,
     }
+
+
+def _control_label(label_id, manga_id):
+    label = _post_label(label_id, manga_id)
+    label["payload"].update({
+        "document_type": "CONTROL_PESO",
+        "cantidad_acumulada_un": "37",
+        "peso_neto_real_kg": "3.700",
+        "peso_estandar_segun_unidades_kg": "3.330",
+        "aporte_desde_control_anterior_kg": "3.700",
+    })
+    label["payload"].pop("cantidad_confirmada_un", None)
+    return label
 
 
 def test_qr_legacy_no_entra_al_flujo_scm():
@@ -163,9 +174,12 @@ def test_route_local_expone_control_de_turno_con_motivo_default(tmp_path):
             db.engine.dispose()
 
 
-def test_control_de_turno_lee_balanza_estable_y_no_imprime(tmp_path):
+def test_control_lee_balanza_imprime_sin_qr_y_no_crea_pesaje_local(tmp_path):
     operation_id = str(uuid4())
     label_id = str(uuid4())
+    manga_id = str(uuid4())
+    control_label_id = str(uuid4())
+    print_job_id = str(uuid4())
     calls = []
 
     class Central:
@@ -187,13 +201,29 @@ def test_control_de_turno_lee_balanza_estable_y_no_imprime(tmp_path):
                 "manga": {"estado": "ABIERTA"},
                 "produccion_confirmada_un": "0",
                 "inventario_creado": False,
-                "print_job_id": None,
+                "print_job_id": print_job_id,
                 "qr_preservado": True,
             }
 
+        def claim_scm_print_job(self, _station_id, requested_job_id):
+            calls.append(("claim_print", requested_job_id))
+            return {
+                "print_job_id": requested_job_id,
+                "labels": [_control_label(control_label_id, manga_id)],
+            }
+
+        def acknowledge_scm_print_job(
+            self, _station_id, requested_job_id, payload
+        ):
+            calls.append(("ack_print", requested_job_id, payload))
+            return {"estado": "PROCESADO"}
+
     class Printer:
-        def print_tspl(self, _tspl):
-            raise AssertionError("Un control acumulado nunca debe imprimir")
+        printer_name = "TSC"
+
+        def print_tspl(self, tspl):
+            calls.append(("print", tspl))
+            return True
 
     database = tmp_path / "control.db"
     app = create_app(
@@ -221,7 +251,9 @@ def test_control_de_turno_lee_balanza_estable_y_no_imprime(tmp_path):
                 motivo="RELEVO_TURNO",
             )
 
-            assert [item[0] for item in calls] == ["resolve", "control"]
+            assert [item[0] for item in calls] == [
+                "resolve", "control", "claim_print", "print", "ack_print",
+            ]
             control_payload = calls[1][2]
             assert control_payload["capture_id"] == operation_id
             assert control_payload["peso_bruto_kg"] == "3.800"
@@ -231,7 +263,11 @@ def test_control_de_turno_lee_balanza_estable_y_no_imprime(tmp_path):
             assert control_payload["motivo"] == "RELEVO_TURNO"
             assert result["produccion_confirmada_un"] == "0"
             assert result["inventario_creado"] is False
-            assert result["print_job_id"] is None
+            assert result["print_job_id"] == print_job_id
+            assert result["print_result"]["result"] == "IMPRESA"
+            assert "PESO NETO REAL (kg)" in calls[3][1]
+            assert "APORTE DESDE CONTROL ANTERIOR (kg)" in calls[3][1]
+            assert "QRCODE" not in calls[3][1]
             assert result["qr_preservado"] is True
             assert Pesaje.query.count() == 0
     finally:
@@ -331,8 +367,9 @@ def test_f2_confirma_central_antes_de_imprimir_y_no_crea_pesaje_local(
             assert confirm_payload["tara_kg"] == "0.100"
             assert confirm_payload["pesado_por_id"] == 7
             assert "cantidad_confirmada_un" not in confirm_payload
-            assert "QRCODE 144" in calls[3][1]
-            assert "KG FIS.: 10.000" in calls[3][1]
+            assert "QRCODE" not in calls[3][1]
+            assert "PESO NETO FINAL (kg)" in calls[3][1]
+            assert "PESO ESTANDAR SEGUN UNIDADES (kg): 10.000" in calls[3][1]
             assert Pesaje.query.count() == 0
     finally:
         with app.app_context():

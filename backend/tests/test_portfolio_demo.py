@@ -104,7 +104,11 @@ def test_public_edge_demo_runs_qr_weight_and_label_flow(tmp_path):
         assert result["confirmed"]["weighing"]["peso_fisico_neto_kg"] == "8.375"
         assert result["print_result"]["result"] == "IMPRESA"
         assert result["print_result"]["simulated"] is True
-        assert "KG FIS.: 8.375" in result["print_result"]["preview_svg"]
+        assert "PESO NETO FINAL (kg)" in result["print_result"]["preview_svg"]
+        assert "8.375" in result["print_result"]["preview_svg"]
+        assert "data:image/png;base64," not in result[
+            "print_result"
+        ]["preview_svg"]
     finally:
         with app.app_context():
             db.session.remove()

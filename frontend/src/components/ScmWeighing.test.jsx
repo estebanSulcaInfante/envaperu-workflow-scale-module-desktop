@@ -52,7 +52,24 @@ const context = {
 describe('ScmWeighing', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('K7-01 usa Control de peso por defecto al pulsar F2', async () => {
+  it('K9-01 usa cierre final por defecto y reserva el checkbox para controles', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({ data: context });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+
+    expect(await screen.findByText('Listo para cierre final')).toBeTruthy();
+    expect(screen.getByLabelText('Solo control de peso').checked).toBe(false);
+    fireEvent.keyDown(window, { key: 'F2' });
+
+    expect(await screen.findByRole('dialog', { name: 'Confirmar cierre final' })).toBeTruthy();
+    expect(scmWeighingApi.control).not.toHaveBeenCalled();
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+  });
+
+  it('K9-02 registra Control de peso solo cuando el operador lo selecciona', async () => {
     scmWeighingApi.resolve.mockResolvedValue({ data: context });
     scmWeighingApi.control.mockResolvedValue({
       data: {
@@ -72,8 +89,10 @@ describe('ScmWeighing', () => {
     fireEvent.change(scanner, { target: { value: 'qr' } });
     fireEvent.keyDown(scanner, { key: 'Enter' });
 
-    expect(await screen.findByText('Listo para control de peso')).toBeTruthy();
-    expect(screen.getByLabelText('Cerrar manga en este pesaje').checked).toBe(false);
+    expect(await screen.findByText('Listo para cierre final')).toBeTruthy();
+    expect(screen.getByLabelText('Solo control de peso').checked).toBe(false);
+    fireEvent.click(screen.getByLabelText('Solo control de peso'));
+    expect(screen.getByText('Listo para control de peso')).toBeTruthy();
     fireEvent.keyDown(window, { key: 'F2' });
 
     await waitFor(() => expect(scmWeighingApi.control).toHaveBeenCalledTimes(1));
@@ -87,10 +106,7 @@ describe('ScmWeighing', () => {
     const scanner = screen.getByLabelText('QR de manga SCM');
     fireEvent.change(scanner, { target: { value: 'qr' } });
     fireEvent.keyDown(scanner, { key: 'Enter' });
-    await screen.findByText('Listo para control de peso');
-
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
-    expect(screen.getByText('Cierre final seleccionado')).toBeTruthy();
+    await screen.findByText('Listo para cierre final');
     fireEvent.keyDown(window, { key: 'F2' });
 
     const dialog = await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
@@ -98,39 +114,37 @@ describe('ScmWeighing', () => {
     expect(dialog.textContent).toContain('10.000 kg');
     expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(screen.getByRole('button', {
-      name: 'Cancelar; volver a Control',
+      name: 'Cancelar; revisar intención',
     }));
 
     fireEvent.keyDown(window, { key: 'F2', repeat: true });
     expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Cancelar; volver a Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar; revisar intención' }));
 
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByLabelText('Cerrar manga en este pesaje').checked).toBe(false);
-    expect(screen.getByText('Listo para control de peso')).toBeTruthy();
+    expect(screen.getByLabelText('Solo control de peso').checked).toBe(false);
+    expect(screen.getByText('Listo para cierre final')).toBeTruthy();
   });
 
-  it('K7-03 Escape cancela el cierre y devuelve el flujo al control seguro', async () => {
+  it('K9-03 Escape cancela el diálogo y conserva el cierre como intención inicial', async () => {
     scmWeighingApi.resolve.mockResolvedValue({ data: context });
     render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
 
     const scanner = screen.getByLabelText('QR de manga SCM');
     fireEvent.change(scanner, { target: { value: 'qr' } });
     fireEvent.keyDown(scanner, { key: 'Enter' });
-    await screen.findByText('Listo para control de peso');
-
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
+    await screen.findByText('Listo para cierre final');
     fireEvent.keyDown(window, { key: 'F2' });
     await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
     fireEvent.keyDown(window, { key: 'Escape' });
 
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByLabelText('Cerrar manga en este pesaje').checked).toBe(false);
-    expect(screen.getByText('Listo para control de peso')).toBeTruthy();
+    expect(screen.getByLabelText('Solo control de peso').checked).toBe(false);
+    expect(screen.getByText('Listo para cierre final')).toBeTruthy();
     expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
   });
 
-  it('K7-06 exige seleccionar cierre cuando el contexto no admite controles', async () => {
+  it('K9-06 deja listo el cierre cuando el contexto no admite controles', async () => {
     scmWeighingApi.resolve.mockResolvedValue({ data: {
       ...context,
       can_register_weight_control: false,
@@ -153,12 +167,8 @@ describe('ScmWeighing', () => {
     fireEvent.change(scanner, { target: { value: 'qr-armado' } });
     fireEvent.keyDown(scanner, { key: 'Enter' });
 
-    expect(await screen.findByText('Seleccione cierre final para continuar')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Pesar manga (F2)' }).disabled).toBe(true);
-    fireEvent.keyDown(window, { key: 'F2' });
-    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
+    expect(await screen.findByText('Listo para cierre final')).toBeTruthy();
+    expect(screen.getByLabelText('Solo control de peso').disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Pesar manga (F2)' }).disabled).toBe(false);
     fireEvent.keyDown(window, { key: 'F2' });
     await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
@@ -197,7 +207,7 @@ describe('ScmWeighing', () => {
     fireEvent.keyDown(scanner, { key: 'Enter' });
     await screen.findByText('OP0084-OT001-M001');
     expect(screen.getByRole('button', { name: 'Pesar manga (F2)' }).disabled).toBe(true);
-    const mode = screen.getByLabelText('Cerrar manga en este pesaje');
+    const mode = screen.getByLabelText('Solo control de peso');
     fireEvent.click(mode);
     expect(screen.getByText('Sin aumento desde el último control')).toBeTruthy();
     fireEvent.click(mode);
@@ -285,11 +295,12 @@ describe('ScmWeighing', () => {
     fireEvent.change(scanner, { target: { value: 'qr' } });
     fireEvent.keyDown(scanner, { key: 'Enter' });
     await screen.findByText('OP0084-OT001-M001');
+    fireEvent.click(screen.getByLabelText('Solo control de peso'));
     fireEvent.keyDown(window, { key: 'F2' });
     fireEvent.keyDown(window, { key: 'F2', repeat: true });
     expect(scmWeighingApi.control).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Operación en curso')).toBeTruthy();
-    expect(screen.getByLabelText('Cerrar manga en este pesaje').disabled).toBe(true);
+    expect(screen.getByLabelText('Solo control de peso').disabled).toBe(true);
     finish({ data: {
       control: { peso_neto_kg: '10.000', aporte_desde_control_anterior_kg: '10.000' },
       manga: { estado: 'EN_LLENADO' },
@@ -307,9 +318,10 @@ describe('ScmWeighing', () => {
     fireEvent.change(scanner, { target: { value: 'qr' } });
     fireEvent.keyDown(scanner, { key: 'Enter' });
     await screen.findByText('OP0084-OT001-M001');
+    fireEvent.click(screen.getByLabelText('Solo control de peso'));
     fireEvent.keyDown(window, { key: 'F2' });
     await screen.findByText('Último intento sin confirmar');
-    expect(screen.getByLabelText('Cerrar manga en este pesaje').disabled).toBe(true);
+    expect(screen.getByLabelText('Solo control de peso').disabled).toBe(true);
     fireEvent.keyDown(window, { key: 'F2' });
     await waitFor(() => expect(scmWeighingApi.control).toHaveBeenCalledTimes(2));
     expect(scmWeighingApi.control.mock.calls[0]).toEqual(scmWeighingApi.control.mock.calls[1]);
@@ -372,7 +384,6 @@ describe('ScmWeighing', () => {
     expect(screen.getByText('TC-000001 · FUCSIA')).toBeTruthy();
     expect(screen.getByText('OF-000042 · OF-000042-C01')).toBeTruthy();
     expect(screen.getAllByText('10.000 kg').length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
     fireEvent.keyDown(window, { key: 'F2' });
     await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar cierre de manga' }));
@@ -475,11 +486,7 @@ describe('ScmWeighing', () => {
     expect(screen.queryByRole('button', {
       name: 'Registrar corte de turno — continúa abierta',
     })).toBeNull();
-    expect(screen.getByText('Seleccione cierre final para continuar')).toBeTruthy();
-    expect(screen.getByRole('button', {
-      name: 'Pesar manga (F2)',
-    }).disabled).toBe(true);
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
+    expect(screen.getByText('Listo para cierre final')).toBeTruthy();
     expect(screen.getByRole('button', {
       name: 'Pesar manga (F2)',
     }).disabled).toBe(false);
@@ -531,7 +538,6 @@ describe('ScmWeighing', () => {
     fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
     await screen.findByText('OA000321-OT777-M001');
 
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
     fireEvent.keyDown(window, { key: 'F2' });
     await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar cierre de manga' }));
@@ -644,6 +650,7 @@ describe('ScmWeighing', () => {
       .toBe(context.manga.imagen_url);
     expect(screen.getByText('MANGA SELECCIONADA')).toBeTruthy();
     expect(screen.getByText('OP0084-OT001-M001', { selector: 'strong' })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Solo control de peso'));
     fireEvent.click(screen.getByRole('button', { name: 'Pesar manga (F2)' }));
 
     await waitFor(() => expect(scmWeighingApi.control).toHaveBeenCalledWith(
@@ -679,7 +686,6 @@ describe('ScmWeighing', () => {
     await waitFor(() => expect(scmWeighingApi.resolve).toHaveBeenCalledTimes(2));
     expect(screen.getByRole('button', { name: 'Pesar manga (F2)' }).disabled).toBe(false);
 
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
     fireEvent.keyDown(window, { key: 'F2' });
     await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar cierre de manga' }));
@@ -715,7 +721,6 @@ describe('ScmWeighing', () => {
     fireEvent.keyDown(screen.getByLabelText('QR de manga SCM'), { key: 'Enter' });
     await screen.findByText('OP0084-OT001-M001');
 
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
     expect(screen.queryByLabelText('Cierre final parcial — no continuará abierta')).toBeNull();
     expect(screen.queryByLabelText('Unidades reales de la manga incompleta')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Pesar manga (F2)' }));
@@ -846,7 +851,6 @@ describe('ScmWeighing', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cargar manga demo' }));
     expect(await screen.findByText('OP0084-OT001-M001')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('Cerrar manga en este pesaje'));
     fireEvent.click(screen.getByRole('button', { name: 'Pesar manga (F2)' }));
     await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar cierre de manga' }));

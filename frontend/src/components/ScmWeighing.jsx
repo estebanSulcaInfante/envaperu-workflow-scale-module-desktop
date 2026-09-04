@@ -45,7 +45,7 @@ export default function ScmWeighing({
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [simulatedWeight, setSimulatedWeight] = useState('10.100');
-  const [closeManga, setCloseManga] = useState(false);
+  const [controlOnly, setControlOnly] = useState(false);
   const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const [scanConsumed, setScanConsumed] = useState(false);
   const [controlResult, setControlResult] = useState(null);
@@ -101,11 +101,11 @@ export default function ScmWeighing({
     Math.round(net * 1000) - Math.round(lastControlNet * 1000)
   ) / 1000;
   const weighingState = getWeighingState({ context, busy, result, centralAvailable,
-    listening, closeManga, peso, tare, net, lastControlNet, validPartialClose: true,
+    listening, controlOnly, peso, tare, net, lastControlNet, validPartialClose: true,
     partialClose: false, error, scanConsumed });
   const canSubmit = weighingState.ready;
-  const canConfirm = canSubmit && closeManga;
-  const canRecordControl = canSubmit && !closeManga;
+  const canConfirm = canSubmit && !controlOnly;
+  const canRecordControl = canSubmit && controlOnly;
   const controlAvailable = Boolean(context?.can_register_weight_control);
   const showIntentSelector = Boolean(
     !context?.demo_only
@@ -128,7 +128,7 @@ export default function ScmWeighing({
       const previousCode = context?.manga?.codigo;
       const nextCode = data?.manga?.codigo;
       setContext(data);
-      setCloseManga(false);
+      setControlOnly(false);
       setCloseConfirmationOpen(false);
       setScanConsumed(false);
       setControlResult(null);
@@ -172,7 +172,7 @@ export default function ScmWeighing({
       setResult(data);
       setScanConsumed(true);
       setCloseConfirmationOpen(false);
-      setCloseManga(false);
+      setControlOnly(false);
       setContext((previous) => ({
         ...previous,
         can_weigh: false,
@@ -223,7 +223,7 @@ export default function ScmWeighing({
           estado: data.manga?.estado || 'EN_LLENADO',
         },
       }));
-      setCloseManga(false);
+      setControlOnly(false);
       controlOperationIdRef.current = null;
     } catch (requestError) {
       setError(
@@ -238,17 +238,17 @@ export default function ScmWeighing({
   };
 
   const submitWeighing = () => {
-    if (closeManga) {
-      setCloseConfirmationOpen(true);
+    if (controlOnly) {
+      recordControl();
       return;
     }
-    recordControl();
+    setCloseConfirmationOpen(true);
   };
 
   const cancelCloseConfirmation = () => {
     if (busy) return;
     setCloseConfirmationOpen(false);
-    setCloseManga(false);
+    setControlOnly(false);
     operationIdRef.current = null;
     focusScanner();
   };
@@ -285,7 +285,7 @@ export default function ScmWeighing({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [canSubmit, context, busy, closeManga, closeConfirmationOpen,
+  }, [canSubmit, context, busy, controlOnly, closeConfirmationOpen,
     scanConsumed]);
 
   useEffect(() => {
@@ -310,8 +310,8 @@ export default function ScmWeighing({
         <div className="panel-body">
           <p className="scm-help">
             {portfolioDemoMode
-              ? 'El QR carga el contexto. F2 registra un control por defecto; para cerrar, seleccione Cerrar manga y confirme.'
-              : 'Escanea la preetiqueta y revisa el estado. F2 registra un control por defecto; cerrar exige una selección explícita y confirmación.'}
+              ? 'El QR carga el contexto. F2 prepara el cierre final; marque Solo control de peso únicamente si la manga continuará abierta.'
+              : 'Escanea la preetiqueta y revisa el estado. F2 prepara el cierre final; el control de peso es una excepción explícita.'}
           </p>
           {portfolioDemoMode && (
             <div className="portfolio-weighing-guide">
@@ -319,7 +319,7 @@ export default function ScmWeighing({
                 <strong>Recorrido sugerido</strong>
                 <span>1. Carga la manga preparada.</span>
                 <span>2. Aplica el peso simulado.</span>
-                <span>3. F2 registra control; seleccione Cerrar manga solo para el final.</span>
+                <span>3. F2 prepara el cierre; marque Solo control de peso si la manga continuará abierta.</span>
               </div>
               <button
                 type="button"
@@ -503,42 +503,42 @@ export default function ScmWeighing({
             )}
           </div>
           {showIntentSelector && (
-            <div className={`scm-control-mode ${closeManga ? 'closing' : controlAvailable ? 'control' : 'required'}`}>
+            <div className={`scm-control-mode ${controlOnly ? 'control' : context?.can_weigh ? 'closing' : 'required'}`}>
               <div className="scm-intent-current" aria-live="polite">
                 <strong>
-                  {closeManga
-                    ? 'CIERRE FINAL'
-                    : controlAvailable ? 'CONTROL DE PESO' : 'CIERRE FINAL REQUERIDO'}
+                  {controlOnly
+                    ? 'CONTROL DE PESO'
+                    : context?.can_weigh ? 'CIERRE FINAL' : 'CONTROL DE PESO REQUERIDO'}
                 </strong>
                 <span>
-                  {closeManga
-                    ? 'La manga se cerrará únicamente después de confirmar.'
-                    : controlAvailable
-                      ? 'Modo seguro por defecto · la manga continuará abierta.'
-                      : 'Esta manga no admite controles; seleccione el cierre para habilitar F2.'}
+                  {controlOnly
+                    ? 'Excepción seleccionada · la manga continuará abierta.'
+                    : context?.can_weigh
+                      ? 'Modo habitual · la manga se cerrará únicamente después de confirmar.'
+                      : 'Esta manga no admite cierre final; seleccione el control para habilitar F2.'}
                 </span>
               </div>
               <label>
                 <input
                   type="checkbox"
-                  checked={closeManga}
-                  disabled={scanConsumed || !context?.can_weigh || busy || Boolean(error && (operationIdRef.current || controlOperationIdRef.current))}
+                  checked={controlOnly}
+                  disabled={scanConsumed || !controlAvailable || busy || Boolean(error && (operationIdRef.current || controlOperationIdRef.current))}
                   onChange={(event) => {
-                    setCloseManga(event.target.checked);
+                    setControlOnly(event.target.checked);
                   }}
-                  aria-label="Cerrar manga en este pesaje"
+                  aria-label="Solo control de peso"
                 />
                 <span>
-                  <strong>Cerrar manga en este pesaje</strong>
-                  Requiere confirmación antes de enviar
+                  <strong>Solo control de peso</strong>
+                  Marcar únicamente si la manga continuará abierta
                 </span>
               </label>
               <span>
-                {closeManga
-                  ? 'No es un control. Se emitirá el comprobante final y la manga dejará de admitir peso.'
-                  : controlAvailable
-                    ? 'Solo kg. No cambia maquinista, turno ni OT; no crea inventario.'
-                    : 'F2 permanecerá bloqueado hasta seleccionar el cierre final.'}
+                {controlOnly
+                  ? 'Solo kg. No cambia maquinista, turno ni OT; no crea inventario.'
+                  : context?.can_weigh
+                    ? 'No es un control. Se emitirá el comprobante final y la manga dejará de admitir peso.'
+                    : 'F2 permanecerá bloqueado hasta seleccionar el control de peso.'}
               </span>
               {controlResult && (
                 <div className="scm-message success">
@@ -626,7 +626,7 @@ export default function ScmWeighing({
                   admitir nuevos pesos y se generará el comprobante final.
                 </p>
                 <p className="scm-close-dialog-recovery">
-                  Si la manga continuará llenándose, cancele y vuelva a Control.
+                  Si la manga continuará llenándose, cancele y marque Solo control de peso.
                 </p>
                 <div className="scm-close-dialog-actions">
                   <button
@@ -636,7 +636,7 @@ export default function ScmWeighing({
                     disabled={busy}
                     onClick={cancelCloseConfirmation}
                   >
-                    Cancelar; volver a Control
+                    Cancelar; revisar intención
                   </button>
                   <button
                     type="button"

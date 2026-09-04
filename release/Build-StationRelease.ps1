@@ -59,6 +59,36 @@ function Get-CleanGitRevision {
     return $revision.ToLowerInvariant()
 }
 
+function Get-BuildPython {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+
+    $candidates = @(
+        (Join-Path $RepositoryRoot 'backend\.venv\Scripts\python.exe'),
+        (Join-Path $RepositoryRoot 'backend\venv\Scripts\python.exe')
+    )
+    $pathPython = Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($pathPython) {
+        $candidates += $pathPython.Source
+    }
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        $version = @(& $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>&1)
+        if (
+            $LASTEXITCODE -eq 0 -and
+            @($version).Count -gt 0 -and
+            $version[-1].ToString().Trim() -eq '3.12'
+        ) {
+            return $candidate
+        }
+    }
+
+    throw 'No se encontro Python 3.12 para construir el release.'
+}
+
 function Assert-NewReleaseArtifact {
     param([Parameter(Mandatory = $true)][string]$ArchivePath)
     foreach ($candidate in @($ArchivePath, "$ArchivePath.sha256")) {
@@ -122,13 +152,7 @@ try {
         throw 'El release no contiene requirements-runtime.lock.'
     }
 
-    $repoPython = Join-Path $moduleRoot 'backend\.venv\Scripts\python.exe'
-    if (-not (Test-Path -LiteralPath $repoPython)) {
-        $repoPython = Join-Path $moduleRoot 'backend\venv\Scripts\python.exe'
-    }
-    if (-not (Test-Path -LiteralPath $repoPython)) {
-        throw 'No se encontro el Python del modulo para construir el release.'
-    }
+    $repoPython = Get-BuildPython -RepositoryRoot $moduleRoot
 
     if (-not $SkipWheelhouse) {
         $wheelhouse = Join-Path $stagingRoot 'wheels'

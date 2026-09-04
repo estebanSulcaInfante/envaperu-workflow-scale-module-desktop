@@ -33,11 +33,7 @@ def demo_qr_text():
     return json.dumps(
         {
             "v": 1,
-            "type": "SCM_MANGA_LABEL",
-            "manga_id": DEMO_MANGA_ID,
             "label_id": DEMO_PRELABEL_ID,
-            "label_type": "PREPESAJE",
-            "label_version": 1,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -50,16 +46,26 @@ def _label(*, label_id, label_type, gross=None, net=None):
         "of_ot": "OF-DEMO-AP-PRE - OT-000001",
         "fecha_ot": datetime.now(timezone.utc).date().isoformat(),
         "maquinista": "Diego Ramos",
+        "operador": "Diego Ramos",
+        "maquina": "Sopladora Alcancia Pablo",
+        "turno": "DIA",
+        "pieza": "Alcancia Pablo Grande",
         "pieza_color": "Alcancia Pablo Grande (PT-DEMO-AP)",
         "color": "CARNE SOLIDO",
         "tipo_manga": "NORMAL",
         "cantidad_planificada_un": "67",
+        "kg_estimados": "8.950",
+        "kg_teoricos": "8.950",
         "template": {
             "version": (
-                "POSTPESAJE_TSPL_4"
+                "POSTPESAJE_TSPL_5"
                 if label_type == "POSTPESAJE"
-                else "PREPESAJE_TSPL_3"
-            )
+                else "PREPESAJE_TSPL_5"
+            ),
+            **(
+                {"qr_contract": "LABEL_REF_V1"}
+                if label_type == "PREPESAJE" else {}
+            ),
         },
     }
     if label_type == "PREPESAJE":
@@ -77,10 +83,12 @@ def _label(*, label_id, label_type, gross=None, net=None):
                 "document_type": "POSTPESAJE",
                 "manga_id": DEMO_MANGA_ID,
                 "cantidad_confirmada_un": "67",
+                "fuente_cantidad": "PLAN_CONFIRMADO_POR_PESAJE",
                 "kg_fisico": format(net, "f"),
                 "kg_produccion_ot": format(net, "f"),
                 "peso_neto_real_kg": format(net, "f"),
                 "peso_estandar_segun_unidades_kg": format(net, "f"),
+                "peso_fabricado_teorico_kg": format(net, "f"),
                 "aporte_desde_control_anterior_kg": format(net, "f"),
                 "peso_bruto_kg": format(gross, "f"),
                 "qr_required": False,
@@ -101,7 +109,7 @@ def demo_preprint_job():
         "estado": "GENERADO",
         "created_at": _now_iso(),
         "processed_at": None,
-        "plantilla_version": "PREPESAJE_TSPL_3",
+        "plantilla_version": "PREPESAJE_TSPL_5",
         "labels": [
             _label(label_id=DEMO_PRELABEL_ID, label_type="PREPESAJE")
         ],
@@ -112,6 +120,7 @@ def demo_preprint_job():
 def demo_weighing_context():
     return {
         "can_weigh": True,
+        "can_register_weight_control": True,
         "scanned_label_id": DEMO_PRELABEL_ID,
         "portfolio_demo": True,
         "manga": {
@@ -182,6 +191,7 @@ class PortfolioDemoWeighingService:
     def __init__(self, *, scale_snapshot=None):
         self.scale_snapshot = scale_snapshot or get_last_scale_snapshot
         self._operations = {}
+        self._latest_control_net = Decimal("0.000")
         self._lock = threading.Lock()
 
     def resolve(self, qr_value):
@@ -194,7 +204,15 @@ class PortfolioDemoWeighingService:
             )
         return demo_weighing_context()
 
-    def confirm(self, *, operation_id, label_id, motivo_desfase=None):
+    def confirm(
+        self,
+        *,
+        operation_id,
+        label_id,
+        motivo_desfase=None,
+        cantidad_confirmada_un=None,
+        motivo_cierre_parcial=None,
+    ):
         try:
             operation_id = str(uuid.UUID(str(operation_id)))
             label_id = str(uuid.UUID(str(label_id)))
@@ -233,7 +251,7 @@ class PortfolioDemoWeighingService:
                 "estado": "PROCESADO",
                 "created_at": _now_iso(),
                 "processed_at": _now_iso(),
-                "plantilla_version": "POSTPESAJE_TSPL_4",
+                "plantilla_version": "POSTPESAJE_TSPL_5",
                 "labels": [
                     _label(
                         label_id=DEMO_POSTLABEL_ID,
@@ -267,6 +285,103 @@ class PortfolioDemoWeighingService:
                     "preview_svg": preview,
                 },
             }
+            self._operations[operation_id] = copy.deepcopy(result)
+            return result
+
+    def record_control(self, *, operation_id, label_id):
+        """Simulate the kg-only progress contract without closing the manga."""
+        try:
+            operation_id = str(uuid.UUID(str(operation_id)))
+            label_id = str(uuid.UUID(str(label_id)))
+        except (TypeError, ValueError, AttributeError) as error:
+            raise ScmWeighingLocalError(
+                "INVALID_UUID", "El control o la etiqueta no posee UUID valido."
+            ) from error
+        if label_id != DEMO_PRELABEL_ID:
+            raise ScmWeighingLocalError(
+                "DEMO_LABEL_NOT_FOUND",
+                "La demo publica solo admite la manga preparada.",
+                status=404,
+            )
+        with self._lock:
+            previous = self._operations.get(operation_id)
+            if previous is not None:
+                return copy.deepcopy(previous)
+
+            snapshot = self.scale_snapshot()
+            if snapshot.get("peso_kg") is None or not snapshot.get("stable"):
+                raise ScmWeighingLocalError(
+                    "SCALE_READING_UNSTABLE",
+                    "Aplique una lectura estable de la balanza simulada.",
+                )
+            gross = Decimal(str(snapshot["peso_kg"])).quantize(Decimal("0.001"))
+            tare = Decimal("0.100")
+            net = (gross - tare).quantize(Decimal("0.001"))
+            if net <= self._latest_control_net:
+                raise ScmWeighingLocalError(
+                    "CONTROL_WEIGHT_NOT_MONOTONIC",
+                    "El avance acumulado debe superar el ultimo control.",
+                )
+            contribution = (net - self._latest_control_net).quantize(
+                Decimal("0.001")
+            )
+            control_label_id = str(
+                uuid.uuid5(uuid.UUID(operation_id), "portfolio-control-label")
+            )
+            control_job_id = str(
+                uuid.uuid5(uuid.UUID(operation_id), "portfolio-control-job")
+            )
+            payload = {
+                "document_type": "CONTROL_PESO",
+                "codigo_manga": "OFDEMOAPPRE-OT001-M002",
+                "pieza_color": "Alcancia Pablo Grande (PT-DEMO-AP)",
+                "maquinista": "Diego Ramos",
+                "peso_neto_real_kg": format(net, "f"),
+                "aporte_desde_control_anterior_kg": format(contribution, "f"),
+                "qr_required": False,
+                "template": {"version": "CONTROL_PESO_TSPL_2"},
+            }
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            print_job = {
+                "print_job_id": control_job_id,
+                "status": "PRINTED",
+                "estado": "PROCESADO",
+                "created_at": _now_iso(),
+                "processed_at": _now_iso(),
+                "plantilla_version": "CONTROL_PESO_TSPL_2",
+                "labels": [{
+                    "public_id": control_label_id,
+                    "payload_hash": hashlib.sha256(
+                        canonical.encode("utf-8")
+                    ).hexdigest(),
+                    "payload": payload,
+                }],
+                "portfolio_demo": True,
+            }
+            preview = ScmPrelabelService().generate_preview_svg(print_job)
+            result = {
+                "operation_id": operation_id,
+                "portfolio_demo": True,
+                "continuidad_estado": "ACTIVA",
+                "control": {
+                    "tipo": "AVANCE_KG",
+                    "peso_neto_kg": format(net, "f"),
+                    "aporte_desde_control_anterior_kg": format(contribution, "f"),
+                    "conteo_acumulado_un": None,
+                },
+                "manga": {
+                    "public_id": DEMO_MANGA_ID,
+                    "codigo": "OFDEMOAPPRE-OT001-M002",
+                    "estado": "EN_LLENADO",
+                },
+                "print_job_id": control_job_id,
+                "print_result": {
+                    "result": "IMPRESA",
+                    "simulated": True,
+                    "preview_svg": preview,
+                },
+            }
+            self._latest_control_net = net
             self._operations[operation_id] = copy.deepcopy(result)
             return result
 

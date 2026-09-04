@@ -4,8 +4,6 @@ import json
 import hashlib
 import base64
 import io
-import threading
-from copy import deepcopy
 from html import escape
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -18,20 +16,20 @@ from app import db
 from app.models.scm_label_print_attempt import ScmLabelPrintAttempt
 from app.models.station_identity import StationIdentity
 from app.runtime.token_store import read_configured_station_token
-from app.services.central_api_client import CentralApiClient, CentralApiError
-from app.services.printer_service import (
-    PrinterEmissionResult,
-    get_printer_service,
-)
+from app.services.central_api_client import CentralApiClient
+from app.services.printer_service import get_printer_service
 
 
 def _safe(value, limit=32):
     return str(value or "").replace('"', "'")[:limit]
 
 
-def _tspl_quoted(value):
-    """Escape embedded quotes using the sequence required by TSPL2."""
-    return str(value or "").replace('"', r'\["]')
+def _tspl_quoted(value, limit=600):
+    return (
+        str(value or "")[:limit]
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+    )
 
 
 def _station_timezone(name):
@@ -51,9 +49,20 @@ class ScmPrelabelService:
     TOP_BAR_Y = 14
     TEXT_START_Y = 18
     LINE_HEIGHT = 13
-    QR_GAP_Y = 4
     QR_MODULE_DOTS = 4
-    _physical_print_lock = threading.RLock()
+    QR_QUIET_ZONE_MODULES = 4
+    QR_GAP_Y = QR_MODULE_DOTS * QR_QUIET_ZONE_MODULES
+    COMPACT_LAYOUT_VERSIONS = {
+        "PREPESAJE_TSPL_4",
+        "PREPESAJE_TSPL_5",
+    }
+    COMPACT_GENERAL_SIZE = 16
+    COMPACT_MANGA_SIZE = 24
+    COMPACT_MANGA_CODE_X = 75
+    COMPACT_ROW_START_Y = 40
+    COMPACT_LINE_HEIGHT = 17
+    COMPACT_SEPARATOR_Y = 224
+    COMPACT_QR_Y = 240
 
     def __init__(self, *, client=None, printer=None):
         self.client = client
@@ -89,92 +98,15 @@ class ScmPrelabelService:
 
     def fetch(self, print_job_id):
         client = self.client or self._central_client()
-        job = client.get_scm_print_job(self._station_id(), print_job_id)
-        return self._with_local_evidence(job)
+        return client.get_scm_print_job(self._station_id(), print_job_id)
 
     def list_jobs(self, *, status="PENDING", limit=20):
         client = self.client or self._central_client()
-        response = client.list_scm_print_jobs(
+        return client.list_scm_print_jobs(
             self._station_id(),
             status=status,
             limit=limit,
         )
-        if not isinstance(response, dict):
-            return response
-        enriched = deepcopy(response)
-        enriched["print_jobs"] = [
-            self._with_local_evidence(job)
-            for job in response.get("print_jobs", [])
-        ]
-        return enriched
-
-    @staticmethod
-    def _latest_attempts(print_job_id):
-        if not has_app_context():
-            return {}
-        attempts = ScmLabelPrintAttempt.query.filter_by(
-            print_job_id=print_job_id,
-        ).order_by(ScmLabelPrintAttempt.id.desc()).all()
-        latest = {}
-        for attempt in attempts:
-            latest.setdefault(attempt.label_id, attempt)
-        return latest
-
-    @staticmethod
-    def _visible_state(state):
-        if state == "EMISION_EN_PROGRESO":
-            return "EMISION_INCIERTA"
-        return state
-
-    @classmethod
-    def _aggregate_local_state(cls, latest):
-        states = {
-            cls._visible_state(attempt.result)
-            for attempt in latest.values()
-        }
-        if not states:
-            return None
-        if "EMISION_INCIERTA" in states:
-            return "EMISION_INCIERTA"
-        if states == {"IMPRESA"}:
-            return "IMPRESA"
-        if states == {"FALLIDA_SIN_EMISION"}:
-            return "FALLIDA_SIN_EMISION"
-        return "PARCIAL"
-
-    @classmethod
-    def _with_local_evidence(cls, job, *, latest=None, ack_pending=None):
-        if not isinstance(job, dict):
-            return job
-        enriched = deepcopy(job)
-        print_job_id = enriched.get("print_job_id")
-        latest = latest if latest is not None else cls._latest_attempts(
-            print_job_id
-        )
-        for label in enriched.get("labels") or []:
-            attempt = latest.get(str(label.get("public_id")))
-            if attempt is not None:
-                label["local_print_state"] = cls._visible_state(
-                    attempt.result
-                )
-        local_state = cls._aggregate_local_state(latest)
-        if local_state:
-            enriched["local_print_state"] = local_state
-        blocked = local_state in {"EMISION_INCIERTA", "PARCIAL"}
-        if blocked:
-            enriched["auto_reprint_blocked"] = True
-        central_status = str(
-            enriched.get("status") or enriched.get("estado") or ""
-        ).upper()
-        inferred_ack_pending = (
-            local_state == "IMPRESA"
-            and central_status not in {"PRINTED", "PROCESADO", "IMPRESA"}
-        )
-        if ack_pending is not None:
-            inferred_ack_pending = bool(ack_pending)
-        if local_state == "IMPRESA" or ack_pending is not None:
-            enriched["ack_pending"] = inferred_ack_pending
-        return enriched
 
     @staticmethod
     def _order_row(payload):
@@ -186,8 +118,20 @@ class ScmPrelabelService:
 
     @staticmethod
     def _qr_text(payload):
+        qr_payload = payload["qr"]
+        template = payload.get("template") or {}
+        if template.get("qr_contract") != "LABEL_REF_V1":
+            return json.dumps(
+                qr_payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         return json.dumps(
-            payload["qr"],
+            {
+                "v": 1,
+                "label_id": qr_payload["label_id"],
+            },
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
@@ -197,9 +141,7 @@ class ScmPrelabelService:
     def _document_type(payload):
         if payload.get("document_type"):
             return str(payload["document_type"]).upper()
-        return str(
-            (payload.get("qr") or {}).get("label_type") or "PREPESAJE"
-        ).upper()
+        return str((payload.get("qr") or {}).get("label_type") or "PREPESAJE").upper()
 
     @classmethod
     def _requires_qr(cls, payload):
@@ -219,7 +161,7 @@ class ScmPrelabelService:
     @classmethod
     def _rows(cls, payload, printed_at):
         order_label, order_ot = cls._order_row(payload)
-        return [
+        rows = [
             ("MANGA", payload["codigo_manga"]),
             (order_label, order_ot),
             ("IMP.", printed_at),
@@ -230,11 +172,86 @@ class ScmPrelabelService:
             ("TIPO", payload["tipo_manga"]),
             ("CANT.", payload["cantidad_planificada_un"]),
         ]
+        return rows
+
+    @classmethod
+    def _uses_compact_layout(cls, payload):
+        return (payload.get("template") or {}).get("version") in (
+            cls.COMPACT_LAYOUT_VERSIONS
+        )
+
+    @classmethod
+    def _compact_rows(cls, payload, printed_at):
+        theoretical_kg = payload.get("kg_teoricos")
+        if theoretical_kg is None:
+            theoretical_kg = payload.get("kg_estimados")
+        rows = [
+            ("PZA", payload.get("pieza") or payload.get("pieza_color")),
+            ("COLOR", payload.get("color")),
+            (None, None),
+        ]
+        if payload.get("op"):
+            rows.append(("OP", payload["op"]))
+        rows.extend([
+            ("MAQUINA", payload.get("maquina")),
+            ("TIPO MANGA", payload.get("tipo_manga")),
+            ("TURNO", payload.get("turno")),
+            ("F.OT ORIG.", payload.get("fecha_ot")),
+            ("OPE", payload.get("operador") or payload.get("maquinista")),
+            ("IMP", printed_at),
+            (
+                "KG TEORICOS",
+                f"{theoretical_kg} kg" if theoretical_kg is not None else None,
+            ),
+        ])
+        return rows
+
+    @staticmethod
+    def _display_operational_datetime(payload, printed_at):
+        raw_date = str(payload.get("fecha_ot") or "")
+        try:
+            operational_date = datetime.fromisoformat(raw_date).strftime(
+                "%d/%m/%Y"
+            )
+        except ValueError:
+            operational_date = raw_date
+        time_value = str(printed_at or "").split(" ")[-1]
+        return f"F.OT: {operational_date}  HORA: {time_value}"
 
     @classmethod
     def _weight_values(cls, payload):
         document_type = cls._document_type(payload)
         is_final = document_type == "POSTPESAJE"
+        template_version = (payload.get("template") or {}).get("version")
+        quantity_source = payload.get("fuente_cantidad")
+        if not is_final:
+            quantity_label = "CONTEO ACUMULADO"
+        elif quantity_source == "PLAN_CONFIRMADO_POR_PESAJE":
+            quantity_label = "CONTEO TEORICO"
+        elif quantity_source in {
+            "RESPONSABLE_ARMADO",
+            "CIERRE_PARCIAL_SUPERVISADO",
+            "CORRECCION_AUTORIZADA",
+        }:
+            quantity_label = "CONTEO CONFIRMADO"
+        elif template_version == "POSTPESAJE_TSPL_5":
+            # Los artefactos v5 creados antes de publicar fuente_cantidad
+            # continúan legibles. En ausencia de evidencia explícita, el
+            # cierre normal se presenta como teórico y no como conteo físico.
+            quantity_label = (
+                "CONTEO CONFIRMADO"
+                if payload.get("cierre_parcial") or payload.get("oa_ot")
+                else "CONTEO TEORICO"
+            )
+        else:
+            # Compatibilidad con etiquetas anteriores que no publicaban la
+            # procedencia del valor de unidades.
+            quantity_label = "CONTEO FINAL"
+        fabricated_theoretical = payload.get("peso_fabricado_teorico_kg")
+        if fabricated_theoretical is None and template_version != (
+            "POSTPESAJE_TSPL_5"
+        ):
+            fabricated_theoretical = payload.get("kg_produccion_ot")
         return {
             "title": (
                 "FINAL · MANGA CERRADA"
@@ -250,41 +267,70 @@ class ScmPrelabelService:
                 if is_final else "APORTE DESDE CONTROL ANTERIOR (kg)"
             ),
             "contribution": payload.get("aporte_desde_control_anterior_kg"),
-            "quantity_label": "CONTEO FINAL" if is_final else "CONTEO ACUMULADO",
+            "quantity_label": quantity_label,
             "quantity": (
                 payload.get("cantidad_confirmada_un")
                 if is_final else payload.get("cantidad_acumulada_un")
             ),
-            "standard": (
-                payload.get("peso_estandar_segun_unidades_kg")
-                or payload.get("kg_produccion_ot")
-            ),
+            "fabricated_theoretical": fabricated_theoretical,
+            "shows_units": payload.get("cantidad_acumulada_un") is not None
+            or is_final,
         }
 
     def _weight_column(self, x, item, printed_at):
         payload = item["payload"]
         values = self._weight_values(payload)
-        return "\n".join((
-            f"BAR {x},{self.TOP_BAR_Y},{self.STICKER_WIDTH},4",
-            f'TEXT {x + 8},24,"3",0,1,1,"{_safe(values["title"], 38)}"',
-            f'TEXT {x + 8},52,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
-            f'TEXT {x + 8},76,"1",0,1,1,"{_safe(payload.get("pieza_color"), 46)}"',
-            f'TEXT {x + 8},101,"2",0,1,1,"{values["net_label"]}"',
-            f'TEXT {x + 62},130,"4",0,3,3,"{_safe(values["net"], 10)}"',
-            f'BAR {x + 8},210,{self.STICKER_WIDTH - 16},2',
-            f'TEXT {x + 8},220,"1",0,1,1,"{values["contribution_label"]}"',
-            f'TEXT {x + 248},242,"3",0,1,2,"+{_safe(values["contribution"], 9)}"',
-            f'TEXT {x + 8},278,"2",0,1,1,"{values["quantity_label"]}: {_safe(values["quantity"], 10)} UN"',
-            f'TEXT {x + 8},306,"1",0,1,1,"PESO ESTANDAR SEGUN UNIDADES (kg): {_safe(values["standard"], 9)}"',
-            f'TEXT {x + 8},329,"1",0,1,1,"RESP.: {_safe(payload.get("maquinista"), 34)}"',
-            f'TEXT {x + 8},352,"1",0,1,1,"IMP.: {_safe(printed_at, 20)}"',
-            f'TEXT {x + 8},375,"1",0,1,1,"SIN QR · CONSERVAR PREETIQUETA"',
+        order_label, order_value = self._order_row(payload)
+        order_context = (
+            f'OT CIERRE: {payload["ot_cierre"]}'
+            if payload.get("ot_cierre")
+            else f"{order_label}: {order_value}"
+        )
+        operational_datetime = self._display_operational_datetime(
+            payload, printed_at
+        )
+        commands = [
+            f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
+            f'TEXT {x + 8},12,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
+            f'TEXT {x + 8},38,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
+            f'TEXT {x + 8},58,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
+            f'TEXT {x + 8},84,"2",0,1,1,"{values["net_label"]}"',
+            f'TEXT {x + 62},108,"4",0,3,3,"{_safe(values["net"], 10)}"',
+        ]
+        if values["fabricated_theoretical"] is not None:
+            commands.append(
+                f'TEXT {x + 8},184,"1",0,1,1,'
+                f'"PESO FABRICADO TEORICO (kg): '
+                f'{_safe(values["fabricated_theoretical"], 9)}"'
+            )
+        commands.extend((
+            f'BAR {x + 8},207,{self.STICKER_WIDTH - 16},2',
+            f'TEXT {x + 8},218,"3",0,1,1,"{_safe(values["title"], 38)}"',
+            f'TEXT {x + 8},246,"1",0,1,1,"{values["contribution_label"]}"',
+            f'TEXT {x + 286},244,"3",0,1,2,"+{_safe(values["contribution"], 9)}"',
+            f'TEXT {x + 8},276,"1",0,1,1,"{_safe(payload.get("pieza_color"), 46)}"',
         ))
+        if values["shows_units"]:
+            commands.extend((
+                f'TEXT {x + 8},300,"2",0,1,1,"{values["quantity_label"]}: {_safe(values["quantity"], 10)} UN"',
+                f'TEXT {x + 8},326,"1",0,1,1,"{_safe(order_context, 46)}"',
+            ))
+        else:
+            commands.extend((
+                f'TEXT {x + 8},300,"2",0,1,1,"AVANCE EN KG · SIN CONTEO"',
+                f'TEXT {x + 8},326,"1",0,1,1,"{_safe(order_context, 46)}"',
+            ))
+        commands.append(
+            f'TEXT {x + 8},375,"1",0,1,1,"SIN QR · CONSERVAR PREETIQUETA"'
+        )
+        return "\n".join(commands)
 
     def _column(self, x, item, printed_at):
         payload = item["payload"]
         if not self._requires_qr(payload):
             return self._weight_column(x, item, printed_at)
+        if self._uses_compact_layout(payload):
+            return self._compact_prelabel_column(x, item, printed_at)
         qr = self._qr_text(payload)
         y = self.TEXT_START_Y
         commands = [
@@ -306,9 +352,55 @@ class ScmPrelabelService:
             )
         commands.append(
             f'QRCODE {x + 120},{qr_y},L,'
-            f'{self.QR_MODULE_DOTS},A,0,M2,'
+            f'{self.QR_MODULE_DOTS},A,0,'
             f'"{_tspl_quoted(qr)}"'
         )
+        return "\n".join(commands)
+
+    def _compact_prelabel_column(self, x, item, printed_at):
+        payload = item["payload"]
+        qr_text = self._qr_text(payload)
+        qr_size = self._qr_code(payload).modules_count * self.QR_MODULE_DOTS
+        qr_x = x + (self.STICKER_WIDTH - qr_size) // 2
+        if self.COMPACT_QR_Y + qr_size > self.LABEL_HEIGHT_DOTS:
+            raise ValueError(
+                "El QR SCM excede la altura fisica disponible de la etiqueta"
+            )
+        commands = [
+            f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
+            (
+                f'TEXT {x + 7},10,"0",0,{self.COMPACT_GENERAL_SIZE},'
+                f'{self.COMPACT_GENERAL_SIZE},"MANGA:"'
+            ),
+            (
+                f'TEXT {x + self.COMPACT_MANGA_CODE_X},4,"0",0,'
+                f'{self.COMPACT_MANGA_SIZE},{self.COMPACT_MANGA_SIZE},'
+                f'"{_safe(payload.get("codigo_manga"), 24)}"'
+            ),
+        ]
+        y = self.COMPACT_ROW_START_Y
+        for label, value in self._compact_rows(payload, printed_at):
+            if label is None:
+                commands.append(
+                    f"BAR {x + 7},{y},{self.STICKER_WIDTH - 16},2"
+                )
+                y += 5
+                continue
+            commands.append(
+                f'TEXT {x + 7},{y},"0",0,{self.COMPACT_GENERAL_SIZE},'
+                f'{self.COMPACT_GENERAL_SIZE},'
+                f'"{label}: {_safe(value, 46)}"'
+            )
+            y += self.COMPACT_LINE_HEIGHT
+        commands.extend((
+            f"BAR {x + 1},{self.COMPACT_SEPARATOR_Y},"
+            f"{self.STICKER_WIDTH - 3},2",
+            (
+                f'QRCODE {qr_x},{self.COMPACT_QR_Y},L,'
+                f'{self.QR_MODULE_DOTS},A,0,'
+                f'"{_tspl_quoted(qr_text)}"'
+            ),
+        ))
         return "\n".join(commands)
 
     @classmethod
@@ -328,6 +420,8 @@ class ScmPrelabelService:
         payload = item["payload"]
         if not self._requires_qr(payload):
             return self._svg_weight_column(x, item, printed_at)
+        if self._uses_compact_layout(payload):
+            return self._svg_compact_prelabel_column(x, item, printed_at)
         rows = self._rows(payload, printed_at)
         y = self.TEXT_START_Y + 11
         parts = [
@@ -354,37 +448,108 @@ class ScmPrelabelService:
         ))
         return "".join(parts)
 
+    def _svg_compact_prelabel_column(self, x, item, printed_at):
+        payload = item["payload"]
+        qr_data_uri, qr_size = self._qr_data_uri(payload)
+        qr_x = x + (self.STICKER_WIDTH - qr_size) // 2
+        parts = [
+            f'<rect x="{x + 1}" y="2" width="{self.STICKER_WIDTH - 3}" '
+            f'height="396" rx="4" fill="white" stroke="#111" '
+            'stroke-width="2"/>',
+            f'<text x="{x + 7}" y="29" font-family="Arial, sans-serif" '
+            f'font-size="{self.COMPACT_GENERAL_SIZE}" font-weight="700">'
+            'MANGA:</text>',
+            (
+                f'<text x="{x + self.COMPACT_MANGA_CODE_X}" y="31" '
+                'font-family="Arial Narrow, Arial, sans-serif" '
+                f'font-size="{self.COMPACT_MANGA_SIZE}" font-weight="900">'
+                f'{escape(_safe(payload.get("codigo_manga"), 24))}</text>'
+            ),
+        ]
+        y = 54
+        for label, value in self._compact_rows(payload, printed_at):
+            if label is None:
+                separator_y = y - 14
+                parts.append(
+                    f'<line x1="{x + 7}" y1="{separator_y}" '
+                    f'x2="{x + self.STICKER_WIDTH - 9}" '
+                    f'y2="{separator_y}" stroke="#111" stroke-width="2"/>'
+                )
+                y += 5
+                continue
+            parts.append(
+                f'<text x="{x + 7}" y="{y}" '
+                'font-family="Arial, sans-serif" '
+                f'font-size="{self.COMPACT_GENERAL_SIZE}" font-weight="700">'
+                f'{escape(f"{label}: {_safe(value, 46)}")}</text>'
+            )
+            y += self.COMPACT_LINE_HEIGHT
+        parts.extend((
+            f'<line x1="{x + 1}" y1="{self.COMPACT_SEPARATOR_Y}" '
+            f'x2="{x + self.STICKER_WIDTH - 2}" '
+            f'y2="{self.COMPACT_SEPARATOR_Y}" stroke="#111" '
+            'stroke-width="2"/>',
+            f'<image href="{qr_data_uri}" x="{qr_x}" '
+            f'y="{self.COMPACT_QR_Y}" width="{qr_size}" '
+            f'height="{qr_size}"/>',
+        ))
+        return "".join(parts)
+
     def _svg_weight_column(self, x, item, printed_at):
         payload = item["payload"]
         values = self._weight_values(payload)
-
-        def text(y, value, size=15, weight=600, anchor="start", x_pos=None):
-            return (
-                f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '
-                f'font-family="Arial, sans-serif" font-size="{size}" '
-                f'font-weight="{weight}" text-anchor="{anchor}">'
-                f'{escape(str(value or ""))}</text>'
-            )
-
-        return "".join((
-            f'<rect x="{x}" y="18" width="{self.STICKER_WIDTH}" '
-            f'height="{self.LABEL_HEIGHT_DOTS - 18}" rx="4" '
+        order_label, order_value = self._order_row(payload)
+        order_context = (
+            f'OT CIERRE: {payload["ot_cierre"]}'
+            if payload.get("ot_cierre")
+            else f"{order_label}: {order_value}"
+        )
+        operational_datetime = self._display_operational_datetime(
+            payload, printed_at
+        )
+        text = lambda y, value, size=15, weight=600, anchor="start", x_pos=None: (
+            f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '
+            f'font-family="Arial, sans-serif" font-size="{size}" '
+            f'font-weight="{weight}" text-anchor="{anchor}">'
+            f'{escape(str(value or ""))}</text>'
+        )
+        parts = [
+            f'<rect x="{x + 1}" y="2" width="{self.STICKER_WIDTH - 3}" '
+            f'height="396" rx="4" '
             'fill="white" stroke="#111" stroke-width="3"/>',
-            text(43, values["title"], 20, 900),
-            text(67, f'MANGA: {_safe(payload.get("codigo_manga"), 32)}', 15, 700),
-            text(90, _safe(payload.get("pieza_color"), 46), 13, 600),
-            text(119, values["net_label"], 18, 800),
-            text(191, values["net"], 58, 900, "middle", x + 200),
-            f'<line x1="{x + 8}" y1="210" x2="{x + 392}" y2="210" '
+            text(28, f'MANGA: {_safe(payload.get("codigo_manga"), 32)}', 18, 800),
+            text(50, operational_datetime, 12, 600),
+            text(70, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
+            text(98, values["net_label"], 18, 800),
+            text(174, values["net"], 58, 900, "middle", x + 200),
+        ]
+        if values["fabricated_theoretical"] is not None:
+            parts.append(text(
+                198,
+                f'PESO FABRICADO TEÓRICO (kg): {values["fabricated_theoretical"]}',
+                13,
+                700,
+            ))
+        parts.extend([
+            f'<line x1="{x + 8}" y1="207" x2="{x + 392}" y2="207" '
             'stroke="#111" stroke-width="2"/>',
-            text(232, values["contribution_label"], 13, 700),
-            text(267, f'+{values["contribution"]}', 30, 900, "end", x + 392),
-            text(294, f'{values["quantity_label"]}: {values["quantity"]} UN', 17, 800),
-            text(317, f'PESO ESTÁNDAR SEGÚN UNIDADES (kg): {values["standard"]}', 12, 600),
-            text(340, f'RESP.: {_safe(payload.get("maquinista"), 34)}', 12, 600),
-            text(363, f'IMP.: {printed_at}', 12, 600),
-            text(386, 'SIN QR · CONSERVAR PREETIQUETA', 12, 800),
-        ))
+            text(232, values["title"], 20, 900),
+            text(254, values["contribution_label"], 13, 700),
+            text(270, f'+{values["contribution"]}', 24, 900, "end", x + 392),
+            text(289, _safe(payload.get("pieza_color"), 46), 13, 600),
+        ])
+        if values["shows_units"]:
+            parts.extend((
+                text(313, f'{values["quantity_label"]}: {values["quantity"]} UN', 17, 800),
+                text(337, order_context, 12, 600),
+            ))
+        else:
+            parts.extend((
+                text(313, 'AVANCE EN KG · SIN CONTEO', 18, 800),
+                text(337, order_context, 12, 600),
+            ))
+        parts.append(text(386, 'SIN QR · CONSERVAR PREETIQUETA', 12, 800))
+        return "".join(parts)
 
     def generate_preview_svg(self, job, *, printed_at=None):
         """Render web-preview from the same coordinates as the TSPL."""
@@ -460,216 +625,15 @@ class ScmPrelabelService:
         capture_id=None,
         manga_id=None,
     ):
-        # La estación es de instancia única, y este lock evita dos requests
-        # concurrentes que atraviesen el ledger antes de que alguna lo escriba.
-        with self._physical_print_lock:
-            return self._print_job_locked(
-                print_job_id,
-                operation_id=operation_id,
-                capture_id=capture_id,
-                manga_id=manga_id,
-            )
-
-    @staticmethod
-    def _ack_results(latest):
-        return [
-            {
-                "label_id": attempt.label_id,
-                "estado": ScmPrelabelService._visible_state(attempt.result),
-                "printer_name": attempt.printer_name,
-                "error": attempt.error_detail,
-            }
-            for attempt in sorted(latest.values(), key=lambda item: item.id)
-        ]
-
-    def _acknowledge_local_result(
-        self,
-        *,
-        client,
-        print_job_id,
-        latest,
-        job,
-        tspl=None,
-        printer_emission=None,
-        recovered=False,
-    ):
-        state = self._aggregate_local_state(latest)
-        try:
-            acknowledgement = client.acknowledge_scm_print_job(
-                self._station_id(),
-                print_job_id,
-                {"results": self._ack_results(latest)},
-            )
-            ack_pending = False
-            ack_error = None
-        except CentralApiError as exc:
-            # La emisión ya tiene evidencia durable. Un fallo de acuse no
-            # modifica ese hecho y jamás debe provocar otra impresión.
-            acknowledgement = None
-            ack_pending = True
-            ack_error = {"code": exc.state, "message": str(exc)}
-
-        enriched_job = self._with_local_evidence(
-            job,
-            latest=latest,
-            ack_pending=ack_pending,
-        )
-        blocked = state in {"EMISION_INCIERTA", "PARCIAL"}
-        result = {
-            "print_job": enriched_job,
-            "tspl": tspl,
-            "result": state,
-            "central_ack": acknowledgement,
-            "ack_pending": ack_pending,
-            "ack_recovered": bool(recovered and not ack_pending),
-            "auto_reprint_blocked": blocked,
-        }
-        if state == "IMPRESA" and recovered:
-            result["already_printed"] = True
-        if ack_error:
-            result["central_ack_error"] = ack_error
-        if printer_emission is not None:
-            result["printer_emission"] = printer_emission.to_dict()
-        return result
-
-    @staticmethod
-    def _local_job_snapshot(print_job_id, latest):
-        return {
-            "print_job_id": print_job_id,
-            "labels": [
-                {
-                    "public_id": attempt.label_id,
-                    "local_print_state": (
-                        ScmPrelabelService._visible_state(attempt.result)
-                    ),
-                }
-                for attempt in sorted(
-                    latest.values(), key=lambda item: item.id
-                )
-            ],
-        }
-
-    def _resume_from_ledger(self, client, print_job_id):
-        latest = self._latest_attempts(print_job_id)
-        if not latest:
-            return None
-
-        incomplete = [
-            attempt
-            for attempt in latest.values()
-            if attempt.result == "EMISION_EN_PROGRESO"
-        ]
-        if incomplete:
-            completed = datetime.now(timezone.utc)
-            for attempt in incomplete:
-                attempt.result = "EMISION_INCIERTA"
-                attempt.completed_at_utc = completed
-                attempt.error_detail = (
-                    "La estación se interrumpió entre el registro previo y "
-                    "la confirmación del spooler; no reimprimir automáticamente"
-                )
-            try:
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
-                raise
-            latest = self._latest_attempts(print_job_id)
-
-        state = self._aggregate_local_state(latest)
-        if state == "FALLIDA_SIN_EMISION":
-            return None
-
-        # IMPRESA, PARCIAL o EMISION_INCIERTA son terminales para el envío
-        # físico. El endpoint se convierte exclusivamente en retry del acuse.
-        return self._acknowledge_local_result(
-            client=client,
-            print_job_id=print_job_id,
-            latest=latest,
-            job=self._local_job_snapshot(print_job_id, latest),
-            recovered=True,
-        )
-
-    @staticmethod
-    def _emit(printer, tspl):
-        detailed_print = getattr(printer, "print_tspl_result", None)
-        if callable(detailed_print):
-            try:
-                result = detailed_print(tspl)
-            except Exception as exc:
-                return PrinterEmissionResult(
-                    status=PrinterEmissionResult.UNCERTAIN,
-                    expected_bytes=len(tspl.encode("utf-8")),
-                    error=str(exc)[:500],
-                )
-            if isinstance(result, PrinterEmissionResult):
-                return result
-            status = getattr(result, "status", None)
-            if status in {
-                PrinterEmissionResult.ACCEPTED,
-                PrinterEmissionResult.NOT_EMITTED,
-                PrinterEmissionResult.UNCERTAIN,
-            }:
-                return PrinterEmissionResult(
-                    status=status,
-                    expected_bytes=getattr(
-                        result, "expected_bytes", len(tspl.encode("utf-8"))
-                    ),
-                    bytes_written=getattr(result, "bytes_written", None),
-                    document_started=bool(
-                        getattr(result, "document_started", False)
-                    ),
-                    write_attempted=bool(
-                        getattr(result, "write_attempted", False)
-                    ),
-                    simulated=bool(getattr(result, "simulated", False)),
-                    job_id=getattr(result, "job_id", None),
-                    error=getattr(result, "error", None),
-                )
-            return PrinterEmissionResult(
-                status=PrinterEmissionResult.UNCERTAIN,
-                expected_bytes=len(tspl.encode("utf-8")),
-                error="La impresora devolvió un resultado no reconocido",
-            )
-
-        # Adaptador para impresoras de prueba/legacy. El PrinterService real
-        # siempre expone el resultado detallado.
-        try:
-            success = bool(printer.print_tspl(tspl))
-        except Exception as exc:
-            return PrinterEmissionResult(
-                status=PrinterEmissionResult.UNCERTAIN,
-                expected_bytes=len(tspl.encode("utf-8")),
-                error=str(exc)[:500],
-            )
-        return PrinterEmissionResult(
-            status=(
-                PrinterEmissionResult.ACCEPTED
-                if success else PrinterEmissionResult.NOT_EMITTED
-            ),
-            expected_bytes=len(tspl.encode("utf-8")),
-            error=None if success else "La impresora rechazó el trabajo",
-        )
-
-    def _print_job_locked(
-        self,
-        print_job_id,
-        *,
-        operation_id=None,
-        capture_id=None,
-        manga_id=None,
-    ):
         client = self.client or self._central_client()
-        resumed = self._resume_from_ledger(client, print_job_id)
-        if resumed is not None:
-            return resumed
-
-        # Preview es read-only. La reserva ocurre inmediatamente antes del
-        # pre-registro durable y de la interacción irreversible con el spooler.
+        # Preview is deliberately read-only. The reservation happens here,
+        # immediately before the irreversible interaction with the printer.
         job = client.claim_scm_print_job(
             self._station_id(), print_job_id
         )
         attempted_at = datetime.now(timezone.utc)
         tspl = self.generate_tspl(job, printed_at=attempted_at)
+        preview_svg = self.generate_preview_svg(job, printed_at=attempted_at)
         rendered_payload_hash = hashlib.sha256(
             tspl.encode("utf-8")
         ).hexdigest()
@@ -677,8 +641,16 @@ class ScmPrelabelService:
             "SCM_PRELABEL_PRINTER"
         ) or get_printer_service()
         printer_name = getattr(printer, "printer_name", None)
+        try:
+            success = bool(printer.print_tspl(tspl))
+            state = "IMPRESA" if success else "FALLIDA_SIN_EMISION"
+            error = None if success else "La impresora rechazo el trabajo"
+        except Exception as exc:
+            state = "EMISION_INCIERTA"
+            error = str(exc)[:500]
 
-        attempts = []
+        completed = datetime.now(timezone.utc)
+        results = []
         for label in job["labels"]:
             payload = label["payload"]
             qr_payload = payload.get("qr") or {}
@@ -700,55 +672,31 @@ class ScmPrelabelService:
                 payload_hash=label["payload_hash"],
                 rendered_payload_hash=rendered_payload_hash,
                 attempted_at_utc=attempted_at,
-                completed_at_utc=None,
+                completed_at_utc=completed,
                 printer_name=printer_name,
-                result="EMISION_EN_PROGRESO",
-                error_detail=None,
+                result=state,
+                error_detail=error,
             )
             db.session.add(attempt)
-            attempts.append(attempt)
-        try:
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-            raise
-
-        emission = self._emit(printer, tspl)
-        state_by_emission = {
-            PrinterEmissionResult.ACCEPTED: "IMPRESA",
-            PrinterEmissionResult.NOT_EMITTED: "FALLIDA_SIN_EMISION",
-            PrinterEmissionResult.UNCERTAIN: "EMISION_INCIERTA",
+            results.append({
+                "label_id": label["public_id"],
+                "estado": state,
+                "printer_name": printer_name,
+                "error": error,
+            })
+        db.session.commit()
+        acknowledgement = client.acknowledge_scm_print_job(
+            self._station_id(),
+            job["print_job_id"],
+            {"results": results},
+        )
+        return {
+            "print_job": job,
+            "tspl": tspl,
+            "result": state,
+            "central_ack": acknowledgement,
+            "preview_svg": preview_svg,
         }
-        state = state_by_emission.get(
-            emission.status, "EMISION_INCIERTA"
-        )
-        error = emission.error
-        if state == "EMISION_INCIERTA" and not error:
-            error = "El spooler no confirmó la emisión completa"
-        completed = datetime.now(timezone.utc)
-        actual_printer_name = getattr(printer, "printer_name", None)
-        for attempt in attempts:
-            attempt.completed_at_utc = completed
-            attempt.printer_name = actual_printer_name
-            attempt.result = state
-            attempt.error_detail = error
-        try:
-            db.session.commit()
-        except Exception:
-            # EMISION_EN_PROGRESO ya es durable. Si este commit falla, un
-            # próximo intento lo convertirá en incierto y no enviará otra copia.
-            db.session.rollback()
-            raise
-
-        latest = self._latest_attempts(print_job_id)
-        return self._acknowledge_local_result(
-            client=client,
-            print_job_id=print_job_id,
-            latest=latest,
-            job=job,
-            tspl=tspl,
-            printer_emission=emission,
-        )
 
 
 def get_scm_prelabel_service():

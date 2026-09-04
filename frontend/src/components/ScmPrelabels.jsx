@@ -4,13 +4,7 @@ import {
 import { scmPrelabelsApi } from '../services/api';
 
 const statusLabel = (job) => {
-  if (job?.ack_pending) return 'Impreso · acuse central pendiente';
-  const status = String(
-    job?.local_print_state || job?.status || job?.estado || '',
-  ).toUpperCase();
-  if (['EMISION_INCIERTA', 'EMISION_EN_PROGRESO'].includes(status)) {
-    return 'Emisión por conciliar';
-  }
+  const status = String(job?.status || job?.estado || '').toUpperCase();
   if (['PENDING', 'GENERADO', 'GENERADA'].includes(status)) return 'Pendiente de impresión';
   if (['PARTIAL', 'PARCIAL'].includes(status)) return 'Impresión parcial';
   if (['PRINTED', 'IMPRESA'].includes(status)) return 'Impreso';
@@ -19,30 +13,21 @@ const statusLabel = (job) => {
 };
 
 const jobStatus = (job) => String(job?.status || job?.estado || '').toUpperCase();
-const localJobStatus = (job) => String(job?.local_print_state || '').toUpperCase();
 const isPrintedJob = (job) => Boolean(job?.uiPrintAccepted)
-  || ['PRINTED', 'PROCESADO', 'IMPRESA'].includes(jobStatus(job))
-  || localJobStatus(job) === 'IMPRESA';
-const labelStatus = (label) => String(
-  label?.local_print_state || label?.estado || label?.status || '',
-).toUpperCase();
+  || ['PRINTED', 'PROCESADO', 'IMPRESA'].includes(jobStatus(job));
+const labelStatus = (label) => String(label?.estado || label?.status || '').toUpperCase();
 const hasUncertainEmission = (job) => (job?.labels || []).some(
-  (label) => ['EMISION_INCIERTA', 'EMISION_EN_PROGRESO'].includes(labelStatus(label)),
-) || ['EMISION_INCIERTA', 'EMISION_EN_PROGRESO'].includes(localJobStatus(job));
+  (label) => labelStatus(label) === 'EMISION_INCIERTA',
+);
 const hasMixedEmission = (job) => {
   const states = new Set((job?.labels || []).map(labelStatus).filter(Boolean));
-  const emitted = [...states].some(
-    (state) => ['IMPRESA', 'EMISION_INCIERTA', 'EMISION_EN_PROGRESO'].includes(state),
-  );
+  const emitted = [...states].some((state) => ['IMPRESA', 'EMISION_INCIERTA'].includes(state));
   const pending = [...states].some(
     (state) => ['GENERADA', 'FALLIDA_SIN_EMISION'].includes(state),
   );
   return emitted && pending;
 };
-const requiresReplacement = (job) => (
-  Boolean(job?.auto_reprint_blocked) || hasUncertainEmission(job) || hasMixedEmission(job)
-);
-const hasAckPending = (job) => Boolean(job?.ack_pending) && isPrintedJob(job);
+const requiresReplacement = (job) => hasUncertainEmission(job) || hasMixedEmission(job);
 const isRetryWithoutEmission = (job) => {
   const labels = job?.labels || [];
   return labels.length > 0 && labels.every(
@@ -54,23 +39,6 @@ const jobMangas = (job) => (job?.labels || [])
   .map((label) => label.manga_codigo || label.payload?.codigo_manga)
   .filter(Boolean)
   .join(', ');
-
-const mergeJobEvidence = (current, incoming) => {
-  if (!incoming) return current;
-  if (!current || current.print_job_id !== incoming.print_job_id) return incoming;
-  const currentLabels = new Map(
-    (current.labels || []).map((item) => [item.public_id, item]),
-  );
-  const labels = (incoming.labels || []).map((item) => ({
-    ...(currentLabels.get(item.public_id) || {}),
-    ...item,
-  }));
-  return {
-    ...current,
-    ...incoming,
-    labels: labels.length ? labels : current.labels,
-  };
-};
 
 const firstPayload = (job) => job?.labels?.[0]?.payload || {};
 
@@ -180,14 +148,10 @@ export default function ScmPrelabels({ initialJobId = '' }) {
     }
     try {
       const { data } = await scmPrelabelsApi[action](normalizedJobId);
-      const requestedJob = data.print_job && action === 'print'
-        ? {
-          ...data.print_job,
-          ack_pending: Boolean(data.ack_pending),
-          uiPrintAccepted: data.result === 'IMPRESA',
-        }
+      const requestedJob = action === 'print' && data.result === 'IMPRESA'
+        ? { ...data.print_job, uiPrintAccepted: true }
         : data.print_job;
-      setJob((current) => mergeJobEvidence(current, requestedJob));
+      setJob(requestedJob);
       if (data.preview_svg) setPreviewSvg(data.preview_svg);
       else if (action === 'preview') setPreviewSvg('');
       if (action === 'preview') {
@@ -195,11 +159,6 @@ export default function ScmPrelabels({ initialJobId = '' }) {
           setMessage({
             type: 'error',
             text: 'No reimprima este trabajo: existe una emisión incierta o parcial. Invalide el sticker afectado y genere una etiqueta de reemplazo desde la OT.',
-          });
-        } else if (hasAckPending(requestedJob)) {
-          setMessage({
-            type: 'info',
-            text: 'La impresión física ya fue aceptada. Solo falta el acuse central; reanudarlo no vuelve a imprimir.',
           });
         } else if (isPrintedJob(requestedJob)) {
           setMessage({
@@ -213,32 +172,12 @@ export default function ScmPrelabels({ initialJobId = '' }) {
           });
         }
       } else {
-        if (data.ack_recovered && data.result === 'IMPRESA') {
-          setMessage({
-            type: 'success',
-            text: 'Se reanudó únicamente el acuse central. El sticker no se volvió a imprimir.',
-          });
-        } else if (data.ack_pending && data.result === 'IMPRESA') {
-          setMessage({
-            type: 'error',
-            text: 'El spooler aceptó el sticker, pero el acuse central sigue pendiente. No reimprima; use «Reanudar acuse central».',
-          });
-        } else if (['EMISION_INCIERTA', 'PARCIAL'].includes(data.result)) {
-          setMessage({
-            type: 'error',
-            text: 'No se puede confirmar cuánto imprimió el spooler. La reimpresión automática está bloqueada; concilie y genere un reemplazo supervisado.',
-          });
-        } else if (data.result === 'FALLIDA_SIN_EMISION') {
-          setMessage({
-            type: 'info',
-            text: 'No se enviaron bytes al spooler. Puede reintentar la impresión.',
-          });
-        } else {
-          setMessage({
-            type: 'success',
-            text: 'Trabajo enviado y acuse técnico registrado. Verifique que salieron todas las hojas.',
-          });
-        }
+        setMessage({
+          type: data.result === 'IMPRESA' ? 'success' : 'error',
+          text: data.result === 'IMPRESA'
+            ? 'Trabajo enviado y acuse técnico registrado. Verifique que salieron todas las hojas.'
+            : `Resultado técnico: ${data.result}. Revise la recuperación indicada antes de reintentar.`,
+        });
         await loadPending();
       }
     } catch (error) {
@@ -506,17 +445,13 @@ export default function ScmPrelabels({ initialJobId = '' }) {
                   <button
                     className="btn btn-primary"
                     type="button"
-                    disabled={
-                      loading
-                      || (isPrintedJob(job) && !hasAckPending(job))
-                      || requiresReplacement(job)
-                    }
+                    disabled={loading || isPrintedJob(job) || requiresReplacement(job)}
                     onClick={() => requestJob('print', job.print_job_id)}
                   >
                     {activeAction === 'print'
                       ? 'Imprimiendo…'
-                      : (hasAckPending(job)
-                        ? 'Reanudar acuse central'
+                      : (job.uiPrintAccepted
+                        ? 'Envío registrado'
                         : (isPrintedJob(job)
                           ? 'Sticker ya impreso'
                           : (requiresReplacement(job)

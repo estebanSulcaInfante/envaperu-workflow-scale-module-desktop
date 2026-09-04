@@ -11,8 +11,13 @@ import CerrarOps from './components/CerrarOps';
 import CentralStatusBadge from './components/CentralStatusBadge';
 import ScmPrelabels from './components/ScmPrelabels';
 import ScmWeighing from './components/ScmWeighing';
+import ScmInventoryOpening from './components/ScmInventoryOpening';
+import ScmPreparedMaterialWeighing from './components/ScmPreparedMaterialWeighing';
+import ScmModuleContext from './components/ScmModuleContext';
+import ScmProductionHome from './components/ScmProductionHome';
+import LegacyModuleHome from './components/LegacyModuleHome';
 import { calculateWeightAdjustment } from './utils/weightAdjustment';
-import { stationNavigationFromSearch } from './utils/scmNavigation';
+import { stationModuleFromTab, stationNavigationFromSearch } from './utils/scmNavigation';
 
 function App() {
   const [initialNavigation] = useState(() => stationNavigationFromSearch(
@@ -70,6 +75,7 @@ function App() {
     peso,
     formData.descuento_porcentaje,
   );
+  const activeModule = stationModuleFromTab(activeTab);
 
   // Load status and pesajes on mount
   useEffect(() => {
@@ -92,7 +98,7 @@ function App() {
 
   useEffect(() => {
     if (portfolioDemoMode && !activeTab.startsWith('scm-')) {
-      setActiveTab('scm-weighing');
+      setActiveTab('scm-production');
     }
   }, [activeTab, portfolioDemoMode]);
 
@@ -516,34 +522,11 @@ function App() {
           <span className="tab-group-label tab-group-label-legacy">Legacy temporal</span>
           <div className="tab-group-actions">
             <button
-              className={`tab-btn ${activeTab === 'crear-ot' ? 'active' : ''}`}
-              onClick={() => setActiveTab('crear-ot')}
+              className={`tab-btn ${activeModule === 'legacy' ? 'active' : ''}`}
+              aria-current={activeModule === 'legacy' ? 'page' : undefined}
+              onClick={() => setActiveTab('legacy-home')}
             >
-              📋 Crear OT
-            </button>
-            <button 
-              className={`tab-btn ${activeTab === 'pesar' ? 'active' : ''}`}
-              onClick={() => setActiveTab('pesar')}
-            >
-              2. Pesar OPs
-            </button>
-            <button 
-              className={`tab-btn ${activeTab === 'avance' ? 'active' : ''}`}
-              onClick={() => setActiveTab('avance')}
-            >
-              3. 📈 Avance
-            </button>
-            <button 
-              className={`tab-btn ${activeTab === 'gestion' ? 'active' : ''}`}
-              onClick={() => setActiveTab('gestion')}
-            >
-              📦 Gestión
-            </button>
-            <button 
-              className={`tab-btn ${activeTab === 'cerrar-ops' ? 'active' : ''}`}
-              onClick={() => setActiveTab('cerrar-ops')}
-            >
-              🔒 Cerrar OPs
+              Sistema anterior
             </button>
           </div>
         </div>
@@ -552,20 +535,35 @@ function App() {
           <span className="tab-group-label tab-group-label-scm">Nuevo · SCM</span>
           <div className="tab-group-actions">
             <button
-              className={`tab-btn ${activeTab === 'scm-prelabels' ? 'active' : ''}`}
-              onClick={() => setActiveTab('scm-prelabels')}
+              className={`tab-btn ${activeModule === 'production' ? 'active' : ''}`}
+              aria-current={activeModule === 'production' ? 'page' : undefined}
+              onClick={() => setActiveTab('scm-production')}
             >
-              Etiquetas
+              Producción
             </button>
             <button
-              className={`tab-btn ${activeTab === 'scm-weighing' ? 'active' : ''}`}
-              onClick={() => setActiveTab('scm-weighing')}
+              className={`tab-btn ${activeModule === 'preparation' ? 'active' : ''}`}
+              aria-current={activeModule === 'preparation' ? 'page' : undefined}
+              onClick={() => setActiveTab('scm-prepared-material')}
             >
-              Pesaje SCM
+              Preparación
+            </button>
+            <button
+              className={`tab-btn ${activeModule === 'inventory' ? 'active' : ''}`}
+              aria-current={activeModule === 'inventory' ? 'page' : undefined}
+              onClick={() => setActiveTab('scm-inventory-opening')}
+            >
+              Inventario
             </button>
           </div>
         </div>
       </nav>
+
+      {activeTab === 'legacy-home' && (
+        <main className="main-content avance-full">
+          <LegacyModuleHome onNavigate={setActiveTab} />
+        </main>
+      )}
 
       {/* ========== TAB 1: CREAR OT ========== */}
       {activeTab === 'crear-ot' && (
@@ -687,12 +685,14 @@ function App() {
 
       {activeTab === 'scm-prelabels' && (
         <main className="main-content avance-full">
+          <ScmModuleContext module="production" view="Etiquetas" onNavigate={setActiveTab} />
           <ScmPrelabels initialJobId={initialNavigation.printJobId} />
         </main>
       )}
 
       {activeTab === 'scm-weighing' && (
         <main className="main-content avance-full">
+          <ScmModuleContext module="production" view="Pesaje de mangas" onNavigate={setActiveTab} />
           <ScmWeighing
             peso={peso}
             listening={listening}
@@ -701,6 +701,36 @@ function App() {
             simulationEnabled={scaleSimulationEnabled}
             onSimulateWeight={handleSimulateWeight}
             portfolioDemoMode={portfolioDemoMode}
+          />
+        </main>
+      )}
+
+      {activeTab === 'scm-production' && (
+        <main className="main-content avance-full">
+          <ScmProductionHome onNavigate={setActiveTab} />
+        </main>
+      )}
+
+      {activeTab === 'scm-inventory-opening' && (
+        <main className="main-content avance-full">
+          <ScmModuleContext module="inventory" view="Apertura física" onNavigate={setActiveTab} />
+          <ScmInventoryOpening
+            peso={peso}
+            listening={listening}
+            simulationEnabled={scaleSimulationEnabled}
+            onSimulateWeight={handleSimulateWeight}
+          />
+        </main>
+      )}
+
+      {activeTab === 'scm-prepared-material' && (
+        <main className="main-content avance-full">
+          <ScmModuleContext module="preparation" view="Pesaje OPM" onNavigate={setActiveTab} />
+          <ScmPreparedMaterialWeighing
+            peso={peso}
+            listening={listening}
+            simulationEnabled={scaleSimulationEnabled}
+            onSimulateWeight={handleSimulateWeight}
           />
         </main>
       )}

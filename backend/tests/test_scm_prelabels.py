@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
+import re
 from uuid import uuid4
 
 import pytest
@@ -9,8 +10,6 @@ from qrcode.constants import ERROR_CORRECT_L
 
 from app import create_app, db
 from app.models.scm_label_print_attempt import ScmLabelPrintAttempt
-from app.services.central_api_client import CentralApiError
-from app.services.printer_service import PrinterEmissionResult
 from app.services.scm_prelabel_service import ScmPrelabelService
 
 
@@ -22,10 +21,15 @@ def _label(code):
         "op_ot": "OP0084 - OT-000001",
         "fecha_ot": "2026-07-28",
         "maquinista": "Juan Perez",
+        "operador": "Juan Perez",
+        "maquina": "HT-360 A",
+        "turno": "DIA",
+        "pieza": "Asa fucsia",
         "pieza_color": "Asa fucsia (PC-000001)",
         "color": "FUCSIA SOLIDO",
         "tipo_manga": "Manga estandar",
         "cantidad_planificada_un": "100",
+        "kg_estimados": "7.440",
         "qr": {
             "v": 1,
             "type": "SCM_MANGA_LABEL",
@@ -52,7 +56,11 @@ def _canonical_label(code):
 def _color_work_label(code):
     label = _canonical_label(code)
     work_id = str(uuid4())
-    label["payload"]["template"] = {"version": "PREPESAJE_TSPL_3"}
+    label["payload"]["template"] = {
+        "version": "PREPESAJE_TSPL_5",
+        "qr_contract": "LABEL_REF_V1",
+    }
+    label["payload"]["op"] = "OP0297"
     label["payload"]["trabajo_color"] = {
         "id": work_id,
         "codigo": "OT-000001-TC01",
@@ -75,10 +83,12 @@ def _post_weighing_label(code):
     label["payload"]["document_type"] = "POSTPESAJE"
     label["payload"]["manga_id"] = str(uuid4())
     label["payload"]["cantidad_confirmada_un"] = "100"
+    label["payload"]["fuente_cantidad"] = "PLAN_CONFIRMADO_POR_PESAJE"
     label["payload"]["kg_fisico"] = "8.950"
     label["payload"]["kg_produccion_ot"] = "8.750"
     label["payload"]["peso_neto_real_kg"] = "8.950"
     label["payload"]["peso_estandar_segun_unidades_kg"] = "8.750"
+    label["payload"]["peso_fabricado_teorico_kg"] = "8.750"
     label["payload"]["aporte_desde_control_anterior_kg"] = "4.150"
     label["payload"]["maquinista"] = "Cristóbal Lázaro"
     return label
@@ -93,6 +103,8 @@ def _control_weight_label(code):
         "aporte_desde_control_anterior_kg": "4.150",
     })
     label["payload"].pop("cantidad_confirmada_un", None)
+    label["payload"].pop("peso_fabricado_teorico_kg", None)
+    label["payload"].pop("kg_produccion_ot", None)
     return label
 
 
@@ -100,19 +112,13 @@ def _post_weighing_assembly_label(code):
     label = _post_weighing_label(code)
     label["payload"].pop("of_ot", None)
     label["payload"]["oa_ot"] = "OA-000321 - OT-000777"
-    label["payload"]["pieza_color"] = (
-        "BASE ORG. #5 ARMADA - ASAS PLOMO"
-    )
+    label["payload"]["pieza_color"] = "BASE ORG. #5 ARMADA - ASAS PLOMO"
+    label["payload"]["fuente_cantidad"] = "RESPONSABLE_ARMADO"
     return label
 
 
 def _qr_size_dots(payload):
-    qr_text = json.dumps(
-        payload["qr"],
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    qr_text = ScmPrelabelService._qr_text(payload)
     qr = qrcode.QRCode(
         error_correction=ERROR_CORRECT_L,
         box_size=4,
@@ -137,7 +143,7 @@ def test_una_identidad_ocupa_ambas_columnas_como_copias_gemelas():
     assert "MAQ.ORIG.: Juan Perez" in tspl
     assert "QRCODE 144" in tspl
     assert "QRCODE 584" in tspl
-    assert ",L,4,A,0,M2," in tspl
+    assert ",L,4,A,0," in tspl
     assert "TEXT 469" in tspl
     assert tspl.count("PRINT 1,1") == 1
 
@@ -157,42 +163,99 @@ def test_plantilla_v2_renderiza_of_ot_y_conserva_qr_v1():
     assert "MAQ.ORIG.: Juan Perez" in svg
 
 
-def test_qr_json_usa_escape_de_comillas_nativo_tspl2():
-    label = _canonical_label("OF000011-OT002-M030")
-    label["payload"]["qr"]["verificacion"] = "Cristóbal"
-    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
-    qr_text = json.dumps(
+def test_preetiqueta_generada_antes_del_contrato_compacto_conserva_qr_largo():
+    label = _canonical_label("OF000900-OT001-M001")
+
+    qr_text = ScmPrelabelService._qr_text(label["payload"])
+
+    assert qr_text == json.dumps(
         label["payload"]["qr"],
         ensure_ascii=True,
         sort_keys=True,
         separators=(",", ":"),
     )
-    qr_commands = [
-        line for line in tspl.splitlines() if line.startswith("QRCODE ")
-    ]
-
-    assert len(qr_commands) == 2
-    assert all(
-        command.count(r'\["]') == qr_text.count('"')
-        for command in qr_commands
-    )
-    assert all(r'\"' not in command for command in qr_commands)
-    printer_qr_text = (
-        qr_commands[0].split(',M2,"', 1)[1][:-1]
-        .replace(r'\["]', '"')
-    )
-    assert json.loads(printer_qr_text) == label["payload"]["qr"]
 
 
-def test_trabajo_color_conserva_rotulo_simple_y_contexto_en_qr():
+def test_trabajo_color_conserva_contexto_autoritativo_fuera_del_qr():
     label = _color_work_label("OF000900-OT001-M001")
+    authoritative_qr = deepcopy(label["payload"]["qr"])
     tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
     svg = ScmPrelabelService().generate_preview_svg({"labels": [label]})
+    compact_qr = json.dumps(
+        {"v": 1, "label_id": label["payload"]["qr"]["label_id"]},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
-    assert "OF/OT: OF-000900 - OT-000001" in tspl
+    assert label["payload"]["of_ot"] == "OF-000900 - OT-000001"
+    assert "OF/OT:" not in tspl
     assert "TC01" not in tspl
-    assert label["payload"]["trabajo_color"]["id"] in tspl
-    assert "OF/OT: OF-000900 - OT-000001" in svg
+    assert ScmPrelabelService._qr_text(label["payload"]) == compact_qr
+    assert label["payload"]["qr"]["manga_id"] not in tspl
+    assert label["payload"]["trabajo_color"]["id"] not in tspl
+    assert label["payload"]["qr"]["type"] not in tspl
+    assert label["payload"]["qr"] == authoritative_qr
+    assert "OF/OT:" not in svg
+
+
+def test_qr_compacto_reduce_version_y_reserva_zona_silenciosa():
+    label = _color_work_label("OF000900-OT001-M001")
+    service = ScmPrelabelService()
+
+    qr = service._qr_code(label["payload"])
+    tspl = service.generate_tspl({"labels": [label]})
+
+    assert qr.version == 4
+    assert qr.modules_count == 33
+    assert service.QR_GAP_Y == 4 * service.QR_MODULE_DOTS
+    assert "QRCODE 158,240,L,4,A,0," in tspl
+
+
+def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
+    label = _color_work_label("OF000017-OT007-M003")
+    service = ScmPrelabelService()
+
+    tspl = service.generate_tspl(
+        {"labels": [label]},
+        printed_at=datetime(2026, 8, 31, 19, 50, tzinfo=timezone.utc),
+    )
+    svg = service.generate_preview_svg(
+        {"labels": [label]},
+        printed_at=datetime(2026, 8, 31, 19, 50, tzinfo=timezone.utc),
+    )
+
+    assert 'TEXT 31,10,"0",0,16,16,"MANGA:"' in tspl
+    assert 'TEXT 99,4,"0",0,24,24,"OF000017-OT007-M003"' in tspl
+    assert 'PZA: Asa fucsia' in tspl
+    assert 'COLOR: FUCSIA SOLIDO' in tspl
+    assert 'BAR 31,74,384,2' in tspl
+    assert 'OP: OP0297' in tspl
+    assert 'MAQUINA: HT-360 A' in tspl
+    assert 'TIPO MANGA: Manga estandar' in tspl
+    assert tspl.index('OP: OP0297') < tspl.index('MAQUINA: HT-360 A')
+    assert tspl.index('MAQUINA: HT-360 A') < tspl.index(
+        'TIPO MANGA: Manga estandar'
+    )
+    assert 'TURNO: DIA' in tspl
+    assert 'F.OT ORIG.: 2026-07-28' in tspl
+    assert 'OPE: Juan Perez' in tspl
+    assert 'IMP: 31/08/2026 14:50' in tspl
+    assert 'KG TEORICOS: 7.440 kg' in tspl
+    assert "OF/OT:" not in tspl
+    assert "CANT.:" not in tspl
+    assert 'font-size="24"' in svg
+    assert svg.count('font-size="16"') == 22
+
+
+def test_preetiqueta_v5_omite_fila_op_en_orden_excepcional():
+    label = _color_work_label("OF000017-OT007-M003")
+    label["payload"].pop("op")
+
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "OP:" not in tspl
+    assert "PZA: Asa fucsia" in tspl
 
 
 def test_armado_renderiza_oa_ot_sin_perder_la_identidad():
@@ -257,9 +320,12 @@ def test_postpesaje_no_crea_segundo_qr_y_declara_utf8_para_nombre_acentuado():
     assert "QRCODE" not in tspl
     assert "data:image/png;base64," not in svg
     assert "CODEPAGE UTF-8" in tspl
-    assert "RESP.: Cristóbal Lázaro" in tspl
-    assert "RESP.: Cristóbal Lázaro" in svg
+    assert "MAQUINISTA: Cristóbal Lázaro" in tspl
+    assert "MAQUINISTA: Cristóbal Lázaro" in svg
     assert "Cristóbal Lázaro".encode("utf-8") in tspl.encode("utf-8")
+    assert "CONTEO TEORICO: 100 UN" in tspl
+    assert "CONTEO TEORICO: 100 UN" in svg
+    assert "CONTEO FINAL" not in tspl
 
 
 def test_postpesaje_armado_declara_peso_neto_final_sin_siglas_ambiguas():
@@ -276,15 +342,42 @@ def test_postpesaje_armado_declara_peso_neto_final_sin_siglas_ambiguas():
     assert "KG OT:" not in svg
     assert "KG FIS.:" not in tspl
     assert "KG FIS.:" not in svg
+    assert "CONTEO CONFIRMADO: 100 UN" in tspl
+    assert "CONTEO CONFIRMADO: 100 UN" in svg
 
 
-def test_postpesaje_fabricacion_distingue_neto_aporte_y_estandar():
+def test_postpesaje_v5_omite_peso_fabricado_si_no_hay_atribucion_actual():
+    label = _post_weighing_assembly_label("OA000321-OT777-M001")
+    label["payload"]["template"] = {"version": "POSTPESAJE_TSPL_5"}
+    label["payload"].pop("peso_fabricado_teorico_kg", None)
+
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "PESO FABRICADO TEORICO" not in tspl
+
+
+def test_postpesaje_v5_anterior_sin_fuente_no_afirma_conteo_fisico():
+    label = _post_weighing_label("OF000900-OT001-M001")
+    label["payload"].pop("fuente_cantidad")
+    label["payload"]["template"] = {"version": "POSTPESAJE_TSPL_5"}
+
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "CONTEO TEORICO: 100 UN" in tspl
+    assert "CONTEO FINAL" not in tspl
+
+
+def test_postpesaje_fabricacion_distingue_neto_aporte_y_peso_fabricado():
     label = _post_weighing_label("OF000900-OT001-M001")
     tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
 
     assert "PESO NETO FINAL (kg)" in tspl
     assert "APORTE ULTIMO TRAMO (kg)" in tspl
-    assert "PESO ESTANDAR SEGUN UNIDADES (kg): 8.750" in tspl
+    assert "PESO FABRICADO TEORICO (kg): 8.750" in tspl
+    assert tspl.index("PESO FABRICADO TEORICO") < tspl.index(
+        "APORTE ULTIMO TRAMO"
+    )
+    assert "PESO ESTANDAR SEGUN UNIDADES" not in tspl
     assert "KG FIS.:" not in tspl
     assert "KG OT:" not in tspl
 
@@ -306,7 +399,7 @@ def test_control_sin_qr_prioriza_neto_aporte_y_termina_con_crlf(labels):
     assert "CONTROL · CONTINUA ABIERTA" in tspl
     assert "PESO NETO REAL (kg)" in tspl
     assert "APORTE DESDE CONTROL ANTERIOR (kg)" in tspl
-    assert "PESO ESTANDAR SEGUN UNIDADES (kg): 8.750" in tspl
+    assert "PESO ESTANDAR SEGUN UNIDADES" not in tspl
     assert "QRCODE" not in tspl
     assert "data:image/png;base64," not in svg
     assert tspl.endswith("PRINT 1,1\r\n")
@@ -481,231 +574,6 @@ def test_fallo_sin_emision_se_puede_reintentar_sin_borrar_evidencia(tmp_path):
             assert all(
                 len(attempt.rendered_payload_hash) == 64
                 for attempt in attempts
-            )
-    finally:
-        with app.app_context():
-            db.session.remove()
-            db.engine.dispose()
-
-
-def test_fallo_de_acuse_reanuda_solo_central_sin_reimprimir(tmp_path):
-    label = _label("OP0084-OT001-M001")
-    job = {"print_job_id": str(uuid4()), "labels": [label]}
-
-    class Central:
-        def __init__(self):
-            self.claims = 0
-            self.acks = 0
-
-        def claim_scm_print_job(self, _station_id, _job_id):
-            self.claims += 1
-            return job
-
-        def acknowledge_scm_print_job(
-            self, _station_id, _job_id, payload
-        ):
-            self.acks += 1
-            if self.acks == 1:
-                raise CentralApiError(
-                    "CENTRAL_UNREACHABLE", "acuse no disponible"
-                )
-            return {"results": payload["results"]}
-
-    class Printer:
-        printer_name = "TSC"
-
-        def __init__(self):
-            self.calls = 0
-
-        def print_tspl_result(self, payload):
-            self.calls += 1
-            byte_count = len(payload.encode("utf-8"))
-            return PrinterEmissionResult(
-                status=PrinterEmissionResult.ACCEPTED,
-                expected_bytes=byte_count,
-                bytes_written=byte_count,
-                document_started=True,
-                write_attempted=True,
-            )
-
-    database = tmp_path / "ack-retry.db"
-    app = create_app(
-        config_overrides={
-            "TESTING": True,
-            "SYNC_ENABLED": False,
-            "MONITORING_ENABLED": False,
-            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
-            "STATION_DATABASE_PATH": str(database),
-            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
-            "STATION_ID": "PESAJE-ACK-01",
-        },
-        start_workers=False,
-    )
-    central = Central()
-    printer = Printer()
-    try:
-        with app.app_context():
-            service = ScmPrelabelService(client=central, printer=printer)
-            first = service.print_job(job["print_job_id"])
-            second = service.print_job(job["print_job_id"])
-
-            assert first["result"] == "IMPRESA"
-            assert first["ack_pending"] is True
-            assert first["central_ack_error"]["code"] == "CENTRAL_UNREACHABLE"
-            assert second["result"] == "IMPRESA"
-            assert second["ack_recovered"] is True
-            assert second["already_printed"] is True
-            assert second["ack_pending"] is False
-            assert printer.calls == 1
-            assert central.claims == 1
-            assert central.acks == 2
-            attempts = ScmLabelPrintAttempt.query.all()
-            assert len(attempts) == 1
-            assert attempts[0].result == "IMPRESA"
-    finally:
-        with app.app_context():
-            db.session.remove()
-            db.engine.dispose()
-
-
-def test_emision_en_progreso_tras_caida_se_vuelve_incierta_y_bloquea_retry(
-    tmp_path,
-):
-    print_job_id = str(uuid4())
-    label_id = str(uuid4())
-
-    class Central:
-        def __init__(self):
-            self.acks = []
-
-        def claim_scm_print_job(self, *_args, **_kwargs):
-            raise AssertionError("No debe reclamar un trabajo incierto")
-
-        def acknowledge_scm_print_job(
-            self, _station_id, _job_id, payload
-        ):
-            self.acks.append(payload)
-            return {"results": payload["results"]}
-
-    class Printer:
-        def print_tspl(self, _payload):
-            raise AssertionError("No debe reimprimir un trabajo incierto")
-
-    database = tmp_path / "interrupted-print.db"
-    app = create_app(
-        config_overrides={
-            "TESTING": True,
-            "SYNC_ENABLED": False,
-            "MONITORING_ENABLED": False,
-            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
-            "STATION_DATABASE_PATH": str(database),
-            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
-            "STATION_ID": "PESAJE-CRASH-01",
-        },
-        start_workers=False,
-    )
-    central = Central()
-    try:
-        with app.app_context():
-            db.session.add(ScmLabelPrintAttempt(
-                print_job_id=print_job_id,
-                label_id=label_id,
-                label_type="POSTPESAJE",
-                payload_hash="a" * 64,
-                result="EMISION_EN_PROGRESO",
-            ))
-            db.session.commit()
-
-            result = ScmPrelabelService(
-                client=central,
-                printer=Printer(),
-            ).print_job(print_job_id)
-
-            attempt = ScmLabelPrintAttempt.query.one()
-            assert attempt.result == "EMISION_INCIERTA"
-            assert attempt.completed_at_utc is not None
-            assert result["result"] == "EMISION_INCIERTA"
-            assert result["auto_reprint_blocked"] is True
-            assert result["ack_recovered"] is True
-            assert central.acks[0]["results"][0]["estado"] == (
-                "EMISION_INCIERTA"
-            )
-    finally:
-        with app.app_context():
-            db.session.remove()
-            db.engine.dispose()
-
-
-def test_escritura_parcial_nunca_se_clasifica_sin_emision_ni_se_reimprime(
-    tmp_path,
-):
-    label = _label("OP0084-OT001-M001")
-    job = {"print_job_id": str(uuid4()), "labels": [label]}
-
-    class Central:
-        def __init__(self):
-            self.claims = 0
-            self.acks = 0
-
-        def claim_scm_print_job(self, _station_id, _job_id):
-            self.claims += 1
-            return job
-
-        def acknowledge_scm_print_job(self, *_args):
-            self.acks += 1
-            return {"estado": "PARCIAL"}
-
-    class Printer:
-        printer_name = "TSC"
-
-        def __init__(self):
-            self.calls = 0
-
-        def print_tspl_result(self, payload):
-            self.calls += 1
-            expected = len(payload.encode("utf-8"))
-            return PrinterEmissionResult(
-                status=PrinterEmissionResult.UNCERTAIN,
-                expected_bytes=expected,
-                bytes_written=expected - 1,
-                document_started=True,
-                write_attempted=True,
-                error="Escritura RAW incompleta",
-            )
-
-    database = tmp_path / "partial-write.db"
-    app = create_app(
-        config_overrides={
-            "TESTING": True,
-            "SYNC_ENABLED": False,
-            "MONITORING_ENABLED": False,
-            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
-            "STATION_DATABASE_PATH": str(database),
-            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
-            "STATION_ID": "PESAJE-PARTIAL-01",
-        },
-        start_workers=False,
-    )
-    central = Central()
-    printer = Printer()
-    try:
-        with app.app_context():
-            service = ScmPrelabelService(client=central, printer=printer)
-            first = service.print_job(job["print_job_id"])
-            second = service.print_job(job["print_job_id"])
-
-            assert first["result"] == "EMISION_INCIERTA"
-            assert first["auto_reprint_blocked"] is True
-            assert first["printer_emission"]["bytes_written"] == (
-                first["printer_emission"]["expected_bytes"] - 1
-            )
-            assert second["result"] == "EMISION_INCIERTA"
-            assert second["ack_recovered"] is True
-            assert printer.calls == 1
-            assert central.claims == 1
-            assert central.acks == 2
-            assert ScmLabelPrintAttempt.query.one().result == (
-                "EMISION_INCIERTA"
             )
     finally:
         with app.app_context():

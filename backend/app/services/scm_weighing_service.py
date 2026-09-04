@@ -141,6 +141,15 @@ class ScmWeighingService:
             }
         client = self.client or self._central_client()
         result = client.resolve_scm_manga_label(label_id)
+        image_path = result.get("manga", {}).get("imagen_path")
+        if isinstance(image_path, str) and image_path.startswith("/api/"):
+            origin = getattr(client, "origin", None) or current_app.config.get(
+                "CENTRAL_ORIGIN"
+            )
+            if origin:
+                result["manga"]["imagen_url"] = (
+                    f"{str(origin).rstrip('/')}{image_path}"
+                )
         result["scanned_label_id"] = label_id
         return result
 
@@ -191,7 +200,7 @@ class ScmWeighingService:
             print_job_id=print_job_id,
         ).order_by(ScmLabelPrintAttempt.id.desc()).all()
         states = {attempt.result for attempt in attempts}
-        if states.intersection({"EMISION_INCIERTA", "EMISION_EN_PROGRESO"}):
+        if "EMISION_INCIERTA" in states:
             return {
                 "result": "EMISION_INCIERTA",
                 "recovered": True,
@@ -203,12 +212,6 @@ class ScmWeighingService:
                 "recovered": True,
                 "already_printed": True,
             }
-        if "IMPRESA" in states:
-            return {
-                "result": "PARCIAL",
-                "recovered": True,
-                "auto_reprint_blocked": True,
-            }
         return None
 
     def confirm(
@@ -217,6 +220,8 @@ class ScmWeighingService:
         operation_id,
         label_id,
         motivo_desfase=None,
+        cantidad_confirmada_un=None,
+        motivo_cierre_parcial=None,
     ):
         try:
             operation_id = str(uuid.UUID(str(operation_id)))
@@ -266,6 +271,12 @@ class ScmWeighingService:
                 "reading_stable": True,
                 "motivo_desfase": (motivo_desfase or "").strip() or None,
             }
+            if cantidad_confirmada_un is not None:
+                payload["cantidad_confirmada_un"] = cantidad_confirmada_un
+            if motivo_cierre_parcial is not None:
+                payload["motivo_cierre_parcial"] = (
+                    str(motivo_cierre_parcial).strip() or None
+                )
             confirmed = client.confirm_scm_manga_weighing(
                 operation_id, payload
             )
@@ -274,23 +285,10 @@ class ScmWeighingService:
             printer=self.printer,
         )
         print_job_id = confirmed["print_job_id"]
-        local_replay = (
+        print_result = (
             self._terminal_print_replay(operation_id, print_job_id)
             if recovered_operation else None
         )
-        print_result = None
-        if local_replay is not None:
-            # print_job consulta primero el ledger. En estos estados solo
-            # reanuda el acuse central y nunca vuelve a tocar la impresora.
-            print_result = print_service.print_job(
-                print_job_id,
-                operation_id=operation_id,
-                capture_id=operation_id,
-                manga_id=manga_id,
-            )
-            print_result["recovered"] = True
-            if print_result.get("result") == "IMPRESA":
-                print_result["already_printed"] = True
         if recovered_operation and print_result is None:
             job = print_service.fetch(print_job_id)
             if job.get("status") == "PRINTED":
@@ -326,10 +324,8 @@ class ScmWeighingService:
         *,
         operation_id,
         label_id,
-        conteo_acumulado_un,
-        motivo="CAMBIO_TURNO",
     ):
-        """Record an accumulated control and print its immutable receipt."""
+        """Record one kg-only progress control and print its receipt."""
         try:
             operation_id = str(uuid.UUID(str(operation_id)))
             label_id = str(uuid.UUID(str(label_id)))
@@ -338,32 +334,26 @@ class ScmWeighingService:
                 "INVALID_UUID", "El control o la etiqueta no posee UUID valido."
             ) from error
 
-        count = str(conteo_acumulado_un or "").strip()
-        if not count:
-            raise ScmWeighingLocalError(
-                "CONTROL_COUNT_REQUIRED",
-                "Indique el conteo acumulado de unidades para el corte.",
-            )
-        reason = str(motivo or "CAMBIO_TURNO").strip() or "CAMBIO_TURNO"
-
         client = self.client or self._central_client()
         context = client.resolve_scm_manga_label(label_id)
         manga_id = context.get("manga", {}).get("public_id")
         recovered_operation = False
-        if not context.get("can_register_shift_cut"):
+        controlled = None
+        if hasattr(client, "get_scm_operation"):
             controlled = self._recover_completed_response(
                 client,
                 operation_id,
                 response_key="control",
                 expected_manga_id=manga_id,
             )
-            if controlled is None:
-                raise ScmWeighingLocalError(
-                    "MANGA_NOT_READY",
-                    "Central indica que la manga no esta abierta para registrar controles.",
-                    status=409,
-                )
+        if controlled is not None:
             recovered_operation = True
+        elif not context.get("can_register_weight_control"):
+            raise ScmWeighingLocalError(
+                "MANGA_NOT_READY",
+                "Central indica que la manga no esta abierta para registrar controles.",
+                status=409,
+            )
         else:
             snapshot = (
                 self.scale_snapshot()
@@ -375,9 +365,7 @@ class ScmWeighingService:
                     "SCALE_READING_UNSTABLE",
                     "El control requiere una lectura estable de la balanza.",
                 )
-            gross = Decimal(str(snapshot["peso_kg"])).quantize(
-                Decimal("0.001")
-            )
+            gross = Decimal(str(snapshot["peso_kg"])).quantize(Decimal("0.001"))
             payload = {
                 "label_id": label_id,
                 "capture_id": operation_id,
@@ -387,12 +375,12 @@ class ScmWeighingService:
                 "pesada_at": datetime.now(timezone.utc).isoformat(),
                 "pesado_por_id": self._operator_id(),
                 "reading_stable": True,
-                "conteo_acumulado_un": count,
-                "motivo": reason,
+                "control_type": "AVANCE_KG",
             }
             controlled = client.record_scm_manga_weighing_control(
                 operation_id, payload
             )
+            recovered_operation = bool(controlled.get("idempotent_replay"))
 
         print_job_id = controlled.get("print_job_id")
         if not print_job_id:
@@ -405,23 +393,10 @@ class ScmWeighingService:
             client=client,
             printer=self.printer,
         )
-        local_replay = (
+        print_result = (
             self._terminal_print_replay(operation_id, print_job_id)
             if recovered_operation else None
         )
-        print_result = None
-        if local_replay is not None:
-            # The local ledger is authoritative for physical emission.  This
-            # path only resumes Central acknowledgement; it never prints again.
-            print_result = print_service.print_job(
-                print_job_id,
-                operation_id=operation_id,
-                capture_id=operation_id,
-                manga_id=manga_id,
-            )
-            print_result["recovered"] = True
-            if print_result.get("result") == "IMPRESA":
-                print_result["already_printed"] = True
         if recovered_operation and print_result is None:
             job = print_service.fetch(print_job_id)
             if job.get("status") == "PRINTED":

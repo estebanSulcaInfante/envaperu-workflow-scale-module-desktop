@@ -36,6 +36,8 @@ def confirm_scm_weighing():
             operation_id=operation_id,
             label_id=data.get("label_id"),
             motivo_desfase=data.get("motivo_desfase"),
+            cantidad_confirmada_un=data.get("cantidad_confirmada_un"),
+            motivo_cierre_parcial=data.get("motivo_cierre_parcial"),
         ))
     except (ScmWeighingLocalError, CentralApiError) as exc:
         return _error(exc)
@@ -49,8 +51,6 @@ def record_scm_weighing_control():
         return jsonify(get_scm_weighing_service().record_control(
             operation_id=operation_id,
             label_id=data.get("label_id"),
-            conteo_acumulado_un=data.get("conteo_acumulado_un"),
-            motivo=data.get("motivo") or "CAMBIO_TURNO",
         ))
     except (ScmWeighingLocalError, CentralApiError) as exc:
         return _error(exc)

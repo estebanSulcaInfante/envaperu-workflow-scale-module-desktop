@@ -249,6 +249,40 @@ class CentralApiClient:
             idempotency_key=operation_id,
         )
 
+    def capture_inventory_opening_unit(self, station_id, operation_id, payload):
+        return self._request(
+            "POST",
+            f"/api/integration/v1/stations/{station_id}/inventory-opening-units",
+            operation="scm_inventory_opening_weighing",
+            payload=payload,
+            idempotency_key=operation_id,
+        )
+
+    def resolve_inventory_opening_target(self, station_id, payload):
+        return self._request(
+            "POST",
+            f"/api/integration/v1/stations/{station_id}/inventory-opening-targets/resolve",
+            operation="scm_inventory_opening_target_resolve",
+            payload=payload,
+        )
+
+    def capture_prepared_material_reading(self, station_id, operation_id, payload):
+        return self._request(
+            "POST",
+            f"/api/integration/v1/stations/{station_id}/prepared-material-readings",
+            operation="scm_prepared_material_weighing",
+            payload=payload,
+            idempotency_key=operation_id,
+        )
+
+    def resolve_prepared_material_source_unit(self, station_id, payload):
+        return self._request(
+            "POST",
+            f"/api/integration/v1/stations/{station_id}/prepared-material-source-units/resolve",
+            operation="scm_prepared_material_source_resolve",
+            payload=payload,
+        )
+
     def get_scm_operation(self, operation_id):
         return self._request(
             "GET",

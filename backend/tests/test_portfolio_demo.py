@@ -85,6 +85,28 @@ def test_public_edge_demo_runs_qr_weight_and_label_flow(tmp_path):
         ).get_json()
         assert resolved["portfolio_demo"] is True
         assert resolved["scanned_label_id"] == DEMO_PRELABEL_ID
+        assert resolved["can_register_weight_control"] is True
+
+        control_operation_id = str(uuid.uuid4())
+        control = client.post(
+            "/api/local/v1/scm/weighing/controls",
+            headers={"Idempotency-Key": control_operation_id},
+            json={"label_id": DEMO_PRELABEL_ID},
+        )
+        control_replay = client.post(
+            "/api/local/v1/scm/weighing/controls",
+            headers={"Idempotency-Key": control_operation_id},
+            json={"label_id": DEMO_PRELABEL_ID},
+        )
+        assert control.status_code == 200
+        assert control.get_json() == control_replay.get_json()
+        control_result = control.get_json()
+        assert control_result["continuidad_estado"] == "ACTIVA"
+        assert control_result["control"]["conteo_acumulado_un"] is None
+        assert control_result["manga"]["estado"] == "EN_LLENADO"
+        assert "AVANCE EN KG · SIN CONTEO" in control_result[
+            "print_result"
+        ]["preview_svg"]
 
         operation_id = str(uuid.uuid4())
         first = client.post(

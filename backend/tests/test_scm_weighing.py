@@ -30,6 +30,7 @@ def _post_label(label_id, manga_id):
         "manga_id": manga_id,
         "peso_neto_real_kg": "10.000",
         "peso_estandar_segun_unidades_kg": "10.000",
+        "peso_fabricado_teorico_kg": "10.000",
         "aporte_desde_control_anterior_kg": "4.000",
     }
     return {
@@ -43,9 +44,9 @@ def _control_label(label_id, manga_id):
     label = _post_label(label_id, manga_id)
     label["payload"].update({
         "document_type": "CONTROL_PESO",
-        "cantidad_acumulada_un": "37",
+        "cantidad_acumulada_un": None,
         "peso_neto_real_kg": "3.700",
-        "peso_estandar_segun_unidades_kg": "3.330",
+        "peso_estandar_segun_unidades_kg": None,
         "aporte_desde_control_anterior_kg": "3.700",
     })
     label["payload"].pop("cantidad_confirmada_un", None)
@@ -56,6 +57,14 @@ def test_qr_legacy_no_entra_al_flujo_scm():
     with pytest.raises(ScmWeighingLocalError) as error:
         parse_scm_label_id("1;MOLDE;MAQUINA;OP0084")
     assert error.value.code == "LEGACY_QR_NOT_ACCEPTED"
+
+
+def test_qr_compacto_resuelve_label_id_sin_contexto_duplicado():
+    label_id = str(uuid4())
+
+    assert parse_scm_label_id(
+        f'{{"label_id":"{label_id}","v":1}}'
+    ) == label_id
 
 
 def test_qr_demo_local_resuelve_sin_consultar_central(tmp_path):
@@ -82,6 +91,65 @@ def test_qr_demo_local_resuelve_sin_consultar_central(tmp_path):
         payload = response.get_json()
         assert payload["demo_only"] is True
         assert payload["manga"]["codigo"] == "MNG-LOCAL-DEMO-001"
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_resolve_publica_url_de_imagen_solo_desde_ruta_api_central(tmp_path):
+    label_id = str(uuid4())
+
+    class Central:
+        origin = "https://central.example"
+
+        def resolve_scm_manga_label(self, _label_id):
+            return {
+                "can_weigh": True,
+                "manga": {
+                    "codigo": "OF000001-OT001-M001",
+                    "imagen_path": "/api/piezas-color/PC-000001/imagen",
+                    "color_identidad": {
+                        "id": 7,
+                        "nombre": "TRANSPARENTE",
+                        "base": {"id": 4, "nombre": "TRANSPARENTE"},
+                        "familia": {"id": 3, "nombre": "TRANSPARENTE"},
+                        "hex": "#EAF7F7",
+                    },
+                },
+                "bloqueos_pesaje": {
+                    "completar_final": None,
+                    "registrar_avance_kg": {
+                        "codigo": "MANGA_NO_HABILITADA",
+                        "mensaje": "Control no disponible",
+                        "recuperacion": "Solicite revisión en Central.",
+                        "responsable": "CENTRAL",
+                    },
+                },
+            }
+
+    database = tmp_path / "image-context.db"
+    app = create_app(
+        config_overrides={
+            "TESTING": True,
+            "SYNC_ENABLED": False,
+            "MONITORING_ENABLED": False,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
+            "STATION_DATABASE_PATH": str(database),
+            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
+        },
+        start_workers=False,
+    )
+    try:
+        with app.app_context():
+            resolved = ScmWeighingService(client=Central()).resolve(label_id)
+            assert resolved["manga"]["imagen_url"] == (
+                "https://central.example/api/piezas-color/PC-000001/imagen"
+            )
+            assert resolved["manga"]["color_identidad"]["familia"]["nombre"] == (
+                "TRANSPARENTE"
+            )
+            assert resolved["bloqueos_pesaje"] == Central().resolve_scm_manga_label(label_id)["bloqueos_pesaje"]
     finally:
         with app.app_context():
             db.session.remove()
@@ -130,7 +198,10 @@ def test_route_local_expone_control_de_turno_con_motivo_default(tmp_path):
             calls.append(kwargs)
             return {
                 "operation_id": kwargs["operation_id"],
-                "control": {"conteo_acumulado_un": "37"},
+                "control": {
+                    "tipo": "AVANCE_KG",
+                    "conteo_acumulado_un": None,
+                },
                 "produccion_confirmada_un": "0",
                 "inventario_creado": False,
                 "print_job_id": None,
@@ -154,10 +225,7 @@ def test_route_local_expone_control_de_turno_con_motivo_default(tmp_path):
         response = app.test_client().post(
             "/api/local/v1/scm/weighing/controls",
             headers={"Idempotency-Key": operation_id},
-            json={
-                "label_id": label_id,
-                "conteo_acumulado_un": "37",
-            },
+            json={"label_id": label_id},
         )
 
         assert response.status_code == 200
@@ -165,8 +233,6 @@ def test_route_local_expone_control_de_turno_con_motivo_default(tmp_path):
         assert calls == [{
             "operation_id": operation_id,
             "label_id": label_id,
-            "conteo_acumulado_un": "37",
-            "motivo": "CAMBIO_TURNO",
         }]
     finally:
         with app.app_context():
@@ -187,7 +253,7 @@ def test_control_lee_balanza_imprime_sin_qr_y_no_crea_pesaje_local(tmp_path):
             calls.append(("resolve", requested_label_id))
             return {
                 "can_weigh": True,
-                "can_register_shift_cut": True,
+                "can_register_weight_control": True,
                 "manga": {
                     "public_id": label_id,
                     "tara_nominal_kg": "0.100",
@@ -197,8 +263,11 @@ def test_control_lee_balanza_imprime_sin_qr_y_no_crea_pesaje_local(tmp_path):
         def record_scm_manga_weighing_control(self, requested_id, payload):
             calls.append(("control", requested_id, payload))
             return {
-                "control": {"conteo_acumulado_un": "37"},
-                "manga": {"estado": "ABIERTA"},
+                "control": {
+                    "tipo": "AVANCE_KG",
+                    "conteo_acumulado_un": None,
+                },
+                "manga": {"estado": "EN_LLENADO"},
                 "produccion_confirmada_un": "0",
                 "inventario_creado": False,
                 "print_job_id": print_job_id,
@@ -247,8 +316,6 @@ def test_control_lee_balanza_imprime_sin_qr_y_no_crea_pesaje_local(tmp_path):
             ).record_control(
                 operation_id=operation_id,
                 label_id=label_id,
-                conteo_acumulado_un="37",
-                motivo="RELEVO_TURNO",
             )
 
             assert [item[0] for item in calls] == [
@@ -259,14 +326,18 @@ def test_control_lee_balanza_imprime_sin_qr_y_no_crea_pesaje_local(tmp_path):
             assert control_payload["peso_bruto_kg"] == "3.800"
             assert control_payload["tara_kg"] == "0.100"
             assert control_payload["reading_stable"] is True
-            assert control_payload["conteo_acumulado_un"] == "37"
-            assert control_payload["motivo"] == "RELEVO_TURNO"
+            assert control_payload["control_type"] == "AVANCE_KG"
+            assert "conteo_acumulado_un" not in control_payload
+            assert "motivo" not in control_payload
             assert result["produccion_confirmada_un"] == "0"
             assert result["inventario_creado"] is False
             assert result["print_job_id"] == print_job_id
             assert result["print_result"]["result"] == "IMPRESA"
             assert "PESO NETO REAL (kg)" in calls[3][1]
             assert "APORTE DESDE CONTROL ANTERIOR (kg)" in calls[3][1]
+            assert "AVANCE EN KG" in calls[3][1]
+            assert "CONTEO ACUMULADO" not in calls[3][1]
+            assert "PESO ESTANDAR SEGUN UNIDADES" not in calls[3][1]
             assert "QRCODE" not in calls[3][1]
             assert result["qr_preservado"] is True
             assert Pesaje.query.count() == 0
@@ -290,7 +361,7 @@ def test_f2_confirma_central_antes_de_imprimir_y_no_crea_pesaje_local(
             calls.append(("resolve", label_id))
             return {
                 "can_weigh": True,
-                "can_register_shift_cut": False,
+                "can_register_weight_control": False,
                 "manga": {"tara_nominal_kg": "0.100"},
             }
 
@@ -369,8 +440,22 @@ def test_f2_confirma_central_antes_de_imprimir_y_no_crea_pesaje_local(
             assert "cantidad_confirmada_un" not in confirm_payload
             assert "QRCODE" not in calls[3][1]
             assert "PESO NETO FINAL (kg)" in calls[3][1]
-            assert "PESO ESTANDAR SEGUN UNIDADES (kg): 10.000" in calls[3][1]
+            assert "PESO FABRICADO TEORICO (kg): 10.000" in calls[3][1]
             assert Pesaje.query.count() == 0
+
+            service.confirm(
+                operation_id=str(uuid4()),
+                label_id=prelabel_id,
+                cantidad_confirmada_un="37",
+                motivo_cierre_parcial="Cambio de turno",
+            )
+            partial_payload = [
+                item[2] for item in calls if item[0] == "confirm"
+            ][-1]
+            assert partial_payload["cantidad_confirmada_un"] == "37"
+            assert partial_payload["motivo_cierre_parcial"] == (
+                "Cambio de turno"
+            )
     finally:
         with app.app_context():
             db.session.remove()
@@ -421,11 +506,10 @@ def test_control_exige_capacidad_especifica_aunque_pesaje_final_este_habilitado(
                     "peso_kg": 3.8,
                     "stable": True,
                 },
-            ).record_control(
-                operation_id=operation_id,
-                label_id=label_id,
-                conteo_acumulado_un="37",
-            )
+                ).record_control(
+                    operation_id=operation_id,
+                    label_id=label_id,
+                )
         assert error.value.code == "MANGA_NOT_READY"
     finally:
         with app.app_context():
@@ -442,7 +526,8 @@ def test_reintento_control_recupera_resultado_sin_releer_ni_reenviar(tmp_path):
         "control": {
             "id": str(uuid4()),
             "manga_id": manga_id,
-            "conteo_acumulado_un": "20.000",
+            "tipo": "AVANCE_KG",
+            "conteo_acumulado_un": None,
         },
         "produccion_confirmada_un": "0",
         "inventario_creado": False,
@@ -455,7 +540,7 @@ def test_reintento_control_recupera_resultado_sin_releer_ni_reenviar(tmp_path):
             calls.append("resolve")
             return {
                 "can_weigh": False,
-                "can_register_shift_cut": False,
+                "can_register_weight_control": True,
                 "manga": {
                     "public_id": manga_id,
                     "tara_nominal_kg": "0.100",
@@ -493,13 +578,13 @@ def test_reintento_control_recupera_resultado_sin_releer_ni_reenviar(tmp_path):
                 scale_snapshot=lambda: (_ for _ in ()).throw(
                     AssertionError("El replay no debe releer la balanza")
                 ),
-            ).record_control(
-                operation_id=operation_id,
-                label_id=label_id,
-                conteo_acumulado_un="20",
-            )
+                ).record_control(
+                    operation_id=operation_id,
+                    label_id=label_id,
+                )
         assert calls == ["resolve", ("recover", operation_id)]
-        assert result["control"]["conteo_acumulado_un"] == "20.000"
+        assert result["control"]["conteo_acumulado_un"] is None
+        assert result["control"]["tipo"] == "AVANCE_KG"
         assert result["recovered_operation"] is True
     finally:
         with app.app_context():
@@ -606,7 +691,6 @@ def test_reintento_f2_no_reimprime_si_emision_local_fue_incierta(tmp_path):
         "weighing": {"manga_id": manga_id},
         "print_job_id": print_job_id,
     }
-    acknowledgements = []
 
     class Central:
         def resolve_scm_manga_label(self, _label_id):
@@ -624,12 +708,6 @@ def test_reintento_f2_no_reimprime_si_emision_local_fue_incierta(tmp_path):
 
         def get_scm_print_job(self, *_args, **_kwargs):
             raise AssertionError("La evidencia local incierta debe bloquear reimpresión")
-
-        def acknowledge_scm_print_job(
-            self, _station_id, requested_job_id, payload
-        ):
-            acknowledgements.append((requested_job_id, payload))
-            return {"results": payload["results"]}
 
     database = tmp_path / "uncertain-replay.db"
     app = create_app(
@@ -664,99 +742,11 @@ def test_reintento_f2_no_reimprime_si_emision_local_fue_incierta(tmp_path):
                     AssertionError("El replay no debe releer la balanza")
                 ),
             ).confirm(operation_id=operation_id, label_id=label_id)
-        assert result["print_result"]["result"] == "EMISION_INCIERTA"
-        assert result["print_result"]["recovered"] is True
-        assert result["print_result"]["auto_reprint_blocked"] is True
-        assert result["print_result"]["ack_recovered"] is True
-        assert acknowledgements[0][0] == print_job_id
-        assert acknowledgements[0][1]["results"][0]["estado"] == (
-            "EMISION_INCIERTA"
-        )
-    finally:
-        with app.app_context():
-            db.session.remove()
-            db.engine.dispose()
-
-
-def test_reintento_f2_con_impresion_local_reanuda_solo_acuse(tmp_path):
-    operation_id = str(uuid4())
-    label_id = str(uuid4())
-    post_label_id = str(uuid4())
-    manga_id = str(uuid4())
-    print_job_id = str(uuid4())
-    acknowledgements = []
-    response = {
-        "weighing": {"manga_id": manga_id},
-        "print_job_id": print_job_id,
-    }
-
-    class Central:
-        def resolve_scm_manga_label(self, _label_id):
-            return {
-                "can_weigh": False,
-                "manga": {"public_id": manga_id, "tara_nominal_kg": "0.100"},
-            }
-
-        def get_scm_operation(self, _operation_id):
-            return {"status": 200, "response": response}
-
-        def get_scm_print_job(self, *_args, **_kwargs):
-            raise AssertionError("La evidencia IMPRESA evita consultar/reclamar")
-
-        def claim_scm_print_job(self, *_args, **_kwargs):
-            raise AssertionError("La evidencia IMPRESA evita reclamar")
-
-        def acknowledge_scm_print_job(
-            self, _station_id, requested_job_id, payload
-        ):
-            acknowledgements.append((requested_job_id, payload))
-            return {"results": payload["results"]}
-
-    class Printer:
-        def print_tspl(self, _payload):
-            raise AssertionError("El retry del acuse no debe reimprimir")
-
-    database = tmp_path / "printed-ack-replay.db"
-    app = create_app(
-        config_overrides={
-            "TESTING": True,
-            "SYNC_ENABLED": False,
-            "MONITORING_ENABLED": False,
-            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
-            "STATION_DATABASE_PATH": str(database),
-            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
-            "STATION_UUID": str(uuid4()),
-            "SCM_OPERATOR_ID": "7",
-        },
-        start_workers=False,
-    )
-    try:
-        with app.app_context():
-            db.session.add(ScmLabelPrintAttempt(
-                print_job_id=print_job_id,
-                label_id=post_label_id,
-                label_type="POSTPESAJE",
-                operation_id=operation_id,
-                capture_id=operation_id,
-                manga_id=manga_id,
-                payload_hash="a" * 64,
-                result="IMPRESA",
-            ))
-            db.session.commit()
-
-            result = ScmWeighingService(
-                client=Central(),
-                printer=Printer(),
-                scale_snapshot=lambda: (_ for _ in ()).throw(
-                    AssertionError("El retry no debe releer la balanza")
-                ),
-            ).confirm(operation_id=operation_id, label_id=label_id)
-
-            assert result["print_result"]["result"] == "IMPRESA"
-            assert result["print_result"]["ack_recovered"] is True
-            assert result["print_result"]["already_printed"] is True
-            assert acknowledgements[0][0] == print_job_id
-            assert acknowledgements[0][1]["results"][0]["estado"] == "IMPRESA"
+        assert result["print_result"] == {
+            "result": "EMISION_INCIERTA",
+            "recovered": True,
+            "auto_reprint_blocked": True,
+        }
     finally:
         with app.app_context():
             db.session.remove()

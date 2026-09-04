@@ -229,7 +229,7 @@ def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
     )
 
     assert 'TEXT 31,10,"0",0,6,6,"MANGA:"' in tspl
-    assert 'TEXT 99,4,"0",0,9,9,"OF000017-OT007-M003"' in tspl
+    assert 'TEXT 99,4,"2",0,1,1,"OF000017-OT007-M003"' in tspl
     assert 'PZA: Asa fucsia' in tspl
     assert 'COLOR: FUCSIA SOLIDO' in tspl
     assert 'BAR 31,74,384,2' in tspl
@@ -247,14 +247,14 @@ def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
     assert 'KG TEORICOS: 7.440 kg' in tspl
     assert "OF/OT:" not in tspl
     assert "CANT.:" not in tspl
-    assert 'font-size="24"' in svg
+    assert 'font-size="20"' in svg
     assert svg.count('font-size="16"') == 22
 
     scalable_sizes = re.findall(
         r'TEXT \d+,\d+,"0",0,(\d+),(\d+),',
         tspl,
     )
-    assert set(scalable_sizes) == {("6", "6"), ("9", "9")}
+    assert set(scalable_sizes) == {("6", "6")}
 
 
 def test_preetiqueta_v5_omite_fila_op_en_orden_excepcional():
@@ -346,7 +346,7 @@ def test_postpesaje_armado_declara_peso_neto_final_sin_siglas_ambiguas():
 
     assert "PESO NETO FINAL (kg)" in tspl
     assert "PESO NETO FINAL (kg)" in svg
-    assert '"8.950"' in tspl
+    assert '"8.95"' in tspl
     assert "KG OT:" not in tspl
     assert "KG OT:" not in svg
     assert "KG FIS.:" not in tspl
@@ -378,17 +378,41 @@ def test_postpesaje_v5_anterior_sin_fuente_no_afirma_conteo_fisico():
 
 def test_postpesaje_fabricacion_distingue_neto_aporte_y_peso_fabricado():
     label = _post_weighing_label("OF000900-OT001-M001")
-    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+    service = ScmPrelabelService()
+    tspl = service.generate_tspl({"labels": [label]})
+    svg = service.generate_preview_svg({"labels": [label]})
 
     assert "PESO NETO FINAL (kg)" in tspl
     assert "APORTE ULTIMO TRAMO (kg)" in tspl
-    assert "PESO FABRICADO TEORICO (kg): 8.750" in tspl
+    assert "PESO FABRICADO TEORICO (kg): 8.75" in tspl
+    assert 'TEXT 32,12,"2",0,1,1,"MANGA: OF000900-OT001-M001"' in tspl
+    assert 'TEXT 86,108,"3",0,2,2,"8.95"' in tspl
+    assert 'TEXT 310,244,"4",0,1,1,"+4.15"' in tspl
+    assert 'font-size="48"' in svg
+    assert 'font-size="32"' in svg
+    assert ">8.95</text>" in svg
+    assert ">+4.15</text>" in svg
+    assert "8.950" not in tspl
+    assert "4.150" not in tspl
     assert tspl.index("PESO FABRICADO TEORICO") < tspl.index(
         "APORTE ULTIMO TRAMO"
     )
     assert "PESO ESTANDAR SEGUN UNIDADES" not in tspl
     assert "KG FIS.:" not in tspl
     assert "KG OT:" not in tspl
+
+
+def test_sticker_pesaje_redondea_solo_la_presentacion_a_dos_decimales():
+    label = _post_weighing_label("OF000900-OT001-M001")
+    label["payload"]["peso_neto_real_kg"] = "8.955"
+    label["payload"]["aporte_desde_control_anterior_kg"] = "4.145"
+
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert '"8.96"' in tspl
+    assert '"+4.15"' in tspl
+    assert label["payload"]["peso_neto_real_kg"] == "8.955"
+    assert label["payload"]["aporte_desde_control_anterior_kg"] == "4.145"
 
 
 @pytest.mark.parametrize("labels", [

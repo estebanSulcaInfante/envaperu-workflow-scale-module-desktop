@@ -4,6 +4,7 @@ import json
 import hashlib
 import base64
 import io
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html import escape
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -61,7 +62,8 @@ class ScmPrelabelService:
     # Keeping both units separate prevents 16/24 preview dots from becoming
     # physically oversized 16/24-point text on the 203 dpi TE200.
     COMPACT_GENERAL_DOTS = 16
-    COMPACT_MANGA_DOTS = 24
+    # Preview counterpart of built-in TSPL font "2" (12 x 20 dots).
+    COMPACT_MANGA_DOTS = 20
     PRINTER_DPI = 203
     COMPACT_MANGA_CODE_X = 75
     COMPACT_ROW_START_Y = 40
@@ -227,6 +229,21 @@ class ScmPrelabelService:
         time_value = str(printed_at or "").split(" ")[-1]
         return f"F.OT: {operational_date}  HORA: {time_value}"
 
+    @staticmethod
+    def _display_kg(value):
+        """Reduce printed precision without changing the stored measurement."""
+        if value is None:
+            return None
+        try:
+            return format(
+                Decimal(str(value)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                ),
+                "f",
+            )
+        except (InvalidOperation, ValueError):
+            return str(value)
+
     @classmethod
     def _weight_values(cls, payload):
         document_type = cls._document_type(payload)
@@ -270,18 +287,24 @@ class ScmPrelabelService:
                 "PESO NETO FINAL (kg)"
                 if is_final else "PESO NETO REAL (kg)"
             ),
-            "net": payload.get("peso_neto_real_kg") or payload.get("kg_fisico"),
+            "net": cls._display_kg(
+                payload.get("peso_neto_real_kg") or payload.get("kg_fisico")
+            ),
             "contribution_label": (
                 "APORTE ULTIMO TRAMO (kg)"
                 if is_final else "APORTE DESDE CONTROL ANTERIOR (kg)"
             ),
-            "contribution": payload.get("aporte_desde_control_anterior_kg"),
+            "contribution": cls._display_kg(
+                payload.get("aporte_desde_control_anterior_kg")
+            ),
             "quantity_label": quantity_label,
             "quantity": (
                 payload.get("cantidad_confirmada_un")
                 if is_final else payload.get("cantidad_acumulada_un")
             ),
-            "fabricated_theoretical": fabricated_theoretical,
+            "fabricated_theoretical": cls._display_kg(
+                fabricated_theoretical
+            ),
             "shows_units": payload.get("cantidad_acumulada_un") is not None
             or is_final,
         }
@@ -304,7 +327,7 @@ class ScmPrelabelService:
             f'TEXT {x + 8},38,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
             f'TEXT {x + 8},58,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
             f'TEXT {x + 8},84,"2",0,1,1,"{values["net_label"]}"',
-            f'TEXT {x + 62},108,"4",0,3,3,"{_safe(values["net"], 10)}"',
+            f'TEXT {x + 62},108,"3",0,2,2,"{_safe(values["net"], 10)}"',
         ]
         if values["fabricated_theoretical"] is not None:
             commands.append(
@@ -316,7 +339,7 @@ class ScmPrelabelService:
             f'BAR {x + 8},207,{self.STICKER_WIDTH - 16},2',
             f'TEXT {x + 8},218,"3",0,1,1,"{_safe(values["title"], 38)}"',
             f'TEXT {x + 8},246,"1",0,1,1,"{values["contribution_label"]}"',
-            f'TEXT {x + 286},244,"3",0,1,2,"+{_safe(values["contribution"], 9)}"',
+            f'TEXT {x + 286},244,"4",0,1,1,"+{_safe(values["contribution"], 9)}"',
             f'TEXT {x + 8},276,"1",0,1,1,"{_safe(payload.get("pieza_color"), 46)}"',
         ))
         if values["shows_units"]:
@@ -374,7 +397,6 @@ class ScmPrelabelService:
         general_points = self._dots_to_tspl_points(
             self.COMPACT_GENERAL_DOTS
         )
-        manga_points = self._dots_to_tspl_points(self.COMPACT_MANGA_DOTS)
         if self.COMPACT_QR_Y + qr_size > self.LABEL_HEIGHT_DOTS:
             raise ValueError(
                 "El QR SCM excede la altura fisica disponible de la etiqueta"
@@ -386,8 +408,7 @@ class ScmPrelabelService:
                 f'{general_points},"MANGA:"'
             ),
             (
-                f'TEXT {x + self.COMPACT_MANGA_CODE_X},4,"0",0,'
-                f'{manga_points},{manga_points},'
+                f'TEXT {x + self.COMPACT_MANGA_CODE_X},4,"2",0,1,1,'
                 f'"{_safe(payload.get("codigo_manga"), 24)}"'
             ),
         ]
@@ -474,7 +495,7 @@ class ScmPrelabelService:
             'MANGA:</text>',
             (
                 f'<text x="{x + self.COMPACT_MANGA_CODE_X}" y="31" '
-                'font-family="Arial Narrow, Arial, sans-serif" '
+                'font-family="Courier New, monospace" '
                 f'font-size="{self.COMPACT_MANGA_DOTS}" font-weight="900">'
                 f'{escape(_safe(payload.get("codigo_manga"), 24))}</text>'
             ),
@@ -530,11 +551,16 @@ class ScmPrelabelService:
             f'<rect x="{x + 1}" y="2" width="{self.STICKER_WIDTH - 3}" '
             f'height="396" rx="4" '
             'fill="white" stroke="#111" stroke-width="3"/>',
-            text(28, f'MANGA: {_safe(payload.get("codigo_manga"), 32)}', 18, 800),
+            (
+                f'<text x="{x + 8}" y="28" '
+                'font-family="Courier New, monospace" font-size="20" '
+                f'font-weight="800">MANGA: '
+                f'{escape(_safe(payload.get("codigo_manga"), 32))}</text>'
+            ),
             text(50, operational_datetime, 12, 600),
             text(70, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
             text(98, values["net_label"], 18, 800),
-            text(174, values["net"], 58, 900, "middle", x + 200),
+            text(174, values["net"], 48, 900, "middle", x + 200),
         ]
         if values["fabricated_theoretical"] is not None:
             parts.append(text(
@@ -548,7 +574,7 @@ class ScmPrelabelService:
             'stroke="#111" stroke-width="2"/>',
             text(232, values["title"], 20, 900),
             text(254, values["contribution_label"], 13, 700),
-            text(270, f'+{values["contribution"]}', 24, 900, "end", x + 392),
+            text(270, f'+{values["contribution"]}', 32, 900, "end", x + 392),
             text(289, _safe(payload.get("pieza_color"), 46), 13, 600),
         ])
         if values["shows_units"]:

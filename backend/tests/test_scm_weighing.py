@@ -440,7 +440,7 @@ def test_f2_confirma_central_antes_de_imprimir_y_no_crea_pesaje_local(
             assert "cantidad_confirmada_un" not in confirm_payload
             assert "QRCODE" not in calls[3][1]
             assert "PESO NETO FINAL (kg)" in calls[3][1]
-            assert "PESO FABRICADO TEORICO (kg): 10.000" in calls[3][1]
+            assert "PESO FABRICADO TEORICO (kg): 10.00" in calls[3][1]
             assert Pesaje.query.count() == 0
 
             service.confirm(

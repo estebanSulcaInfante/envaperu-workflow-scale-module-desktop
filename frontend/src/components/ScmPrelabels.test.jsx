@@ -33,10 +33,31 @@ const job = {
   labels: [label],
 };
 
+const otherLabel = {
+  ...label,
+  public_id: 'label-002',
+  payload: {
+    ...label.payload,
+    codigo_manga: 'OF0014-OT006-M009',
+    of_ot: 'OF-000014 - OT-000006',
+    op_ot: undefined,
+    pieza_color: 'Florero italiano',
+    color: 'BLANCO',
+    maquinista: 'María Torres',
+    qr: { label_id: 'label-002' },
+  },
+};
+
+const otherJob = {
+  print_job_id: 'job-002',
+  plantilla_version: 'PREPESAJE_TSPL_1',
+  labels: [otherLabel],
+};
+
 
 describe('ScmPrelabels', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     scmPrelabelsApi.pending.mockResolvedValue({ data: { print_jobs: [], count: 0 } });
   });
 
@@ -67,11 +88,74 @@ describe('ScmPrelabels', () => {
       name: 'Pendientes de impresión',
     })).toBeTruthy();
     expect(screen.getByText('Pendiente de impresión')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Previsualizar trabajo job-001' }));
+    fireEvent.click(screen.getByRole('button', { name: /seleccionar asa fucsia/i }));
 
     await waitFor(() => {
       expect(scmPrelabelsApi.preview).toHaveBeenCalledWith('job-001');
     });
+  });
+
+  it('identifica los trabajos por pieza, color y OF/OT antes que por UUID', async () => {
+    scmPrelabelsApi.pending.mockResolvedValue({
+      data: {
+        print_jobs: [{ ...otherJob, status: 'PENDING' }],
+        count: 1,
+      },
+    });
+
+    render(<ScmPrelabels />);
+
+    expect(await screen.findByText('Florero italiano · BLANCO')).toBeTruthy();
+    expect(screen.getByText('OF-000014 - OT-000006')).toBeTruthy();
+    expect(screen.queryByText('job-002')).toBeNull();
+    expect(screen.getByText('Búsqueda por ID técnico')).toBeTruthy();
+  });
+
+  it('filtra la bandeja cargada con datos humanos y marca la selección', async () => {
+    scmPrelabelsApi.pending.mockResolvedValue({
+      data: {
+        print_jobs: [job, otherJob],
+        count: 2,
+      },
+    });
+    scmPrelabelsApi.preview.mockResolvedValue({ data: { print_job: otherJob } });
+
+    render(<ScmPrelabels />);
+
+    const filter = await screen.findByRole('searchbox', {
+      name: 'Buscar por pieza, color, OF/OT, manga o maquinista',
+    });
+    fireEvent.change(filter, { target: { value: 'florero blanco' } });
+
+    expect(screen.getByText('Florero italiano · BLANCO')).toBeTruthy();
+    expect(screen.queryByText('Asa fucsia · FUCSIA')).toBeNull();
+
+    const selectJob = screen.getByRole('button', {
+      name: /seleccionar florero italiano/i,
+    });
+    fireEvent.click(selectJob);
+
+    await waitFor(() => expect(selectJob.getAttribute('aria-pressed')).toBe('true'));
+    expect(await screen.findByRole('region', { name: 'Trabajo seleccionado' })).toBeTruthy();
+  });
+
+  it('limpia el detalle anterior si falla la siguiente consulta', async () => {
+    scmPrelabelsApi.pending.mockResolvedValue({
+      data: { print_jobs: [job, otherJob], count: 2 },
+    });
+    scmPrelabelsApi.preview
+      .mockResolvedValueOnce({ data: { print_job: job } })
+      .mockRejectedValueOnce({ response: { data: { message: 'Central no disponible' } } });
+
+    render(<ScmPrelabels />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /seleccionar asa fucsia/i }));
+    expect(await screen.findByRole('button', { name: 'Imprimir sticker' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /seleccionar florero italiano/i }));
+
+    expect(await screen.findByText('Central no disponible')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Imprimir sticker' })).toBeNull();
   });
 
   it('mantiene la búsqueda manual si la estación todavía no ofrece la bandeja', async () => {
@@ -83,10 +167,11 @@ describe('ScmPrelabels', () => {
     expect(screen.getByLabelText('ID del trabajo de impresión')).toBeTruthy();
   });
 
-  it('previsualiza una identidad y deja la segunda columna libre', async () => {
+  it('previsualiza dos copias físicas de la misma identidad', async () => {
     scmPrelabelsApi.preview.mockResolvedValue({ data: { print_job: job } });
     render(<ScmPrelabels />);
 
+    fireEvent.click(screen.getByText('Búsqueda por ID técnico'));
     fireEvent.change(
       screen.getByPlaceholderText('UUID del trabajo de impresión'),
       { target: { value: 'job-001' } },
@@ -94,7 +179,7 @@ describe('ScmPrelabels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Previsualizar' }));
 
     expect(await screen.findByText('OP0084-OT001-M001')).toBeTruthy();
-    expect(screen.getByText('Columna libre')).toBeTruthy();
+    expect(screen.getByText('2 copias físicas de la misma identidad')).toBeTruthy();
     expect(screen.getByText('QR: label-001')).toBeTruthy();
   });
 
@@ -105,6 +190,7 @@ describe('ScmPrelabels', () => {
     });
     render(<ScmPrelabels />);
 
+    fireEvent.click(screen.getByText('Búsqueda por ID técnico'));
     fireEvent.change(
       screen.getByPlaceholderText('UUID del trabajo de impresión'),
       { target: { value: 'job-001' } },
@@ -118,8 +204,19 @@ describe('ScmPrelabels', () => {
       expect(scmPrelabelsApi.print).toHaveBeenCalledWith('job-001');
     });
     expect(await screen.findByText(
-      'Resultado: IMPRESA. Acuse central registrado.',
+      'Trabajo enviado y acuse técnico registrado. Verifique que salieron todas las hojas.',
     )).toBeTruthy();
+  });
+
+  it('muestra un estado inequívoco mientras envía el trabajo a imprimir', async () => {
+    scmPrelabelsApi.preview.mockResolvedValue({ data: { print_job: job } });
+    scmPrelabelsApi.print.mockImplementation(() => new Promise(() => {}));
+    render(<ScmPrelabels initialJobId="job-001" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Imprimir sticker' }));
+
+    const printing = screen.getByRole('button', { name: 'Imprimiendo…' });
+    expect(printing.disabled).toBe(true);
   });
 
   it('distingue un trabajo ya impreso y evita una reimpresión accidental', async () => {
@@ -128,6 +225,7 @@ describe('ScmPrelabels', () => {
     });
     render(<ScmPrelabels />);
 
+    fireEvent.click(screen.getByText('Búsqueda por ID técnico'));
     fireEvent.change(
       screen.getByPlaceholderText('UUID del trabajo de impresión'),
       { target: { value: 'job-001' } },
@@ -136,5 +234,45 @@ describe('ScmPrelabels', () => {
 
     expect(await screen.findByText(/estos stickers ya fueron impresos/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Sticker ya impreso' }).disabled).toBe(true);
+  });
+
+  it('permite reintentar cuando la impresora confirmó que no emitió el sticker', async () => {
+    scmPrelabelsApi.preview.mockResolvedValue({
+      data: {
+        print_job: {
+          ...job,
+          status: 'FALLIDO',
+          labels: [{ ...label, estado: 'FALLIDA_SIN_EMISION' }],
+        },
+      },
+    });
+    scmPrelabelsApi.print.mockResolvedValue({
+      data: { print_job: job, result: 'IMPRESA' },
+    });
+    render(<ScmPrelabels initialJobId="job-001" />);
+
+    const retry = await screen.findByRole('button', { name: 'Reintentar impresión' });
+    expect(retry.disabled).toBe(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(scmPrelabelsApi.print).toHaveBeenCalledWith('job-001'));
+  });
+
+  it('bloquea la reimpresión ciega cuando la emisión quedó incierta', async () => {
+    scmPrelabelsApi.preview.mockResolvedValue({
+      data: {
+        print_job: {
+          ...job,
+          status: 'FALLIDO',
+          labels: [{ ...label, estado: 'EMISION_INCIERTA' }],
+        },
+      },
+    });
+    render(<ScmPrelabels initialJobId="job-001" />);
+
+    expect(await screen.findByText(/no reimprima este trabajo/i)).toBeTruthy();
+    const replacement = screen.getByRole('button', {
+      name: 'Requiere etiqueta de reemplazo',
+    });
+    expect(replacement.disabled).toBe(true);
   });
 });

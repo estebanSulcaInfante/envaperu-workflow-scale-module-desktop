@@ -1,6 +1,11 @@
-# Runbook de actualizacion de la PC piloto
+# Runbook de instalación y actualización de la PC piloto
 
-Este procedimiento migra la base SQLite legacy al almacenamiento release sin usar `copy`, `xcopy` ni el Explorador de Windows. La base original se mantiene en su ruta y el importador trabaja desde una fotografia consistente creada por SQLite.
+La primera instalación migra la base SQLite legacy al almacenamiento release. Las actualizaciones siguientes ya no se realizan mediante `git pull`: usan un paquete inmutable generado por CI, backup previo, preflight sobre una copia, activación por puntero y rollback automático.
+
+## Dos procedimientos distintos
+
+1. **Primera instalación:** seguir las secciones 1 a 5 para preservar la SQLite legacy e inicializar `ProgramData`.
+2. **Actualización de una estación ya versionada:** seguir la sección 6. No volver a importar la SQLite legacy.
 
 ## Condiciones de inicio
 
@@ -130,3 +135,70 @@ El rollback directo solo es valido antes de capturar produccion en el release. S
 | `2` | Argumento o entorno Python invalido | Corregir ruta/instalacion; no hubo activacion |
 | `6` | Estacion o puerto activo | Detener backend y repetir |
 | `7` | Error de almacenamiento o validacion | No iniciar; revisar detalle JSON y backups |
+
+## 6. Actualizaciones versionadas posteriores
+
+### 6.1. Preparar la ventana
+
+- terminar o cancelar la sesión de pesaje activa;
+- confirmar que no existe una etiqueta pendiente de impresión;
+- descargar desde el artefacto privado de CI el ZIP y su `.sha256`;
+- obtener el SHA-256 también por el canal de soporte y compararlo;
+- no copiar repositorios, `node_modules`, `.env`, bases SQLite ni tokens dentro del paquete.
+
+### 6.2. Ejecutar la actualización
+
+Abrir PowerShell como administrador:
+
+```powershell
+cd C:\Program Files\EnvaPeru\Pesaje\launcher
+.\Update-Station.ps1 `
+  -PackagePath C:\Soporte\envaperu-pesaje-1.2.0-win-x64.zip `
+  -ExpectedSha256 <sha256-aprobado>
+```
+
+El actualizador ejecuta en orden:
+
+1. valida el hash integral del ZIP;
+2. extrae en staging y valida `manifest.json` y todos sus archivos;
+3. crea un venv nuevo desde `wheels`, sin Internet;
+4. crea y verifica un backup SQLite;
+5. prueba las migraciones sobre una copia;
+6. detiene ordenadamente el release activo;
+7. cambia `active-release.json`;
+8. inicia la versión nueva y espera `READY`;
+9. si falla, recupera puntero, SQLite y runtime anteriores.
+
+No continuar si la salida no termina en:
+
+```text
+UPDATE_COMPLETE version=<version> backup=<ruta>
+```
+
+### 6.3. Smoke posterior
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/live
+Invoke-RestMethod http://127.0.0.1:5050/api/local/v1/health/ready
+Get-Content C:\ProgramData\EnvaPeru\Pesaje\run\active-release.json
+```
+
+Confirmar versión, `READY`, balanza, impresora, Central y el historial de la sesión. La primera etiqueta del release se imprime como prueba controlada, no como producción.
+
+En la primera instalación versionada, registrar una vez el arranque estable:
+
+```powershell
+C:\Program Files\EnvaPeru\Pesaje\launcher\Install-StationTask.ps1
+```
+
+La tarea se vincula al launcher, no a una carpeta de versión. Probarla cerrando la estación, ejecutando manualmente la tarea y finalmente reiniciando Windows dentro de la ventana UAT.
+
+### 6.4. Rollback
+
+El rollback por fallo de readiness es automático. Para un rollback manual sin capturas posteriores:
+
+```powershell
+.\release\Rollback-Station.ps1 -ConfirmNoCapturesSinceUpdate
+```
+
+Si ya hubo capturas o impresiones, detener y escalar: no restaurar una base anterior hasta conciliar los hechos nuevos.

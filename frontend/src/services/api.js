@@ -117,10 +117,27 @@ export const scmPrelabelsApi = {
 export const scmWeighingApi = {
   resolve: (qr) =>
     api.post('/local/v1/scm/weighing/resolve', { qr }),
-  confirm: (labelId, operationId, motivoDesfase = null) =>
+  control: (labelId, operationId) =>
+    api.post(
+      '/local/v1/scm/weighing/controls',
+      {
+        label_id: labelId,
+      },
+      { headers: { 'Idempotency-Key': operationId } },
+    ),
+  confirm: (labelId, operationId, options = {}) =>
     api.post(
       '/local/v1/scm/weighing/confirm',
-      { label_id: labelId, motivo_desfase: motivoDesfase },
+      {
+        label_id: labelId,
+        motivo_desfase: options.motivoDesfase || null,
+        ...(options.cantidadConfirmadaUn
+          ? { cantidad_confirmada_un: options.cantidadConfirmadaUn }
+          : {}),
+        ...(options.motivoCierreParcial
+          ? { motivo_cierre_parcial: options.motivoCierreParcial }
+          : {}),
+      },
       { headers: { 'Idempotency-Key': operationId } },
     ),
   recover: (operationId) =>

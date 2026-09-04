@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { scmWeighingApi } from '../services/api';
+import { getWeighingState, mangaStateLabel } from '../utils/scmWeighingState';
 
 const PORTFOLIO_DEMO_QR = JSON.stringify({
   v: 1,
@@ -13,6 +14,20 @@ const PORTFOLIO_DEMO_QR = JSON.stringify({
 function newOperationId() {
   return globalThis.crypto?.randomUUID?.()
     || '00000000-0000-4000-8000-000000000001';
+}
+
+function normalizedColorToken(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+}
+
+function validColorHex(value) {
+  return /^#[0-9A-F]{6}$/i.test(String(value || '').trim())
+    ? String(value).trim()
+    : null;
 }
 
 export default function ScmWeighing({
@@ -30,61 +45,139 @@ export default function ScmWeighing({
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [simulatedWeight, setSimulatedWeight] = useState('10.100');
+  const [closeManga, setCloseManga] = useState(false);
+  const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
+  const [scanConsumed, setScanConsumed] = useState(false);
+  const [controlResult, setControlResult] = useState(null);
+  const [contextNotice, setContextNotice] = useState('');
+  const [imageFailed, setImageFailed] = useState(false);
   const operationIdRef = useRef(null);
+  const controlOperationIdRef = useRef(null);
+  const scannerInputRef = useRef(null);
+  const closeCancelRef = useRef(null);
+  const requestInFlightRef = useRef(false);
   const online = centralState === 'ONLINE';
   const centralAvailable = online || simulationEnabled || portfolioDemoMode;
   const otContext = context?.manga?.ot;
   const colorWork = context?.manga?.trabajo_color;
+  const isAssembly = Boolean(
+    context?.manga?.oa_ot
+      || context?.manga?.cantidad_fuente === 'RESPONSABLE_ARMADO',
+  );
+  const canonicalArticleKind = context?.manga?.articulo_clase === 'SUBENSAMBLE_WIP'
+    ? 'WIP'
+    : context?.manga?.articulo_clase === 'PRODUCTO_TERMINADO'
+      ? 'Producto terminado'
+      : null;
+  const canonicalArticleIdentity = canonicalArticleKind
+    ? [
+        canonicalArticleKind,
+        context?.manga?.articulo_codigo,
+        context?.manga?.pieza_color,
+      ].filter(Boolean).join(' · ')
+    : null;
+  const contentArticleIdentity = canonicalArticleIdentity
+    || context?.manga?.pieza_color
+    || context?.manga?.articulo_codigo;
+  const colorIdentity = context?.manga?.color_identidad;
+  const colorName = colorIdentity?.nombre
+    || context?.manga?.color
+    || colorWork?.color
+    || 'Sin color';
+  const colorHex = validColorHex(colorIdentity?.hex || context?.manga?.color_hex);
+  const transparentColor = normalizedColorToken(
+    colorIdentity?.familia?.nombre,
+  ).includes('TRANSPARENTE');
   const currentMachinist = context?.manga?.asignacion_vigente?.maquinista
     || context?.manga?.maquinista
     || 'Sin asignación vigente';
   const tare = Number(context?.manga?.tara_nominal_kg || 0);
   const net = Math.max(0, Number(peso || 0) - tare);
-  const canConfirm = Boolean(
-    context?.can_weigh
-      && listening
-      && centralAvailable
-      && Number(peso) > tare
-      && !busy
-      && !context?.demo_only,
+  const lastControlNet = Number(controlResult?.control?.peso_neto_kg
+    ?? context?.continuidad?.ultima_referencia_peso?.peso_neto_kg
+    ?? context?.continuidad?.ultimo_control?.peso_neto_kg ?? 0);
+  // Compare at the contract's gram precision so equal readings never render as -0.000 kg.
+  const netDifference = (
+    Math.round(net * 1000) - Math.round(lastControlNet * 1000)
+  ) / 1000;
+  const weighingState = getWeighingState({ context, busy, result, centralAvailable,
+    listening, closeManga, peso, tare, net, lastControlNet, validPartialClose: true,
+    partialClose: false, error, scanConsumed });
+  const canSubmit = weighingState.ready;
+  const canConfirm = canSubmit && closeManga;
+  const canRecordControl = canSubmit && !closeManga;
+  const controlAvailable = Boolean(context?.can_register_weight_control);
+  const showIntentSelector = Boolean(
+    !context?.demo_only
+      && (context?.can_weigh || controlAvailable || controlResult),
   );
+
+  const focusScanner = () => {
+    window.setTimeout(() => scannerInputRef.current?.focus(), 0);
+  };
 
   const resolveQr = async (requestedValue = qr) => {
     const requestedQr = typeof requestedValue === 'string' ? requestedValue : qr;
-    if (!requestedQr.trim() || busy) return;
+    if (!requestedQr.trim() || busy || requestInFlightRef.current || !centralAvailable) return;
+    requestInFlightRef.current = true;
     setBusy(true);
     setError('');
     setResult(null);
     try {
       const { data } = await scmWeighingApi.resolve(requestedQr.trim());
+      const previousCode = context?.manga?.codigo;
+      const nextCode = data?.manga?.codigo;
       setContext(data);
+      setCloseManga(false);
+      setCloseConfirmationOpen(false);
+      setScanConsumed(false);
+      setControlResult(null);
+      setImageFailed(false);
+      setContextNotice(
+        previousCode && previousCode !== nextCode
+          ? `Cambio de manga confirmado: ${previousCode} → ${nextCode}`
+          : `QR leído. Manga seleccionada: ${nextCode}`,
+      );
       operationIdRef.current = null;
+      controlOperationIdRef.current = null;
       setQr('');
     } catch (requestError) {
       setContext(null);
+      setContextNotice('');
+      setControlResult(null);
       setError(
         requestError.response?.data?.message
           || 'No se pudo resolver la etiqueta en central.',
       );
     } finally {
+      requestInFlightRef.current = false;
       setBusy(false);
+      focusScanner();
     }
   };
 
   const confirm = async () => {
-    if (!canConfirm) return;
+    if (!canConfirm || requestInFlightRef.current) return;
+    requestInFlightRef.current = true;
     if (!operationIdRef.current) operationIdRef.current = newOperationId();
     setBusy(true);
     setError('');
+    setControlResult(null);
     try {
       const { data } = await scmWeighingApi.confirm(
         context.scanned_label_id,
         operationIdRef.current,
+        {},
       );
       setResult(data);
+      setScanConsumed(true);
+      setCloseConfirmationOpen(false);
+      setCloseManga(false);
       setContext((previous) => ({
         ...previous,
         can_weigh: false,
+        can_register_shift_cut: false,
+        can_register_weight_control: false,
         manga: {
           ...previous.manga,
           estado: data.confirmed.weighing.estado_manga,
@@ -96,8 +189,68 @@ export default function ScmWeighing({
           || 'No se confirmó el pesaje. F2 reutilizará la misma operación.',
       );
     } finally {
+      setCloseConfirmationOpen(false);
+      requestInFlightRef.current = false;
       setBusy(false);
+      focusScanner();
     }
+  };
+
+  const recordControl = async () => {
+    if (!canRecordControl || requestInFlightRef.current) return;
+    requestInFlightRef.current = true;
+    if (!controlOperationIdRef.current) {
+      controlOperationIdRef.current = newOperationId();
+    }
+    setBusy(true);
+    setError('');
+    setResult(null);
+    try {
+      const { data } = await scmWeighingApi.control(
+        context.scanned_label_id,
+        controlOperationIdRef.current,
+      );
+      setControlResult(data);
+      setScanConsumed(true);
+      setContext((previous) => ({
+        ...previous,
+        can_weigh: true,
+        can_register_weight_control: true,
+        continuidad: { ...previous.continuidad, ultimo_control: data.control },
+        manga: {
+          ...previous.manga,
+          ...(data.manga || {}),
+          estado: data.manga?.estado || 'EN_LLENADO',
+        },
+      }));
+      setCloseManga(false);
+      controlOperationIdRef.current = null;
+    } catch (requestError) {
+      setError(
+        requestError.response?.data?.message
+          || 'No se registró el avance. El reintento reutilizará la misma operación.',
+      );
+    } finally {
+      requestInFlightRef.current = false;
+      setBusy(false);
+      focusScanner();
+    }
+  };
+
+  const submitWeighing = () => {
+    if (closeManga) {
+      setCloseConfirmationOpen(true);
+      return;
+    }
+    recordControl();
+  };
+
+  const cancelCloseConfirmation = () => {
+    if (busy) return;
+    setCloseConfirmationOpen(false);
+    setCloseManga(false);
+    operationIdRef.current = null;
+    focusScanner();
   };
 
   const simulateWeight = async () => {
@@ -119,28 +272,36 @@ export default function ScmWeighing({
 
   useEffect(() => {
     const onKeyDown = (event) => {
+      if (event.key === 'Escape' && closeConfirmationOpen && !busy) {
+        event.preventDefault();
+        cancelCloseConfirmation();
+        return;
+      }
       if (event.key === 'F2') {
         event.preventDefault();
-        confirm();
+        if (closeConfirmationOpen || event.repeat) return;
+        submitWeighing();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [canConfirm, context, busy]);
+  }, [canSubmit, context, busy, closeManga, closeConfirmationOpen,
+    scanConsumed]);
+
+  useEffect(() => {
+    if (closeConfirmationOpen) closeCancelRef.current?.focus();
+  }, [closeConfirmationOpen]);
 
   const printState = result?.print_result?.result;
+  const controlPrintState = controlResult?.print_result?.result;
   const printPreviewSrc = useMemo(() => {
     const svg = result?.print_result?.preview_svg;
     return svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : '';
   }, [result]);
-  const statusText = useMemo(() => {
-    if (!centralAvailable) return 'Piloto SCM bloqueado: central sin conexión';
-    if (!listening) return 'Conecte la balanza para capturar una lectura NET';
-    if (!context) return 'Escanee el QR de PREPESAJE';
-    if (!context.can_weigh) return 'La manga ya no admite otro pesaje normal';
-    if (Number(peso) <= tare) return 'Esperando peso bruto estable';
-    return 'Lectura lista · Presione F2';
-  }, [centralAvailable, listening, context, peso, tare]);
+  const controlPrintPreviewSrc = useMemo(() => {
+    const svg = controlResult?.print_result?.preview_svg;
+    return svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : '';
+  }, [controlResult]);
 
   return (
     <div className="scm-weighing-layout">
@@ -149,8 +310,8 @@ export default function ScmWeighing({
         <div className="panel-body">
           <p className="scm-help">
             {portfolioDemoMode
-              ? 'El QR carga el contexto. F2 toma la lectura virtual y genera una etiqueta final simulada.'
-              : 'El QR resuelve todos los datos. F2 toma el peso de la balanza, confirma en central y despues imprime la etiqueta final.'}
+              ? 'El QR carga el contexto. F2 registra un control por defecto; para cerrar, seleccione Cerrar manga y confirme.'
+              : 'Escanea la preetiqueta y revisa el estado. F2 registra un control por defecto; cerrar exige una selección explícita y confirmación.'}
           </p>
           {portfolioDemoMode && (
             <div className="portfolio-weighing-guide">
@@ -158,7 +319,7 @@ export default function ScmWeighing({
                 <strong>Recorrido sugerido</strong>
                 <span>1. Carga la manga preparada.</span>
                 <span>2. Aplica el peso simulado.</span>
-                <span>3. Confirma con F2 y revisa la etiqueta.</span>
+                <span>3. F2 registra control; seleccione Cerrar manga solo para el final.</span>
               </div>
               <button
                 type="button"
@@ -177,6 +338,7 @@ export default function ScmWeighing({
           )}
           <div className="scm-scan-row">
             <input
+              ref={scannerInputRef}
               autoFocus
               value={qr}
               onChange={(event) => setQr(event.target.value)}
@@ -197,7 +359,10 @@ export default function ScmWeighing({
               Resolver
             </button>
           </div>
-          {error && <div className="scm-message error">{error}</div>}
+          {error && <div className="scm-message error" role="alert">{error}</div>}
+          <div className="sr-only" role="status" aria-live="polite">
+            {contextNotice}
+          </div>
           {context && (
             <>
               {context.demo_only && (
@@ -210,8 +375,49 @@ export default function ScmWeighing({
                   Contexto sintetico del piloto. La confirmacion y la impresion permanecen aisladas.
                 </div>
               )}
+              <div className={`scm-active-manga ${context.can_weigh || context.can_register_weight_control ? '' : 'unavailable'}`} aria-label="Contexto de manga seleccionada">
+                <div>
+                  <span>MANGA SELECCIONADA</span>
+                  <strong>{context.manga.codigo}</strong>
+                  <b className="scm-manga-state">{mangaStateLabel(context.manga.estado)}</b>
+                  <small>{contextNotice}</small>
+                </div>
+                {context.manga.imagen_url && !imageFailed && (
+                  <img
+                    src={context.manga.imagen_url}
+                    alt="Pieza de la manga activa"
+                    onError={() => setImageFailed(true)}
+                  />
+                )}
+                {(!context.manga.imagen_url || imageFailed) && (
+                  <div className="scm-piece-photo-fallback">
+                    Sin foto registrada
+                  </div>
+                )}
+              </div>
+              {contentArticleIdentity && (
+                <div className="scm-article-identity" aria-label="Artículo a pesar">
+                  <span>Identidad del contenido</span>
+                  <strong>{contentArticleIdentity}</strong>
+                  <div className="scm-color-identity">
+                    <span
+                      className={`scm-color-swatch ${transparentColor ? 'transparent' : colorHex ? 'solid' : 'unknown'}`}
+                      style={colorHex && !transparentColor
+                        ? { '--scm-color-swatch': colorHex }
+                        : undefined}
+                      role="img"
+                      aria-label={transparentColor
+                        ? 'Muestra de color transparente'
+                        : `Muestra de color ${colorName}`}
+                    />
+                    <div>
+                      <small>Color</small>
+                      <b>{colorName}</b>
+                    </div>
+                  </div>
+                </div>
+              )}
               <dl className="scm-context-grid">
-              <div><dt>Manga</dt><dd>{context.manga.codigo}</dd></div>
               {otContext ? (
                 <div>
                   <dt>OT / máquina / turno</dt>
@@ -224,7 +430,7 @@ export default function ScmWeighing({
                 <>
                   <div>
                     <dt>Trabajo de color</dt>
-                    <dd>{[colorWork.codigo, colorWork.color].filter(Boolean).join(' · ')}</dd>
+                    <dd>{[colorWork.codigo, colorName].filter(Boolean).join(' · ')}</dd>
                   </div>
                   <div>
                     <dt>OF / corrida</dt>
@@ -237,13 +443,26 @@ export default function ScmWeighing({
               )}
               <div><dt>Fecha OT</dt><dd>{context.manga.fecha_operativa}</dd></div>
               <div><dt>Maquinista asignado</dt><dd>{currentMachinist}</dd></div>
-              <div><dt>Pieza-color</dt><dd>{context.manga.pieza_color}</dd></div>
-              <div><dt>Color</dt><dd>{context.manga.color || 'Sin color'}</dd></div>
+              {!contentArticleIdentity && (
+                <div>
+                  <dt>{isAssembly ? 'Artículo armado' : 'Pieza-color'}</dt>
+                  <dd>{context.manga.pieza_color}</dd>
+                </div>
+              )}
               <div><dt>Tipo</dt><dd>{context.manga.tipo}</dd></div>
-              <div>
-                <dt>Cantidad confirmada por plan</dt>
-                <dd>{context.manga.cantidad_asignada_un} un</dd>
-              </div>
+              {isAssembly ? (
+                <div>
+                  <dt>Cantidad confirmada por Armado</dt>
+                  <dd>{context.manga.cantidad_asignada_un} un</dd>
+                </div>
+              ) : (
+                <div>
+                  <dt>Peso fabricado teórico</dt>
+                  <dd>{context.manga.peso_fabricado_teorico_kg == null
+                    ? 'No disponible'
+                    : `${Number(context.manga.peso_fabricado_teorico_kg).toFixed(3)} kg`}</dd>
+                </div>
+              )}
               </dl>
             </>
           )}
@@ -266,8 +485,80 @@ export default function ScmWeighing({
           </div>
           <div className="scm-weight-grid scm-weight-breakdown">
             <div><span>Tara</span><strong>{tare.toFixed(3)} kg</strong></div>
-            <div><span>Neto físico</span><strong>{net.toFixed(3)} kg</strong></div>
+            <div>
+              <span>{isAssembly ? 'Peso neto total de Armado (kg)' : 'Peso neto real (kg)'}</span>
+              <strong>{net.toFixed(3)} kg</strong>
+            </div>
+            {!isAssembly && (
+              <>
+                <div>
+                  <span>Último NET aceptado</span>
+                  <strong>{lastControlNet.toFixed(3)} kg</strong>
+                </div>
+                <div>
+                  <span>Diferencia</span>
+                  <strong>{netDifference.toFixed(3)} kg</strong>
+                </div>
+              </>
+            )}
           </div>
+          {showIntentSelector && (
+            <div className={`scm-control-mode ${closeManga ? 'closing' : controlAvailable ? 'control' : 'required'}`}>
+              <div className="scm-intent-current" aria-live="polite">
+                <strong>
+                  {closeManga
+                    ? 'CIERRE FINAL'
+                    : controlAvailable ? 'CONTROL DE PESO' : 'CIERRE FINAL REQUERIDO'}
+                </strong>
+                <span>
+                  {closeManga
+                    ? 'La manga se cerrará únicamente después de confirmar.'
+                    : controlAvailable
+                      ? 'Modo seguro por defecto · la manga continuará abierta.'
+                      : 'Esta manga no admite controles; seleccione el cierre para habilitar F2.'}
+                </span>
+              </div>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={closeManga}
+                  disabled={scanConsumed || !context?.can_weigh || busy || Boolean(error && (operationIdRef.current || controlOperationIdRef.current))}
+                  onChange={(event) => {
+                    setCloseManga(event.target.checked);
+                  }}
+                  aria-label="Cerrar manga en este pesaje"
+                />
+                <span>
+                  <strong>Cerrar manga en este pesaje</strong>
+                  Requiere confirmación antes de enviar
+                </span>
+              </label>
+              <span>
+                {closeManga
+                  ? 'No es un control. Se emitirá el comprobante final y la manga dejará de admitir peso.'
+                  : controlAvailable
+                    ? 'Solo kg. No cambia maquinista, turno ni OT; no crea inventario.'
+                    : 'F2 permanecerá bloqueado hasta seleccionar el cierre final.'}
+              </span>
+              {controlResult && (
+                <div className="scm-message success">
+                  <strong>Avance en kg registrado</strong>
+                  <span>
+                    Peso neto real {controlResult.control?.peso_neto_kg} kg · aporte desde control anterior {controlResult.control?.aporte_desde_control_anterior_kg} kg.
+                  </span>
+                  <span>
+                    Manga abierta · QR de preetiqueta preservado · sin conteo · impresión {controlPrintState || 'pendiente'}.
+                  </span>
+                  {controlPrintPreviewSrc && (
+                    <figure className="portfolio-postlabel-preview">
+                      <img src={controlPrintPreviewSrc} alt="Sticker de control sin QR" />
+                      <figcaption>CONTROL · sin QR · conservar preetiqueta</figcaption>
+                    </figure>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {simulationEnabled && (
             <div className="scm-simulation-box">
               <strong>
@@ -300,23 +591,98 @@ export default function ScmWeighing({
               </div>
             </div>
           )}
-          <div className={`scm-f2-state ${canConfirm ? 'ready' : ''}`}>
-            {statusText}
+          <div id="scm-weighing-state" className={`scm-f2-state ${weighingState.kind}`} aria-live="polite" aria-atomic="true">
+            <strong>{weighingState.title}</strong>
+            <span>{weighingState.recovery}</span>
           </div>
           <button
             className="btn btn-primary scm-f2-button"
-            disabled={!canConfirm}
-            onClick={confirm}
+            disabled={!canSubmit}
+            aria-describedby="scm-weighing-state"
+            onClick={submitWeighing}
           >
-            {busy ? 'Confirmando…' : 'Confirmar pesaje (F2)'}
+            {busy ? 'Registrando…' : 'Pesar manga (F2)'}
           </button>
+          {closeConfirmationOpen && (
+            <div className="scm-close-dialog-backdrop">
+              <div
+                className="scm-close-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="scm-close-dialog-title"
+                aria-describedby="scm-close-dialog-description"
+              >
+                <span className="scm-close-dialog-kicker">ACCIÓN FINAL</span>
+                <h2 id="scm-close-dialog-title">Confirmar cierre final</h2>
+                <strong className="scm-close-dialog-manga">
+                  {context?.manga?.codigo}
+                </strong>
+                <div className="scm-close-dialog-net">
+                  <span>Peso neto real</span>
+                  <strong>{net.toFixed(3)} kg</strong>
+                </div>
+                <p id="scm-close-dialog-description">
+                  No es un control de peso. La manga quedará cerrada, dejará de
+                  admitir nuevos pesos y se generará el comprobante final.
+                </p>
+                <p className="scm-close-dialog-recovery">
+                  Si la manga continuará llenándose, cancele y vuelva a Control.
+                </p>
+                <div className="scm-close-dialog-actions">
+                  <button
+                    ref={closeCancelRef}
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busy}
+                    onClick={cancelCloseConfirmation}
+                  >
+                    Cancelar; volver a Control
+                  </button>
+                  <button
+                    type="button"
+                    className="btn scm-close-confirm-button"
+                    disabled={busy}
+                    onClick={confirm}
+                  >
+                    {busy ? 'Cerrando…' : 'Confirmar cierre de manga'}
+                  </button>
+                </div>
+                <small>F2 no confirma esta ventana. Use la acción explícita.</small>
+              </div>
+            </div>
+          )}
           {result && (
             <div className={`scm-result ${printState === 'IMPRESA' ? 'success' : 'warning'}`}>
               <strong>{result.portfolio_demo ? 'Pesaje demo confirmado' : 'Pesaje central confirmado'}</strong>
-              <span>
-                Neto {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
-                Producción OT {result.confirmed.weighing.kg_produccion_ot} kg
-              </span>
+              {isAssembly ? (
+                <span>
+                  Neto total de Armado {result.confirmed.weighing.peso_fisico_neto_kg} kg
+                </span>
+              ) : (
+                <span>
+                  Peso neto real {result.confirmed.weighing.peso_fisico_neto_kg} kg ·
+                  Peso fabricado teórico {result.confirmed.weighing.kg_produccion_ot} kg
+                </span>
+              )}
+              {isAssembly && result.confirmed.weighing.cantidad_confirmada != null && (
+                <span>
+                  Cantidad final {result.confirmed.weighing.cantidad_confirmada} un
+                </span>
+              )}
+              {isAssembly && result.confirmed.atribucion_turnos?.length > 0 && (
+                <div className="scm-shift-attribution">
+                  <strong>Atribución por turno</strong>
+                  <ul>
+                    {result.confirmed.atribucion_turnos.map((segment) => (
+                      <li key={segment.id}>
+                        {[segment.maquinista, segment.ot_codigo]
+                          .filter(Boolean).join(' · ')}: {' '}
+                        {segment.cantidad_atribuida_un} un
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <span>Etiqueta final: {printState}</span>
               <small>
                 Estado inventario: NO_INGRESADA · pendiente de recepción

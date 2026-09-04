@@ -70,6 +70,15 @@ class FakeCentralClient:
                 ],
                 "manga_prelabel": ["scm-manga-prelabel-v1"],
                 "manga_weighing": ["scm-manga-weighing-v1"],
+                "manga_weighing_control": [
+                    "scm-manga-weighing-control-v1"
+                ],
+                "inventory_opening_weighing": [
+                    "scm-inventory-opening-weighing-v1"
+                ],
+                "prepared_material_weighing": [
+                    "scm-prepared-material-weighing-v1"
+                ],
             },
             "features": {
                 "monitoring": True,
@@ -79,6 +88,9 @@ class FakeCentralClient:
                 "pilot_data_commands": True,
                 "scm_manga_prelabel": True,
                 "scm_manga_weighing": True,
+                "scm_manga_weighing_control": True,
+                "scm_inventory_opening_weighing": True,
+                "scm_prepared_material_weighing": True,
             },
         }
 
@@ -378,6 +390,28 @@ def test_central_api_client_classifies_failures(response, operation, expected_st
 
     assert error.value.state == expected_state
     assert "secret-token" not in str(error.value)
+
+
+def test_central_api_client_preserves_safe_domain_error_message():
+    client = CentralApiClient(
+        origin="https://central.envaperu.test",
+        token="secret-token",
+        station_version="1.1.0",
+        session=FakeSession([FakeResponse(404, {
+            "error": {
+                "code": "OPENING_NOT_FOUND",
+                "message": "Lote de apertura no encontrado.",
+            },
+        })]),
+    )
+
+    with pytest.raises(CentralApiError) as error:
+        client.resolve_inventory_opening_target("station-1", {
+            "opening_id": str(uuid.uuid4()),
+        })
+
+    assert error.value.state == "CENTRAL_INCOMPATIBLE"
+    assert str(error.value) == "Lote de apertura no encontrado."
 
 
 def test_legacy_history_uses_extended_read_timeout():

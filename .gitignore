@@ -173,6 +173,15 @@ dist/
 release/
 *.asar
 
+# Versioned source for the managed station release pipeline. Generated
+# artifacts are written to explicit tmp/output directories instead.
+!release/
+!release/**
+!backend/app/release/
+!backend/app/release/**
+backend/app/release/__pycache__/
+backend/app/release/**/*.py[cod]
+
 # SQLite databases
 *.db
 *.sqlite3

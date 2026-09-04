@@ -1,0 +1,79 @@
+name: Weighing station release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version for the Windows station release
+        required: true
+        type: string
+  push:
+    tags:
+      - "pesaje-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weighing-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $version = '${{ inputs.version }}'
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = '${{ github.ref_name }}' -replace '^pesaje-v', ''
+          }
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Invalid semantic version: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Verify backend and release manager
+        working-directory: backend
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest
+
+      - name: Verify station frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+
+      - name: Build immutable offline package
+        shell: pwsh
+        run: |
+          .\release\Build-StationRelease.ps1 `
+            -Version '${{ steps.version.outputs.version }}' `
+            -OutputDirectory .\artifacts
+
+      - name: Upload package and checksum
+        uses: actions/upload-artifact@v6
+        with:
+          name: envaperu-pesaje-${{ steps.version.outputs.version }}-win-x64
+          path: |
+            artifacts/*.zip
+            artifacts/*.sha256
+          if-no-files-found: error
+          retention-days: 30

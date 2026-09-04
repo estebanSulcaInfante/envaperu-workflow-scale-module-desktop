@@ -1,6 +1,12 @@
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
+import re
 from uuid import uuid4
+
+import pytest
+import qrcode
+from qrcode.constants import ERROR_CORRECT_L
 
 from app import create_app, db
 from app.models.scm_label_print_attempt import ScmLabelPrintAttempt
@@ -15,10 +21,15 @@ def _label(code):
         "op_ot": "OP0084 - OT-000001",
         "fecha_ot": "2026-07-28",
         "maquinista": "Juan Perez",
+        "operador": "Juan Perez",
+        "maquina": "HT-360 A",
+        "turno": "DIA",
+        "pieza": "Asa fucsia",
         "pieza_color": "Asa fucsia (PC-000001)",
         "color": "FUCSIA SOLIDO",
         "tipo_manga": "Manga estandar",
         "cantidad_planificada_un": "100",
+        "kg_estimados": "7.440",
         "qr": {
             "v": 1,
             "type": "SCM_MANGA_LABEL",
@@ -45,7 +56,11 @@ def _canonical_label(code):
 def _color_work_label(code):
     label = _canonical_label(code)
     work_id = str(uuid4())
-    label["payload"]["template"] = {"version": "PREPESAJE_TSPL_3"}
+    label["payload"]["template"] = {
+        "version": "PREPESAJE_TSPL_5",
+        "qr_contract": "LABEL_REF_V1",
+    }
+    label["payload"]["op"] = "OP0297"
     label["payload"]["trabajo_color"] = {
         "id": work_id,
         "codigo": "OT-000001-TC01",
@@ -62,7 +77,59 @@ def _assembly_label(code):
     return label
 
 
-def test_lote_impar_deja_segunda_columna_vacia():
+def _post_weighing_label(code):
+    label = _color_work_label(code)
+    label["payload"].pop("qr")
+    label["payload"]["document_type"] = "POSTPESAJE"
+    label["payload"]["manga_id"] = str(uuid4())
+    label["payload"]["cantidad_confirmada_un"] = "100"
+    label["payload"]["fuente_cantidad"] = "PLAN_CONFIRMADO_POR_PESAJE"
+    label["payload"]["kg_fisico"] = "8.950"
+    label["payload"]["kg_produccion_ot"] = "8.750"
+    label["payload"]["peso_neto_real_kg"] = "8.950"
+    label["payload"]["peso_estandar_segun_unidades_kg"] = "8.750"
+    label["payload"]["peso_fabricado_teorico_kg"] = "8.750"
+    label["payload"]["aporte_desde_control_anterior_kg"] = "4.150"
+    label["payload"]["maquinista"] = "Cristóbal Lázaro"
+    return label
+
+
+def _control_weight_label(code):
+    label = _post_weighing_label(code)
+    label["payload"].update({
+        "document_type": "CONTROL_PESO",
+        "cantidad_acumulada_un": "35",
+        "peso_neto_real_kg": "8.950",
+        "aporte_desde_control_anterior_kg": "4.150",
+    })
+    label["payload"].pop("cantidad_confirmada_un", None)
+    label["payload"].pop("peso_fabricado_teorico_kg", None)
+    label["payload"].pop("kg_produccion_ot", None)
+    return label
+
+
+def _post_weighing_assembly_label(code):
+    label = _post_weighing_label(code)
+    label["payload"].pop("of_ot", None)
+    label["payload"]["oa_ot"] = "OA-000321 - OT-000777"
+    label["payload"]["pieza_color"] = "BASE ORG. #5 ARMADA - ASAS PLOMO"
+    label["payload"]["fuente_cantidad"] = "RESPONSABLE_ARMADO"
+    return label
+
+
+def _qr_size_dots(payload):
+    qr_text = ScmPrelabelService._qr_text(payload)
+    qr = qrcode.QRCode(
+        error_correction=ERROR_CORRECT_L,
+        box_size=4,
+        border=0,
+    )
+    qr.add_data(qr_text)
+    qr.make(fit=True)
+    return qr.modules_count * 4
+
+
+def test_una_identidad_ocupa_ambas_columnas_como_copias_gemelas():
     tspl = ScmPrelabelService().generate_tspl(
         {"labels": [_label("OP0084-OT001-M001")]},
         printed_at=datetime(2026, 7, 28, 12, 30, tzinfo=timezone.utc),
@@ -72,9 +139,13 @@ def test_lote_impar_deja_segunda_columna_vacia():
     assert "GAP 3 mm, 0 mm" in tspl
     assert "OP0084-OT001-M001" in tspl
     assert "IMP.: 28/07/2026 07:30" in tspl
+    assert "F.OT ORIG.: 2026-07-28" in tspl
+    assert "MAQ.ORIG.: Juan Perez" in tspl
     assert "QRCODE 144" in tspl
+    assert "QRCODE 584" in tspl
     assert ",L,4,A,0," in tspl
-    assert "TEXT 469" not in tspl
+    assert "TEXT 469" in tspl
+    assert tspl.count("PRINT 1,1") == 1
 
 
 def test_plantilla_v2_renderiza_of_ot_y_conserva_qr_v1():
@@ -86,17 +157,105 @@ def test_plantilla_v2_renderiza_of_ot_y_conserva_qr_v1():
     assert "OP/OT:" not in tspl
     assert label["payload"]["qr"]["label_id"] in tspl
     assert "OF/OT: OF-000900 - OT-000001" in svg
+    assert "F.OT ORIG.: 2026-07-28" in tspl
+    assert "MAQ.ORIG.: Juan Perez" in tspl
+    assert "F.OT ORIG.: 2026-07-28" in svg
+    assert "MAQ.ORIG.: Juan Perez" in svg
 
 
-def test_trabajo_color_conserva_rotulo_simple_y_contexto_en_qr():
+def test_preetiqueta_generada_antes_del_contrato_compacto_conserva_qr_largo():
+    label = _canonical_label("OF000900-OT001-M001")
+
+    qr_text = ScmPrelabelService._qr_text(label["payload"])
+
+    assert qr_text == json.dumps(
+        label["payload"]["qr"],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def test_trabajo_color_conserva_contexto_autoritativo_fuera_del_qr():
     label = _color_work_label("OF000900-OT001-M001")
+    authoritative_qr = deepcopy(label["payload"]["qr"])
     tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
     svg = ScmPrelabelService().generate_preview_svg({"labels": [label]})
+    compact_qr = json.dumps(
+        {"v": 1, "label_id": label["payload"]["qr"]["label_id"]},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
-    assert "OF/OT: OF-000900 - OT-000001" in tspl
+    assert label["payload"]["of_ot"] == "OF-000900 - OT-000001"
+    assert "OF/OT:" not in tspl
     assert "TC01" not in tspl
-    assert label["payload"]["trabajo_color"]["id"] in tspl
-    assert "OF/OT: OF-000900 - OT-000001" in svg
+    assert ScmPrelabelService._qr_text(label["payload"]) == compact_qr
+    assert label["payload"]["qr"]["manga_id"] not in tspl
+    assert label["payload"]["trabajo_color"]["id"] not in tspl
+    assert label["payload"]["qr"]["type"] not in tspl
+    assert label["payload"]["qr"] == authoritative_qr
+    assert "OF/OT:" not in svg
+
+
+def test_qr_compacto_reduce_version_y_reserva_zona_silenciosa():
+    label = _color_work_label("OF000900-OT001-M001")
+    service = ScmPrelabelService()
+
+    qr = service._qr_code(label["payload"])
+    tspl = service.generate_tspl({"labels": [label]})
+
+    assert qr.version == 4
+    assert qr.modules_count == 33
+    assert service.QR_GAP_Y == 4 * service.QR_MODULE_DOTS
+    assert "QRCODE 158,240,L,4,A,0," in tspl
+
+
+def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
+    label = _color_work_label("OF000017-OT007-M003")
+    service = ScmPrelabelService()
+
+    tspl = service.generate_tspl(
+        {"labels": [label]},
+        printed_at=datetime(2026, 8, 31, 19, 50, tzinfo=timezone.utc),
+    )
+    svg = service.generate_preview_svg(
+        {"labels": [label]},
+        printed_at=datetime(2026, 8, 31, 19, 50, tzinfo=timezone.utc),
+    )
+
+    assert 'TEXT 31,10,"0",0,16,16,"MANGA:"' in tspl
+    assert 'TEXT 99,4,"0",0,24,24,"OF000017-OT007-M003"' in tspl
+    assert 'PZA: Asa fucsia' in tspl
+    assert 'COLOR: FUCSIA SOLIDO' in tspl
+    assert 'BAR 31,74,384,2' in tspl
+    assert 'OP: OP0297' in tspl
+    assert 'MAQUINA: HT-360 A' in tspl
+    assert 'TIPO MANGA: Manga estandar' in tspl
+    assert tspl.index('OP: OP0297') < tspl.index('MAQUINA: HT-360 A')
+    assert tspl.index('MAQUINA: HT-360 A') < tspl.index(
+        'TIPO MANGA: Manga estandar'
+    )
+    assert 'TURNO: DIA' in tspl
+    assert 'F.OT ORIG.: 2026-07-28' in tspl
+    assert 'OPE: Juan Perez' in tspl
+    assert 'IMP: 31/08/2026 14:50' in tspl
+    assert 'KG TEORICOS: 7.440 kg' in tspl
+    assert "OF/OT:" not in tspl
+    assert "CANT.:" not in tspl
+    assert 'font-size="24"' in svg
+    assert svg.count('font-size="16"') == 22
+
+
+def test_preetiqueta_v5_omite_fila_op_en_orden_excepcional():
+    label = _color_work_label("OF000017-OT007-M003")
+    label["payload"].pop("op")
+
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "OP:" not in tspl
+    assert "PZA: Asa fucsia" in tspl
 
 
 def test_armado_renderiza_oa_ot_sin_perder_la_identidad():
@@ -110,23 +269,35 @@ def test_armado_renderiza_oa_ot_sin_perder_la_identidad():
     assert "OA/OT: OA-000321 - OT-000777" in svg
 
 
-def test_dos_columnas_contienen_identidades_distintas():
+def test_dos_identidades_generan_dos_hojas_duplicadas():
     left = _label("OP0084-OT001-M001")
     right = deepcopy(_label("OP0084-OT001-M002"))
     tspl = ScmPrelabelService().generate_tspl({
         "labels": [left, right]
     })
 
-    assert tspl.count("QRCODE") == 2
+    assert tspl.count("QRCODE") == 4
+    assert tspl.count("PRINT 1,1") == 2
     assert "OP0084-OT001-M001" in tspl
     assert "OP0084-OT001-M002" in tspl
     assert left["payload"]["qr"]["label_id"] in tspl
     assert right["payload"]["qr"]["label_id"] in tspl
 
 
+@pytest.mark.parametrize("labels", [
+    [_label("OF0014-OT006-M009")],
+    [_label("OF0014-OT006-M009"), _label("OF0014-OT006-M010")],
+])
+def test_tspl_termina_el_ultimo_print_con_crlf(labels):
+    tspl = ScmPrelabelService().generate_tspl({"labels": labels})
+
+    assert tspl.endswith("PRINT 1,1\r\n")
+
+
 def test_preview_web_respeta_hoja_fisica_y_genera_qr():
+    label = _label("OP0084-OT001-M001")
     svg = ScmPrelabelService().generate_preview_svg(
-        {"labels": [_label("OP0084-OT001-M001")]},
+        {"labels": [label]},
         printed_at=datetime(2026, 7, 28, 12, 30, tzinfo=timezone.utc),
     )
 
@@ -134,8 +305,104 @@ def test_preview_web_respeta_hoja_fisica_y_genera_qr():
     assert 'width="109mm" height="50mm"' in svg
     assert "OP0084-OT001-M001" in svg
     assert "data:image/png;base64," in svg
-    assert 'width="120" height="120"' in svg
-    assert "COLUMNA LIBRE" in svg
+    qr_size = _qr_size_dots(label["payload"])
+    assert f'width="{qr_size}" height="{qr_size}"' in svg
+    assert svg.count("OP0084-OT001-M001") == 2
+
+
+def test_postpesaje_no_crea_segundo_qr_y_declara_utf8_para_nombre_acentuado():
+    label = _post_weighing_label("OF000900-OT001-M001")
+    service = ScmPrelabelService()
+
+    tspl = service.generate_tspl({"labels": [label]})
+    svg = service.generate_preview_svg({"labels": [label]})
+
+    assert "QRCODE" not in tspl
+    assert "data:image/png;base64," not in svg
+    assert "CODEPAGE UTF-8" in tspl
+    assert "MAQUINISTA: Cristóbal Lázaro" in tspl
+    assert "MAQUINISTA: Cristóbal Lázaro" in svg
+    assert "Cristóbal Lázaro".encode("utf-8") in tspl.encode("utf-8")
+    assert "CONTEO TEORICO: 100 UN" in tspl
+    assert "CONTEO TEORICO: 100 UN" in svg
+    assert "CONTEO FINAL" not in tspl
+
+
+def test_postpesaje_armado_declara_peso_neto_final_sin_siglas_ambiguas():
+    label = _post_weighing_assembly_label("OA000321-OT777-M001")
+    service = ScmPrelabelService()
+
+    tspl = service.generate_tspl({"labels": [label]})
+    svg = service.generate_preview_svg({"labels": [label]})
+
+    assert "PESO NETO FINAL (kg)" in tspl
+    assert "PESO NETO FINAL (kg)" in svg
+    assert '"8.950"' in tspl
+    assert "KG OT:" not in tspl
+    assert "KG OT:" not in svg
+    assert "KG FIS.:" not in tspl
+    assert "KG FIS.:" not in svg
+    assert "CONTEO CONFIRMADO: 100 UN" in tspl
+    assert "CONTEO CONFIRMADO: 100 UN" in svg
+
+
+def test_postpesaje_v5_omite_peso_fabricado_si_no_hay_atribucion_actual():
+    label = _post_weighing_assembly_label("OA000321-OT777-M001")
+    label["payload"]["template"] = {"version": "POSTPESAJE_TSPL_5"}
+    label["payload"].pop("peso_fabricado_teorico_kg", None)
+
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "PESO FABRICADO TEORICO" not in tspl
+
+
+def test_postpesaje_v5_anterior_sin_fuente_no_afirma_conteo_fisico():
+    label = _post_weighing_label("OF000900-OT001-M001")
+    label["payload"].pop("fuente_cantidad")
+    label["payload"]["template"] = {"version": "POSTPESAJE_TSPL_5"}
+
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "CONTEO TEORICO: 100 UN" in tspl
+    assert "CONTEO FINAL" not in tspl
+
+
+def test_postpesaje_fabricacion_distingue_neto_aporte_y_peso_fabricado():
+    label = _post_weighing_label("OF000900-OT001-M001")
+    tspl = ScmPrelabelService().generate_tspl({"labels": [label]})
+
+    assert "PESO NETO FINAL (kg)" in tspl
+    assert "APORTE ULTIMO TRAMO (kg)" in tspl
+    assert "PESO FABRICADO TEORICO (kg): 8.750" in tspl
+    assert tspl.index("PESO FABRICADO TEORICO") < tspl.index(
+        "APORTE ULTIMO TRAMO"
+    )
+    assert "PESO ESTANDAR SEGUN UNIDADES" not in tspl
+    assert "KG FIS.:" not in tspl
+    assert "KG OT:" not in tspl
+
+
+@pytest.mark.parametrize("labels", [
+    [_control_weight_label("OF0014-OT006-M009")],
+    [
+        _control_weight_label("OF0014-OT006-M009"),
+        _control_weight_label("OF0014-OT006-M010"),
+    ],
+])
+def test_control_sin_qr_prioriza_neto_aporte_y_termina_con_crlf(labels):
+    service = ScmPrelabelService()
+    job = {"labels": labels}
+
+    tspl = service.generate_tspl(job)
+    svg = service.generate_preview_svg(job)
+
+    assert "CONTROL · CONTINUA ABIERTA" in tspl
+    assert "PESO NETO REAL (kg)" in tspl
+    assert "APORTE DESDE CONTROL ANTERIOR (kg)" in tspl
+    assert "PESO ESTANDAR SEGUN UNIDADES" not in tspl
+    assert "QRCODE" not in tspl
+    assert "data:image/png;base64," not in svg
+    assert tspl.endswith("PRINT 1,1\r\n")
 
 
 def test_bandeja_y_preview_consultan_central_sin_reclamar():

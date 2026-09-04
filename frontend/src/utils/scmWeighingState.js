@@ -19,7 +19,7 @@ function legacyBlocker(context) {
 
 // Button and F2 eligibility share this state. Central capabilities remain authoritative.
 export function getWeighingState({ context, busy, result, centralAvailable, listening,
-  closeManga, peso, tare, net, lastControlNet, validPartialClose, partialClose, error,
+  controlOnly, peso, tare, net, lastControlNet, validPartialClose, partialClose, error,
   scanConsumed }) {
   if (busy) return state('waiting', 'Operación en curso', 'Espere la respuesta; no retire ni cambie la manga.');
   if (result) return state('success', 'Cierre registrado · manga cerrada', 'Revise el resultado de impresión y escanee la siguiente manga.');
@@ -32,14 +32,14 @@ export function getWeighingState({ context, busy, result, centralAvailable, list
   if (!context) return error
     ? state('error', 'Etiqueta no disponible', 'Revise el rechazo indicado y escanee una preetiqueta válida. No hay una manga seleccionada.')
     : state('waiting', 'Escanee el QR de PREPESAJE', 'El escaneo consulta la manga; no registra un pesaje.');
-  const action = closeManga ? 'completar_final' : 'registrar_avance_kg';
-  const allowed = closeManga ? context.can_weigh : context.can_register_weight_control;
+  const action = controlOnly ? 'registrar_avance_kg' : 'completar_final';
+  const allowed = controlOnly ? context.can_register_weight_control : context.can_weigh;
   if (!allowed) {
-    if (!closeManga && context.can_weigh) {
+    if (!controlOnly && context.can_register_weight_control) {
       return state(
         'waiting',
-        'Seleccione cierre final para continuar',
-        'Esta manga no admite controles. Marque Cerrar manga en este pesaje y revise la confirmación.',
+        'Seleccione control de peso para continuar',
+        'Esta manga no admite cierre final en su estado actual. Marque Solo control de peso y vuelva a revisar F2.',
       );
     }
     const reason = context.bloqueos_pesaje?.[action]
@@ -65,9 +65,9 @@ export function getWeighingState({ context, busy, result, centralAvailable, list
   }
   if (error) return { ...state('error', 'Último intento sin confirmar',
     'Reintente con el mismo botón: se conserva la operación. Para revisar el estado en Central, vuelva a escanear.'), ready: true };
-  return closeManga
-    ? state('ready', 'Cierre final seleccionado', 'F2 abrirá una confirmación antes de cerrar la manga.')
-    : state('ready', 'Listo para control de peso', 'Se registrarán kg acumulados. La manga continuará abierta, sin cambiar maquinista ni OT.');
+  return controlOnly
+    ? state('ready', 'Listo para control de peso', 'Se registrarán kg acumulados. La manga continuará abierta, sin cambiar maquinista ni OT.')
+    : state('ready', 'Listo para cierre final', 'F2 abrirá una confirmación antes de cerrar la manga.');
 }
 
 export function mangaStateLabel(value) {

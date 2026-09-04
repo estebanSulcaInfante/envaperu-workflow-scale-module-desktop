@@ -33,17 +33,22 @@ describe('estado visible y habilitación usan las mismas reglas', () => {
       manga: { trabajo_color: { estado: 'PAUSADO' } } } }).ready).toBe(true);
   });
   it('explica el efecto de control y no lo convierte en relevo', () => {
-    expect(getWeighingState({ ...input, closeManga: false }).recovery)
+    expect(getWeighingState({ ...input, controlOnly: true }).recovery)
       .toContain('sin cambiar maquinista ni OT');
   });
-  it('exige seleccionar cierre si Central no admite controles', () => {
+  it('exige seleccionar control si Central no admite cierre final', () => {
     const result = getWeighingState({
       ...input,
-      context: { ...input.context, can_register_weight_control: false },
-      closeManga: false,
+      context: { ...input.context, can_weigh: false },
+      controlOnly: false,
     });
     expect(result.ready).toBe(false);
-    expect(result.title).toBe('Seleccione cierre final para continuar');
+    expect(result.title).toBe('Seleccione control de peso para continuar');
+  });
+  it('usa cierre final como intención inicial cuando Central lo permite', () => {
+    const result = getWeighingState({ ...input, controlOnly: false });
+    expect(result.ready).toBe(true);
+    expect(result.title).toBe('Listo para cierre final');
   });
   it('permite reintentar sin comunicar listo ni éxito falso tras un error', () => {
     const result = getWeighingState({ ...input, error: 'Conexión perdida' });

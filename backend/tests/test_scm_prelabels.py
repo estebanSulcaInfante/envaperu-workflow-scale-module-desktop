@@ -204,12 +204,15 @@ def test_qr_compacto_reduce_version_y_reserva_zona_silenciosa():
     service = ScmPrelabelService()
 
     qr = service._qr_code(label["payload"])
+    qr_text = service._qr_text(label["payload"])
     tspl = service.generate_tspl({"labels": [label]})
 
     assert qr.version == 4
     assert qr.modules_count == 33
     assert service.QR_GAP_Y == 4 * service.QR_MODULE_DOTS
     assert "QRCODE 158,240,L,4,A,0," in tspl
+    assert qr_text.replace('"', '\\[\"]') in tspl
+    assert '\\"label_id\\"' not in tspl
 
 
 def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
@@ -225,8 +228,8 @@ def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
         printed_at=datetime(2026, 8, 31, 19, 50, tzinfo=timezone.utc),
     )
 
-    assert 'TEXT 31,10,"0",0,16,16,"MANGA:"' in tspl
-    assert 'TEXT 99,4,"0",0,24,24,"OF000017-OT007-M003"' in tspl
+    assert 'TEXT 31,10,"0",0,6,6,"MANGA:"' in tspl
+    assert 'TEXT 99,4,"0",0,9,9,"OF000017-OT007-M003"' in tspl
     assert 'PZA: Asa fucsia' in tspl
     assert 'COLOR: FUCSIA SOLIDO' in tspl
     assert 'BAR 31,74,384,2' in tspl
@@ -246,6 +249,12 @@ def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
     assert "CANT.:" not in tspl
     assert 'font-size="24"' in svg
     assert svg.count('font-size="16"') == 22
+
+    scalable_sizes = re.findall(
+        r'TEXT \d+,\d+,"0",0,(\d+),(\d+),',
+        tspl,
+    )
+    assert set(scalable_sizes) == {("6", "6"), ("9", "9")}
 
 
 def test_preetiqueta_v5_omite_fila_op_en_orden_excepcional():

@@ -28,7 +28,8 @@ def _tspl_quoted(value, limit=600):
     return (
         str(value or "")[:limit]
         .replace("\\", "\\\\")
-        .replace('"', '\\"')
+        # QRCODE data uses TSC's bracket escape for embedded double quotes.
+        .replace('"', '\\[\"]')
     )
 
 
@@ -56,13 +57,21 @@ class ScmPrelabelService:
         "PREPESAJE_TSPL_4",
         "PREPESAJE_TSPL_5",
     }
-    COMPACT_GENERAL_SIZE = 16
-    COMPACT_MANGA_SIZE = 24
+    # SVG coordinates are printer dots, but TSPL font "0" receives points.
+    # Keeping both units separate prevents 16/24 preview dots from becoming
+    # physically oversized 16/24-point text on the 203 dpi TE200.
+    COMPACT_GENERAL_DOTS = 16
+    COMPACT_MANGA_DOTS = 24
+    PRINTER_DPI = 203
     COMPACT_MANGA_CODE_X = 75
     COMPACT_ROW_START_Y = 40
     COMPACT_LINE_HEIGHT = 17
     COMPACT_SEPARATOR_Y = 224
     COMPACT_QR_Y = 240
+
+    @classmethod
+    def _dots_to_tspl_points(cls, dots):
+        return max(1, round(dots * 72 / cls.PRINTER_DPI))
 
     def __init__(self, *, client=None, printer=None):
         self.client = client
@@ -362,6 +371,10 @@ class ScmPrelabelService:
         qr_text = self._qr_text(payload)
         qr_size = self._qr_code(payload).modules_count * self.QR_MODULE_DOTS
         qr_x = x + (self.STICKER_WIDTH - qr_size) // 2
+        general_points = self._dots_to_tspl_points(
+            self.COMPACT_GENERAL_DOTS
+        )
+        manga_points = self._dots_to_tspl_points(self.COMPACT_MANGA_DOTS)
         if self.COMPACT_QR_Y + qr_size > self.LABEL_HEIGHT_DOTS:
             raise ValueError(
                 "El QR SCM excede la altura fisica disponible de la etiqueta"
@@ -369,12 +382,12 @@ class ScmPrelabelService:
         commands = [
             f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
             (
-                f'TEXT {x + 7},10,"0",0,{self.COMPACT_GENERAL_SIZE},'
-                f'{self.COMPACT_GENERAL_SIZE},"MANGA:"'
+                f'TEXT {x + 7},10,"0",0,{general_points},'
+                f'{general_points},"MANGA:"'
             ),
             (
                 f'TEXT {x + self.COMPACT_MANGA_CODE_X},4,"0",0,'
-                f'{self.COMPACT_MANGA_SIZE},{self.COMPACT_MANGA_SIZE},'
+                f'{manga_points},{manga_points},'
                 f'"{_safe(payload.get("codigo_manga"), 24)}"'
             ),
         ]
@@ -387,8 +400,8 @@ class ScmPrelabelService:
                 y += 5
                 continue
             commands.append(
-                f'TEXT {x + 7},{y},"0",0,{self.COMPACT_GENERAL_SIZE},'
-                f'{self.COMPACT_GENERAL_SIZE},'
+                f'TEXT {x + 7},{y},"0",0,{general_points},'
+                f'{general_points},'
                 f'"{label}: {_safe(value, 46)}"'
             )
             y += self.COMPACT_LINE_HEIGHT
@@ -457,12 +470,12 @@ class ScmPrelabelService:
             f'height="396" rx="4" fill="white" stroke="#111" '
             'stroke-width="2"/>',
             f'<text x="{x + 7}" y="29" font-family="Arial, sans-serif" '
-            f'font-size="{self.COMPACT_GENERAL_SIZE}" font-weight="700">'
+            f'font-size="{self.COMPACT_GENERAL_DOTS}" font-weight="700">'
             'MANGA:</text>',
             (
                 f'<text x="{x + self.COMPACT_MANGA_CODE_X}" y="31" '
                 'font-family="Arial Narrow, Arial, sans-serif" '
-                f'font-size="{self.COMPACT_MANGA_SIZE}" font-weight="900">'
+                f'font-size="{self.COMPACT_MANGA_DOTS}" font-weight="900">'
                 f'{escape(_safe(payload.get("codigo_manga"), 24))}</text>'
             ),
         ]
@@ -480,7 +493,7 @@ class ScmPrelabelService:
             parts.append(
                 f'<text x="{x + 7}" y="{y}" '
                 'font-family="Arial, sans-serif" '
-                f'font-size="{self.COMPACT_GENERAL_SIZE}" font-weight="700">'
+                f'font-size="{self.COMPACT_GENERAL_DOTS}" font-weight="700">'
                 f'{escape(f"{label}: {_safe(value, 46)}")}</text>'
             )
             y += self.COMPACT_LINE_HEIGHT

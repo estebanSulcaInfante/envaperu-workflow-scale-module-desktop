@@ -11,11 +11,9 @@ import CerrarOps from './components/CerrarOps';
 import CentralStatusBadge from './components/CentralStatusBadge';
 import ScmPrelabels from './components/ScmPrelabels';
 import ScmWeighing from './components/ScmWeighing';
-import ScmInventoryOpening from './components/ScmInventoryOpening';
-import ScmPreparedMaterialWeighing from './components/ScmPreparedMaterialWeighing';
 import ScmModuleContext from './components/ScmModuleContext';
 import ScmProductionHome from './components/ScmProductionHome';
-import LegacyModuleHome from './components/LegacyModuleHome';
+import StationNavigation from './components/StationNavigation';
 import { calculateWeightAdjustment } from './utils/weightAdjustment';
 import { stationModuleFromTab, stationNavigationFromSearch } from './utils/scmNavigation';
 
@@ -516,54 +514,11 @@ function App() {
         </section>
       )}
 
-      {/* Navigation kept split while SCM and the temporary legacy flow coexist. */}
-      <nav className="tab-nav" aria-label="Flujos del módulo de pesaje">
-        <div className="tab-group tab-group-legacy" aria-label="Flujo legacy temporal">
-          <span className="tab-group-label tab-group-label-legacy">Legacy temporal</span>
-          <div className="tab-group-actions">
-            <button
-              className={`tab-btn ${activeModule === 'legacy' ? 'active' : ''}`}
-              aria-current={activeModule === 'legacy' ? 'page' : undefined}
-              onClick={() => setActiveTab('legacy-home')}
-            >
-              Sistema anterior
-            </button>
-          </div>
-        </div>
-
-        <div className="tab-group tab-group-scm" aria-label="Nuevo flujo SCM">
-          <span className="tab-group-label tab-group-label-scm">Nuevo · SCM</span>
-          <div className="tab-group-actions">
-            <button
-              className={`tab-btn ${activeModule === 'production' ? 'active' : ''}`}
-              aria-current={activeModule === 'production' ? 'page' : undefined}
-              onClick={() => setActiveTab('scm-production')}
-            >
-              Producción
-            </button>
-            <button
-              className={`tab-btn ${activeModule === 'preparation' ? 'active' : ''}`}
-              aria-current={activeModule === 'preparation' ? 'page' : undefined}
-              onClick={() => setActiveTab('scm-prepared-material')}
-            >
-              Preparación
-            </button>
-            <button
-              className={`tab-btn ${activeModule === 'inventory' ? 'active' : ''}`}
-              aria-current={activeModule === 'inventory' ? 'page' : undefined}
-              onClick={() => setActiveTab('scm-inventory-opening')}
-            >
-              Inventario
-            </button>
-          </div>
-        </div>
-      </nav>
-
-      {activeTab === 'legacy-home' && (
-        <main className="main-content avance-full">
-          <LegacyModuleHome onNavigate={setActiveTab} />
-        </main>
-      )}
+      <StationNavigation
+        activeTab={activeTab}
+        activeModule={activeModule}
+        onNavigate={setActiveTab}
+      />
 
       {/* ========== TAB 1: CREAR OT ========== */}
       {activeTab === 'crear-ot' && (
@@ -708,30 +663,6 @@ function App() {
       {activeTab === 'scm-production' && (
         <main className="main-content avance-full">
           <ScmProductionHome onNavigate={setActiveTab} />
-        </main>
-      )}
-
-      {activeTab === 'scm-inventory-opening' && (
-        <main className="main-content avance-full">
-          <ScmModuleContext module="inventory" view="Apertura física" onNavigate={setActiveTab} />
-          <ScmInventoryOpening
-            peso={peso}
-            listening={listening}
-            simulationEnabled={scaleSimulationEnabled}
-            onSimulateWeight={handleSimulateWeight}
-          />
-        </main>
-      )}
-
-      {activeTab === 'scm-prepared-material' && (
-        <main className="main-content avance-full">
-          <ScmModuleContext module="preparation" view="Pesaje OPM" onNavigate={setActiveTab} />
-          <ScmPreparedMaterialWeighing
-            peso={peso}
-            listening={listening}
-            simulationEnabled={scaleSimulationEnabled}
-            onSimulateWeight={handleSimulateWeight}
-          />
         </main>
       )}
 

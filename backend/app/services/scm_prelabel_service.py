@@ -408,7 +408,7 @@ class ScmPrelabelService:
                 f'{general_points},"MANGA:"'
             ),
             (
-                f'TEXT {x + self.COMPACT_MANGA_CODE_X},4,"2",0,1,1,'
+                f'TEXT {x + self.COMPACT_MANGA_CODE_X},12,"2",0,1,1,'
                 f'"{_safe(payload.get("codigo_manga"), 24)}"'
             ),
         ]

@@ -229,7 +229,9 @@ def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
     )
 
     assert 'TEXT 31,10,"0",0,6,6,"MANGA:"' in tspl
-    assert 'TEXT 99,4,"2",0,1,1,"OF000017-OT007-M003"' in tspl
+    # Both copies need the same 12-dot top inset as the weighing sticker.
+    for x in (99, 539):
+        assert f'TEXT {x},12,"2",0,1,1,"OF000017-OT007-M003"' in tspl
     assert 'PZA: Asa fucsia' in tspl
     assert 'COLOR: FUCSIA SOLIDO' in tspl
     assert 'BAR 31,74,384,2' in tspl

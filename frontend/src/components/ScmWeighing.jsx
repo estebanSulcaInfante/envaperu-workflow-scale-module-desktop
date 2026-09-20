@@ -238,6 +238,7 @@ export default function ScmWeighing({
   };
 
   const submitWeighing = () => {
+    if (!canSubmit) return;
     if (controlOnly) {
       recordControl();
       return;
@@ -279,7 +280,7 @@ export default function ScmWeighing({
       }
       if (event.key === 'F2') {
         event.preventDefault();
-        if (closeConfirmationOpen || event.repeat) return;
+        if (closeConfirmationOpen || event.repeat || !canSubmit) return;
         submitWeighing();
       }
     };

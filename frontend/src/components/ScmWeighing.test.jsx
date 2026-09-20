@@ -180,6 +180,7 @@ describe('ScmWeighing', () => {
   it.each([
     ['PESADA', 'Manga cerrada', 'Escanee otra manga. Si el cierre fue incorrecto, solicite revisión en Central.'],
     ['PREETIQUETADA', 'Trabajo de la OT sin iniciar', 'Solicite a Central iniciar el Trabajo de la OT y vuelva a escanear.'],
+    ['ANULADA', 'Manga anulada', 'Solicite revisión en Central.'],
   ])('explica el bloqueo %s junto al único botón sin permitir F2', async (estado, mensaje, recuperacion) => {
     scmWeighingApi.resolve.mockResolvedValue({ data: {
       ...context, can_weigh: false, can_register_weight_control: false,
@@ -193,6 +194,7 @@ describe('ScmWeighing', () => {
     expect(screen.getByText(recuperacion)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Pesar manga (F2)' }).disabled).toBe(true);
     fireEvent.keyDown(window, { key: 'F2' });
+    expect(screen.queryByRole('dialog', { name: 'Confirmar cierre final' })).toBeNull();
     expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
     expect(scmWeighingApi.control).not.toHaveBeenCalled();
   });

@@ -1,5 +1,5 @@
 # SHA-256 del JSON canónico normalizado (claves ordenadas, separadores compactos, UTF-8).
-a202ffe2812ec36615a2af7ebadf6dd979ae5266db8ed635d28bcd93065af3ac  station-capabilities-v1/contract.schema.json
+9731d20776ed521b86da521435c0f171aea5079d3e2030c8e4457bcf6eb53e15  station-capabilities-v1/contract.schema.json
 d097cccb62c459dd7f816b88d4c847eb2e2bb393c631414c11f8bbb4bbfaffcb  station-capabilities-v1/examples.json
 aac2756a7300a926c9a08a8756f1c6d4b0cb23bc6d6aab88a4fa79d8136972dc  station-heartbeat-v1/contract.schema.json
 7039f2290faa2f85c18fbdabd7c6e30f112dae0b8820c1208722a508a8407f9b  station-heartbeat-v1/examples.json

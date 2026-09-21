@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.envaperu.local/station/capabilities/v1/contract.schema.json",
   "title": "EnvaPeru station capabilities v1",
+  "$comment": "Esquema de aceptación del consumidor de estación: conserva obligatorias las capacidades v1 conocidas y admite extensiones futuras tipadas publicadas por Central.",
   "$defs": {
     "response": {
       "type": "object",
@@ -19,7 +20,10 @@
         "minimum_station_version": {"type": "string", "minLength": 1},
         "supported_contracts": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
           "required": [
             "heartbeat",
             "catalog",
@@ -61,7 +65,7 @@
         },
         "features": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": {"type": "boolean"},
           "required": [
             "monitoring",
             "catalog_snapshot",

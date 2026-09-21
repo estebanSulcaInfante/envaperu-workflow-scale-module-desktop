@@ -1,6 +1,7 @@
-import uuid
+import copy
 import hashlib
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -251,6 +252,36 @@ def test_contract_copies_match_pinned_canonical_hashes():
             consumer = backend_root / "contracts" / contract / filename
             relative = f"{contract}/{filename}"
             assert _semantic_json_sha256(consumer) == expected_hashes[relative]
+
+
+def test_capabilities_accepts_forward_compatible_contracts_and_features():
+    payload = FakeCentralClient().get_capabilities()
+    payload["supported_contracts"]["kg_return_weighing"] = [
+        "scm-kg-return-weighing-v1"
+    ]
+    payload["features"]["scm_kg_return_weighing"] = True
+
+    MonitoringService._validate_capabilities(payload)
+
+    incomplete = copy.deepcopy(payload)
+    del incomplete["supported_contracts"]["heartbeat"]
+    with pytest.raises(CentralApiError, match="supported_contracts"):
+        MonitoringService._validate_capabilities(incomplete)
+
+    invalid_contract_extension = copy.deepcopy(payload)
+    invalid_contract_extension["supported_contracts"]["new_contract"] = [
+        "valid-contract",
+        17,
+    ]
+    with pytest.raises(CentralApiError) as contract_error:
+        MonitoringService._validate_capabilities(invalid_contract_extension)
+    assert contract_error.value.state == "CENTRAL_INCOMPATIBLE"
+
+    invalid_feature_extension = copy.deepcopy(payload)
+    invalid_feature_extension["features"]["new_feature"] = "enabled"
+    with pytest.raises(CentralApiError) as feature_error:
+        MonitoringService._validate_capabilities(invalid_feature_extension)
+    assert feature_error.value.state == "CENTRAL_INCOMPATIBLE"
 
 
 def test_station_token_store_never_writes_plaintext(tmp_path, monkeypatch):

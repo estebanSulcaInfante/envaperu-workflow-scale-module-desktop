@@ -55,6 +55,7 @@ export default function ScmWeighing({
   const controlOperationIdRef = useRef(null);
   const scannerInputRef = useRef(null);
   const closeCancelRef = useRef(null);
+  const closeF2ReleasedRef = useRef(false);
   const requestInFlightRef = useRef(false);
   const online = centralState === 'ONLINE';
   const centralAvailable = online || simulationEnabled || portfolioDemoMode;
@@ -93,6 +94,15 @@ export default function ScmWeighing({
     || 'Sin asignación vigente';
   const tare = Number(context?.manga?.tara_nominal_kg || 0);
   const net = Math.max(0, Number(peso || 0) - tare);
+  const continuitySnapshot = context?.continuidad ?? {};
+  const hasLastControlKey = Object.prototype.hasOwnProperty.call(
+    continuitySnapshot,
+    'ultimo_control',
+  );
+  const closeDirect = Boolean(
+    !controlOnly && context?.can_weigh && hasLastControlKey
+      && continuitySnapshot.ultimo_control === null,
+  );
   const lastControlNet = Number(controlResult?.control?.peso_neto_kg
     ?? context?.continuidad?.ultima_referencia_peso?.peso_neto_kg
     ?? context?.continuidad?.ultimo_control?.peso_neto_kg ?? 0);
@@ -101,7 +111,8 @@ export default function ScmWeighing({
     Math.round(net * 1000) - Math.round(lastControlNet * 1000)
   ) / 1000;
   const weighingState = getWeighingState({ context, busy, result, centralAvailable,
-    listening, controlOnly, peso, tare, net, lastControlNet, validPartialClose: true,
+    listening, controlOnly, peso, tare, net,
+    lastControlNet, validPartialClose: true,
     partialClose: false, error, scanConsumed });
   const canSubmit = weighingState.ready;
   const canConfirm = canSubmit && !controlOnly;
@@ -130,6 +141,7 @@ export default function ScmWeighing({
       setContext(data);
       setControlOnly(false);
       setCloseConfirmationOpen(false);
+      closeF2ReleasedRef.current = false;
       setScanConsumed(false);
       setControlResult(null);
       setImageFailed(false);
@@ -243,12 +255,18 @@ export default function ScmWeighing({
       recordControl();
       return;
     }
+    if (closeDirect) {
+      confirm();
+      return;
+    }
+    closeF2ReleasedRef.current = false;
     setCloseConfirmationOpen(true);
   };
 
   const cancelCloseConfirmation = () => {
     if (busy) return;
     setCloseConfirmationOpen(false);
+    closeF2ReleasedRef.current = false;
     setControlOnly(false);
     operationIdRef.current = null;
     focusScanner();
@@ -280,14 +298,30 @@ export default function ScmWeighing({
       }
       if (event.key === 'F2') {
         event.preventDefault();
-        if (closeConfirmationOpen || event.repeat || !canSubmit) return;
+        if (event.repeat) return;
+        if (closeConfirmationOpen) {
+          if (busy || !closeF2ReleasedRef.current) return;
+          closeF2ReleasedRef.current = false;
+          confirm();
+          return;
+        }
+        if (!canSubmit) return;
         submitWeighing();
       }
     };
+    const onKeyUp = (event) => {
+      if (event.key === 'F2' && closeConfirmationOpen) {
+        closeF2ReleasedRef.current = true;
+      }
+    };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, [canSubmit, context, busy, controlOnly, closeConfirmationOpen,
-    scanConsumed]);
+    scanConsumed, closeDirect]);
 
   useEffect(() => {
     if (closeConfirmationOpen) closeCancelRef.current?.focus();
@@ -515,7 +549,9 @@ export default function ScmWeighing({
                   {controlOnly
                     ? 'Excepción seleccionada · la manga continuará abierta.'
                     : context?.can_weigh
-                      ? 'Modo habitual · la manga se cerrará únicamente después de confirmar.'
+                      ? closeDirect
+                        ? 'Sin control previo registrado · F2 cerrará directamente la manga.'
+                        : 'Control previo o historial desconocido · F2 abre una guarda antes de cerrar.'
                       : 'Esta manga no admite cierre final; seleccione el control para habilitar F2.'}
                 </span>
               </div>
@@ -538,7 +574,9 @@ export default function ScmWeighing({
                 {controlOnly
                   ? 'Solo kg. No cambia maquinista, turno ni OT; no crea inventario.'
                   : context?.can_weigh
-                    ? 'No es un control. Se emitirá el comprobante final y la manga dejará de admitir peso.'
+                    ? closeDirect
+                      ? 'Sin control previo registrado. F2 cerrará directamente la manga.'
+                      : 'Control previo o historial desconocido. F2 abre la guarda; suelte y pulse F2 nuevamente para confirmar.'
                     : 'F2 permanecerá bloqueado hasta seleccionar el control de peso.'}
               </span>
               {controlResult && (
@@ -594,7 +632,12 @@ export default function ScmWeighing({
           )}
           <div id="scm-weighing-state" className={`scm-f2-state ${weighingState.kind}`} aria-live="polite" aria-atomic="true">
             <strong>{weighingState.title}</strong>
-            <span>{weighingState.recovery}</span>
+            <span>{!controlOnly && closeDirect
+              ? 'F2 cerrará directamente esta manga sin diálogo.'
+              : !controlOnly && weighingState.ready
+                ? 'Primer F2 abre la guarda; suelte y pulse F2 nuevamente para confirmar.'
+                : weighingState.recovery}
+            </span>
           </div>
           <button
             className="btn btn-primary scm-f2-button"
@@ -648,7 +691,7 @@ export default function ScmWeighing({
                     {busy ? 'Cerrando…' : 'Confirmar cierre de manga'}
                   </button>
                 </div>
-                <small>F2 no confirma esta ventana. Use la acción explícita.</small>
+                <small>F2 confirma solo después de soltar la tecla; también puede usar el botón explícito.</small>
               </div>
             </div>
           )}

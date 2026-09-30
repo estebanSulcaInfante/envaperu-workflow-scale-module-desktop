@@ -99,6 +99,227 @@ describe('ScmWeighing', () => {
     expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
   });
 
+  it('K10-01 cierra directamente al primer F2 cuando ultimo_control es null', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: { ...context, continuidad: { ultimo_control: null } },
+    });
+    scmWeighingApi.confirm.mockResolvedValue({
+      data: {
+        confirmed: { weighing: { estado_manga: 'PESADA', peso_fisico_neto_kg: '10.000' } },
+        print_result: { result: 'IMPRESA' },
+      },
+    });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-sin-control' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+
+    fireEvent.keyDown(window, { key: 'F2' });
+
+    await waitFor(() => expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog', { name: 'Confirmar cierre final' })).toBeNull();
+  });
+
+  it('K10-02 exige keyup entre los dos F2 cuando existe control previo', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: {
+        ...context,
+        continuidad: { ultimo_control: { tipo: 'AVANCE_KG', peso_neto_kg: '8.000' } },
+      },
+    });
+    scmWeighingApi.confirm.mockResolvedValue({
+      data: {
+        confirmed: { weighing: { estado_manga: 'PESADA' } },
+        print_result: { result: 'IMPRESA' },
+      },
+    });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-con-control' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+    fireEvent.keyDown(window, { key: 'F2' });
+    await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: 'F2' });
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+    fireEvent.keyUp(window, { key: 'F2' });
+    fireEvent.keyDown(window, { key: 'F2' });
+    await waitFor(() => expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(1));
+  });
+
+  it('K10-03 ignora F2 repetido mientras la guarda sigue sin keyup', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: { ...context, continuidad: { ultimo_control: { tipo: 'CORTE_TURNO' } } },
+    });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-tecla-sostenida' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+    fireEvent.keyDown(window, { key: 'F2' });
+    await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
+
+    fireEvent.keyDown(window, { key: 'F2', repeat: true });
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+  });
+
+  it('K10-05 trata la clave ausente como historial desconocido y abre la guarda', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({ data: { ...context, continuidad: {} } });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-sin-clave' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+    fireEvent.keyDown(window, { key: 'F2' });
+
+    expect(await screen.findByRole('dialog', { name: 'Confirmar cierre final' })).toBeTruthy();
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+  });
+
+  it('K10-05 permite cierre directo de CIERRE_REABIERTO sin control previo', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: {
+        ...context,
+        continuidad: {
+          ultimo_control: null,
+          ultima_referencia_peso: { fuente: 'CIERRE_REABIERTO', peso_neto_kg: '9.000' },
+        },
+        manga: { ...context.manga, estado: 'CIERRE_REABIERTO' },
+      },
+    });
+    scmWeighingApi.confirm.mockResolvedValue({
+      data: {
+        confirmed: { weighing: { estado_manga: 'PESADA' } },
+        print_result: { result: 'IMPRESA' },
+      },
+    });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-reabierto' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+    fireEvent.keyDown(window, { key: 'F2' });
+
+    await waitFor(() => expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog', { name: 'Confirmar cierre final' })).toBeNull();
+  });
+
+  it('K10-05 conserva la guarda monotónica de CIERRE_REABIERTO aunque ultimo_control sea null', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: {
+        ...context,
+        continuidad: {
+          ultimo_control: null,
+          ultima_referencia_peso: { fuente: 'CIERRE_REABIERTO', peso_neto_kg: '12.000' },
+        },
+        manga: { ...context.manga, estado: 'CIERRE_REABIERTO' },
+      },
+    });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-reabierto-sin-aumento' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Sin aumento desde el último control');
+
+    fireEvent.keyDown(window, { key: 'F2' });
+
+    expect(screen.queryByRole('dialog', { name: 'Confirmar cierre final' })).toBeNull();
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+    expect(scmWeighingApi.control).not.toHaveBeenCalled();
+  });
+
+  it('K10-04 registra control directo con F2 sin abrir diálogo', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({ data: { ...context, continuidad: {} } });
+    scmWeighingApi.control.mockResolvedValue({
+      data: {
+        control: { tipo: 'AVANCE_KG', peso_neto_kg: '10.000', aporte_desde_control_anterior_kg: '10.000' },
+        manga: { estado: 'EN_LLENADO' },
+        print_result: { result: 'IMPRESA' },
+      },
+    });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-control-directo' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+    fireEvent.click(screen.getByLabelText('Solo control de peso'));
+    fireEvent.keyDown(window, { key: 'F2' });
+
+    await waitFor(() => expect(scmWeighingApi.control).toHaveBeenCalledTimes(1));
+    expect(scmWeighingApi.confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: 'Confirmar cierre final' })).toBeNull();
+  });
+
+  it('K10-06 reutiliza operation_id y argumentos al reintentar un cierre directo incierto', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: { ...context, continuidad: { ultimo_control: null } },
+    });
+    scmWeighingApi.confirm.mockRejectedValue({
+      response: { data: { message: 'Respuesta perdida' } },
+    });
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-cierre-incierto' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+
+    fireEvent.keyDown(window, { key: 'F2' });
+    await screen.findByText('Último intento sin confirmar');
+    expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: 'F2' });
+    await waitFor(() => expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(2));
+    expect(scmWeighingApi.confirm.mock.calls[0]).toEqual(scmWeighingApi.confirm.mock.calls[1]);
+  });
+
+  it('K10-06 no duplica un cierre protegido mientras la confirmación sigue ocupada', async () => {
+    scmWeighingApi.resolve.mockResolvedValue({
+      data: {
+        ...context,
+        continuidad: { ultimo_control: { tipo: 'AVANCE_KG', peso_neto_kg: '8.000' } },
+      },
+    });
+    let finish;
+    scmWeighingApi.confirm.mockImplementation(() => new Promise((resolve) => {
+      finish = resolve;
+    }));
+    render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);
+
+    const scanner = screen.getByLabelText('QR de manga SCM');
+    fireEvent.change(scanner, { target: { value: 'qr-cierre-protegido' } });
+    fireEvent.keyDown(scanner, { key: 'Enter' });
+    await screen.findByText('Listo para cierre final');
+    fireEvent.keyDown(window, { key: 'F2' });
+    await screen.findByRole('dialog', { name: 'Confirmar cierre final' });
+    fireEvent.keyUp(window, { key: 'F2' });
+    fireEvent.keyDown(window, { key: 'F2' });
+    await screen.findByText('Operación en curso');
+    expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyUp(window, { key: 'F2' });
+    fireEvent.keyDown(window, { key: 'F2' });
+    expect(scmWeighingApi.confirm).toHaveBeenCalledTimes(1);
+
+    finish({
+      data: {
+        confirmed: { weighing: { estado_manga: 'PESADA' } },
+        print_result: { result: 'IMPRESA' },
+      },
+    });
+    await screen.findByText('Pesaje central confirmado');
+  });
+
   it('K7-02 protege el cierre con confirmación y cancelación segura', async () => {
     scmWeighingApi.resolve.mockResolvedValue({ data: context });
     render(<ScmWeighing peso={10.1} listening centralState="ONLINE" onConnect={vi.fn()} />);

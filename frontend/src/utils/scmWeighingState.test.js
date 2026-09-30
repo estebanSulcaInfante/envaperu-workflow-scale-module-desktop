@@ -13,7 +13,6 @@ describe('estado visible y habilitación usan las mismas reglas', () => {
     [{ peso: NaN }, 'Esperando peso neto válido'],
     [{ peso: Infinity }, 'Esperando peso neto válido'],
     [{ peso: 0.1 }, 'Esperando peso neto válido'],
-    [{ peso: 16 }, 'Peso bruto supera el máximo de la manga'],
     [{ lastControlNet: 10 }, 'Sin aumento desde el último control'],
     [{ lastControlNet: 10.1 }, 'Sin aumento desde el último control'],
     [{ lastControlNet: 10, net: 10.000000000002 }, 'Sin aumento desde el último control'],
@@ -55,6 +54,17 @@ describe('estado visible y habilitación usan las mismas reglas', () => {
     expect(result.kind).toBe('error');
     expect(result.ready).toBe(true);
     expect(result.title).toBe('Último intento sin confirmar');
+  });
+  it('K11 permite lectura sobre el máximo planificado si el resto es válido', () => {
+    const result = getWeighingState({
+      ...input,
+      context: { ...input.context, manga: { peso_bruto_max_kg: '11.045' } },
+      peso: 13.5,
+      tare: 0.045,
+      net: 13.455,
+    });
+    expect(result.ready).toBe(true);
+    expect(result.title).toBe('Listo para cierre final');
   });
   it('K8 bloquea una intención ya consumida aunque la manga siga abierta', () => {
     const result = getWeighingState({ ...input, scanConsumed: true, net: 12 });

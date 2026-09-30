@@ -52,10 +52,6 @@ export function getWeighingState({ context, busy, result, centralAvailable, list
   if (!Number.isFinite(Number(peso)) || Number(peso) <= tare) {
     return state('waiting', 'Esperando peso neto válido', 'Coloque la manga y compruebe que el peso bruto sea mayor que la tara.');
   }
-  const maximum = Number(context.manga?.peso_bruto_max_kg);
-  if (maximum > 0 && Number(peso) > maximum) {
-    return state('blocked', 'Peso bruto supera el máximo de la manga', `Máximo autorizado: ${maximum.toFixed(3)} kg. Verifique manga y lectura; si persiste, consulte a Central.`);
-  }
   // Contract precision is 0.001 kg, not an additional operational tolerance.
   if (lastControlNet > 0 && Math.round(net * 1000) <= Math.round(lastControlNet * 1000)) {
     return state('blocked', 'Sin aumento desde el último control', `Último neto: ${lastControlNet.toFixed(3)} kg. Verifique la manga y la lectura; solo registre cuando exista nuevo peso.`);

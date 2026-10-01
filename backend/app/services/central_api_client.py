@@ -139,6 +139,8 @@ class CentralApiClient:
             ) from exc
 
         if response.status_code != 200:
+            if operation == "monitoring_sync_check" and response.status_code in {404, 405}:
+                raise CentralApiError("SYNC_CHECK_UNSUPPORTED", "Central no soporta snapshot-check")
             retry_after = response.headers.get("Retry-After")
             central_message = None
             try:
@@ -321,6 +323,14 @@ class CentralApiClient:
             payload=payload,
             idempotency_key=f"{import_id}:{chunk_index}",
             read_timeout=self.LEGACY_HISTORY_READ_TIMEOUT_SECONDS,
+        )
+
+    def get_monitoring_sync_check(self, station_id, payload):
+        return self._request(
+            "POST",
+            f"/api/integration/v1/stations/{station_id}/monitoring/sync-check",
+            operation="monitoring_sync_check",
+            payload=payload,
         )
 
     def get_history_sync_state(self, station_id):

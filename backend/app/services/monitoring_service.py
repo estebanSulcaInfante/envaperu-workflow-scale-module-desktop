@@ -16,6 +16,7 @@ from app.models.pesaje import Pesaje
 from app.models.station_identity import StationIdentity, StationRuntimeState
 from app.runtime.token_store import read_configured_station_token
 from app.services.central_api_client import CentralApiClient, CentralApiError
+from app.services.monitoring_sync_fingerprint import closure_fingerprint, progress_fingerprint
 from app.services.legacy_continuity_service import (
     apply_pilot_command,
     build_history_delta,
@@ -62,7 +63,7 @@ def _progress_dimension(value):
     return normalized or None
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _contract_validator(contract_name, definition):
     path = (
         Path(__file__).resolve().parents[2]
@@ -196,6 +197,9 @@ class MonitoringService:
         self.monotonic = monotonic or time.monotonic
         self._started_monotonic = self.monotonic()
         self._capabilities_verified = False
+        self._sync_check_supported = None
+        # At most two pending operation identities, never historical payloads.
+        self._pending_sync = {}
 
     @staticmethod
     def _create_client(token):
@@ -251,19 +255,62 @@ class MonitoringService:
                 "Central no soporta continuidad operativa del piloto",
             )
 
-    @staticmethod
-    def _sync_continuity(client, station_id):
-        state = client.get_history_sync_state(station_id)
+    def _sync_operation_id(self, kind, key, *, received=False):
+        pending = self._pending_sync.get(kind)
+        if pending is None or pending["key"] != key or received:
+            pending = {"key": key, "id": str(uuid.uuid4())}
+            self._pending_sync[kind] = pending
+        return pending["id"]
+
+    def _check_snapshots(self, client, station_id, progress):
+        if self._sync_check_supported is False:
+            return None
+        checker = getattr(client, "get_monitoring_sync_check", None)
+        if checker is None:
+            self._sync_check_supported = False
+            return None
+        payload = {
+            "contract_version": "station-monitoring-sync-v1",
+            "window_start_date": progress["window_start_date"],
+            "window_end_date": progress["window_end_date"],
+            "include_legacy": current_app.config.get("STATION_MODE") == "MONITORED_LEGACY",
+            "pending_report_id": self._pending_sync.get("progress", {}).get("id"),
+            "pending_batch_id": self._pending_sync.get("delta", {}).get("id"),
+        }
+        try:
+            state = checker(station_id, payload)
+        except CentralApiError as exc:
+            if exc.state != "SYNC_CHECK_UNSUPPORTED":
+                raise
+            self._sync_check_supported = False
+            return None
+        _validate_contract("station-monitoring-sync-v1", "response", state, "CENTRAL_INCOMPATIBLE")
+        if (state["station_id"] != station_id
+            or state["window_start_date"] != payload["window_start_date"]
+            or state["window_end_date"] != payload["window_end_date"]
+            or (payload["include_legacy"] and (
+                state["legacy_state"] is None
+                or state["legacy_state"]["station_id"] != station_id))):
+            raise CentralApiError("CONTRACT_CONFLICT", "Snapshot-check no coincide con la estacion o ventana")
+        self._sync_check_supported = True
+        return state
+
+    def _sync_continuity(self, client, station_id, snapshot_state=None):
+        state = snapshot_state["legacy_state"] if snapshot_state else client.get_history_sync_state(station_id)
         delta = build_history_delta(station_id, state["high_watermark"])
-        delta_ack = client.send_history_delta(station_id, delta)
-        if (
-            delta_ack.get("accepted") is not True
-            or delta_ack.get("batch_id") != delta["batch_id"]
-        ):
-            raise CentralApiError(
-                "CONTRACT_CONFLICT",
-                "Acuse central no coincide con el delta legacy",
-            )
+        needs_send = (snapshot_state is None or bool(delta["rows"])
+                      or closure_fingerprint(delta["closures"]) != snapshot_state["closures_fingerprint"])
+        if needs_send:
+            if snapshot_state is not None:
+                key = (station_id, state["initial_import_id"], delta["batch_id"])
+                delta["batch_id"] = self._sync_operation_id(
+                    "delta", key, received=snapshot_state["pending_batch_received"])
+            delta_ack = client.send_history_delta(station_id, delta)
+            if (delta_ack.get("accepted") is not True
+                or delta_ack.get("batch_id") != delta["batch_id"]
+                or delta_ack.get("station_id") != station_id):
+                raise CentralApiError("CONTRACT_CONFLICT", "Acuse central no coincide con el delta legacy")
+        self._pending_sync.pop("delta", None)
 
         commands = client.get_pilot_commands(station_id).get("items", [])
         for command in commands:
@@ -282,7 +329,7 @@ class MonitoringService:
                 command["command_id"],
                 ack_payload,
             )
-        return delta_ack
+        return bool(commands)
 
     def _legacy_snapshot(self, now):
         timezone_name = current_app.config.get("TIMEZONE", "America/Lima")
@@ -598,37 +645,33 @@ class MonitoringService:
                     "CONTRACT_CONFLICT",
                     "Acuse central no coincide con el heartbeat",
                 )
-            # El continuo historico solo pertenece al perfil que replica la
-            # base legacy. Una estacion CONNECTED_NORMALIZED puede iniciar
-            # limpia y operar por contratos SCM sin una importacion historica.
-            if current_app.config.get("STATION_MODE") == "MONITORED_LEGACY":
-                self._sync_continuity(client, identity.station_id)
+            # Compare actual central state on every cycle; a local/historical
+            # ACK cannot prove that a restored central still holds the snapshot.
             progress_payload = self._build_production_progress_payload(now)
+            snapshot_state = self._check_snapshots(client, identity.station_id, progress_payload)
+            if current_app.config.get("STATION_MODE") == "MONITORED_LEGACY":
+                commands_applied = self._sync_continuity(client, identity.station_id, snapshot_state)
+                if commands_applied:
+                    progress_payload = self._build_production_progress_payload(now)
             _validate_contract(
-                "station-production-progress-v1",
-                "request",
-                progress_payload,
-                "CONTRACT_CONFLICT",
-            )
-            progress_ack = client.send_production_progress(
-                identity.station_id,
-                progress_payload,
-            )
-            _validate_contract(
-                "station-production-progress-v1",
-                "response",
-                progress_ack,
-                "CENTRAL_INCOMPATIBLE",
-            )
-            if (
-                progress_ack.get("accepted") is not True
-                or progress_ack.get("station_id") != identity.station_id
-                or progress_ack.get("report_id") != progress_payload["report_id"]
-            ):
-                raise CentralApiError(
-                    "CONTRACT_CONFLICT",
-                    "Acuse central no coincide con el reporte de avance",
-                )
+                "station-production-progress-v1", "request", progress_payload, "CONTRACT_CONFLICT")
+            fingerprint = progress_fingerprint(progress_payload)
+            if snapshot_state is not None and fingerprint == snapshot_state["progress_fingerprint"]:
+                progress_ack = {"received_at_utc": snapshot_state["checked_at_utc"]}
+                self._pending_sync.pop("progress", None)
+            else:
+                if snapshot_state is not None:
+                    progress_payload["report_id"] = self._sync_operation_id(
+                        "progress", (identity.station_id, fingerprint, progress_payload["report_id"]),
+                        received=snapshot_state["pending_report_received"])
+                progress_ack = client.send_production_progress(identity.station_id, progress_payload)
+                _validate_contract(
+                    "station-production-progress-v1", "response", progress_ack, "CENTRAL_INCOMPATIBLE")
+                if (progress_ack.get("accepted") is not True
+                    or progress_ack.get("station_id") != identity.station_id
+                    or progress_ack.get("report_id") != progress_payload["report_id"]):
+                    raise CentralApiError("CONTRACT_CONFLICT", "Acuse central no coincide con el reporte de avance")
+                self._pending_sync.pop("progress", None)
         except ValueError:
             return self._record_failure(
                 runtime,
@@ -636,7 +679,10 @@ class MonitoringService:
                 now,
             )
         except CentralApiError as exc:
-            return self._record_failure(runtime, exc.state, now)
+            result = self._record_failure(runtime, exc.state, now)
+            if exc.retry_after is not None:
+                result["retry_after"] = exc.retry_after
+            return result
 
         runtime.communication_state = "ONLINE"
         runtime.last_error_code = None

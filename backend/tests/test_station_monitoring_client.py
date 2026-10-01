@@ -729,3 +729,21 @@ def test_missing_token_is_visible_and_never_calls_central(monitoring_app):
         assert StationRuntimeState.query.one().communication_state == (
             "CENTRAL_NOT_PROVISIONED"
         )
+
+
+def test_retry_after_is_returned_transiently_and_not_persisted(monitoring_app):
+    fake_client = FakeCentralClient()
+    fake_client.error = CentralApiError('RATE_LIMITED', 'slow down', retry_after='120')
+    with monitoring_app.app_context():
+        service = MonitoringService(
+            client_factory=lambda _token: fake_client,
+            token_provider=lambda: 'test-token',
+            component_provider=_component_provider,
+        )
+        result = service.run_once()
+        assert result['retry_after'] == '120'
+        assert 'retry_after' not in StationRuntimeState.query.one().to_monitoring_dict()
+        fake_client.error = None
+        recovered = service.run_once()
+        assert recovered['state'] == 'ONLINE'
+        assert 'retry_after' not in recovered

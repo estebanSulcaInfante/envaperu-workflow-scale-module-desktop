@@ -1,8 +1,28 @@
 import random
 import threading
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 
 BACKOFF_SECONDS = (5, 15, 30, 60, 120, 300)
+
+
+def _retry_after_seconds(value, *, now=None):
+    if not isinstance(value, str):
+        return 0
+    value = value.strip()
+    # Bound untrusted header parsing; retain long valid waits as integers.
+    if not value or len(value) > 128:
+        return 0
+    if value.isascii() and value.isdecimal():
+        return int(value)
+    try:
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0, (retry_at - (now or datetime.now(timezone.utc))).total_seconds())
+    except (ValueError, TypeError, OverflowError):
+        return 0
 
 
 class MonitoringWorker:
@@ -49,8 +69,20 @@ class MonitoringWorker:
                 else:
                     base = BACKOFF_SECONDS[min(failure_index, len(BACKOFF_SECONDS) - 1)]
                     failure_index += 1
-                    delay = base + self.jitter()
-                self.stop_event.wait(delay)
+                    delay = max(
+                        base + self.jitter(),
+                        _retry_after_seconds(result.get("retry_after")),
+                    )
+                self._wait(delay)
+
+    def _wait(self, delay):
+        # Chunk long HTTP delays to avoid platform timeout overflow without
+        # retrying early. Every chunk can still be interrupted by stop().
+        while delay > 0:
+            chunk = min(delay, 3600)
+            if self.stop_event.wait(chunk):
+                return
+            delay -= chunk
 
     def stop(self, timeout=5):
         self.stop_event.set()

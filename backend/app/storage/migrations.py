@@ -430,6 +430,18 @@ def _migration_10_scm_print_business_context(connection, _metadata):
     )
 
 
+EXPECTED_COLUMNS['scm_post_reprint_journal'] = {
+    'copy_job_id', 'attempt_id', 'station_id', 'state', 'job_json', 'tspl',
+    'evidence_json', 'ack_pending', 'created_at',
+}
+EXPECTED_COLUMNS['scm_post_reprint_event'] = {'id', 'copy_job_id', 'event', 'evidence_json', 'created_at'}
+
+
+def _migration_11_post_reprint_journal(connection, metadata):
+    for name in ('scm_post_reprint_journal', 'scm_post_reprint_event'):
+        metadata.tables[name].create(connection, checkfirst=True)
+
+
 MIGRATIONS = (
     Migration(1, "legacy_baseline", _migration_1_legacy_baseline),
     Migration(2, "lote_salida_pieza_color_traceability", _migration_2_lote_salida_traceability),
@@ -474,6 +486,7 @@ MIGRATIONS = (
         _migration_10_scm_print_business_context,
     ),
 )
+MIGRATIONS += (Migration(11, 'post_reprint_journal', _migration_11_post_reprint_journal),)
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
 
 

@@ -2,6 +2,7 @@ import {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { scmPrelabelsApi } from '../services/api';
+import ScmPostReprints from './ScmPostReprints';
 
 const statusLabel = (job) => {
   const status = String(job?.status || job?.estado || '').toUpperCase();
@@ -224,6 +225,7 @@ export default function ScmPrelabels({ initialJobId = '' }) {
     <div className="panel">
       <div className="panel-header">ETIQUETAS SCM · VISTA PREVIA E IMPRESIÓN</div>
       <div className="panel-body">
+        <ScmPostReprints />
         <p className="scm-help">
           Previsualizar es una consulta: no imprime ni cambia el estado de las etiquetas.
           Solo «Imprimir sticker» envía el trabajo a la impresora.

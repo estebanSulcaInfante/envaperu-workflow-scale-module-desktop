@@ -101,3 +101,15 @@ def test_full_write_and_document_close_is_accepted(monkeypatch):
     assert result.job_id == 41
     assert bool(result) is True
     assert win32.closed is True
+
+
+def test_diagnostic_failure_after_enddoc_does_not_change_accepted(monkeypatch):
+    win32 = FakeWin32Print()
+    monkeypatch.setitem(sys.modules, 'win32print', win32)
+    def broken_log(*args, **kwargs):
+        raise UnicodeEncodeError('ascii', '\u2713', 0, 1, 'unsupported')
+    monkeypatch.setattr('builtins.print', broken_log)
+    result = _printer().print_tspl_result('PRINT 1,1')
+    assert result.status == PrinterEmissionResult.ACCEPTED
+    assert result.job_id == 41
+    assert win32.closed

@@ -131,6 +131,14 @@ class PrinterService:
         self.disconnect()
         return drained
     
+    @staticmethod
+    def _diagnostic(message):
+        # Logging is never part of the printer result boundary (e.g. cp1252 stdout).
+        try:
+            print(message)
+        except Exception:
+            pass
+
     def print_tspl_result(self, tspl_code: str) -> PrinterEmissionResult:
         """Envía TSPL y conserva la frontera entre fallo seguro e incierto.
 
@@ -142,7 +150,7 @@ class PrinterService:
         expected_bytes = len(payload)
         try:
             if current_app.config.get('SIMULATE_PRINTER', False):
-                print(
+                self._diagnostic(
                     f"[PRINTER] Simulacion local: {expected_bytes} bytes TSPL "
                     "aceptados sin enviar al spooler"
                 )
@@ -172,7 +180,7 @@ class PrinterService:
             try:
                 import win32print
             except ImportError as exc:
-                print("[PRINTER] win32print no disponible; no se emitió el trabajo")
+                self._diagnostic("[PRINTER] win32print no disponible; no se emitió el trabajo")
                 return PrinterEmissionResult(
                     status=PrinterEmissionResult.NOT_EMITTED,
                     expected_bytes=expected_bytes,
@@ -186,7 +194,7 @@ class PrinterService:
                     raise RuntimeError("No se encontró impresora TSC")
                 handle = win32print.OpenPrinter(self.printer_name)
             except Exception as exc:
-                print(f"[PRINTER] ❌ Fallo previo a emisión: {exc}")
+                self._diagnostic(f"[PRINTER] ❌ Fallo previo a emisión: {exc}")
                 return PrinterEmissionResult(
                     status=PrinterEmissionResult.NOT_EMITTED,
                     expected_bytes=expected_bytes,
@@ -222,7 +230,7 @@ class PrinterService:
                     if status == PrinterEmissionResult.UNCERTAIN
                     else "Fallo previo a emisión"
                 )
-                print(f"[PRINTER] ⚠️ {qualifier}: {exc}")
+                self._diagnostic(f"[PRINTER] ⚠️ {qualifier}: {exc}")
                 return PrinterEmissionResult(
                     status=status,
                     expected_bytes=expected_bytes,
@@ -233,7 +241,7 @@ class PrinterService:
                     error=str(exc)[:500],
                 )
 
-            print(f"[PRINTER] ✅ Sticker aceptado por {self.printer_name}")
+            self._diagnostic(f"[PRINTER] ✅ Sticker aceptado por {self.printer_name}")
             return PrinterEmissionResult(
                 status=PrinterEmissionResult.ACCEPTED,
                 expected_bytes=expected_bytes,
@@ -250,16 +258,16 @@ class PrinterService:
                     try:
                         win32print.EndPagePrinter(handle)
                     except Exception as exc:
-                        print(f"[PRINTER] Error cerrando página RAW: {exc}")
+                        self._diagnostic(f"[PRINTER] Error cerrando página RAW: {exc}")
                 if document_started:
                     try:
                         win32print.EndDocPrinter(handle)
                     except Exception as exc:
-                        print(f"[PRINTER] Error cerrando documento RAW: {exc}")
+                        self._diagnostic(f"[PRINTER] Error cerrando documento RAW: {exc}")
                 try:
                     win32print.ClosePrinter(handle)
                 except Exception as exc:
-                    print(f"[PRINTER] Error cerrando impresora: {exc}")
+                    self._diagnostic(f"[PRINTER] Error cerrando impresora: {exc}")
             self._end_print()
 
     def print_tspl(self, tspl_code: str) -> bool:

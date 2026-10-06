@@ -5,6 +5,9 @@ load_dotenv()
 
 
 class Config:
+    # Activation is a separate release/UAT decision; default deny.
+    SCM_POST_REPRINT_ENABLED = os.environ.get('SCM_POST_REPRINT_ENABLED', '').lower() == 'true'
+
     """Configuración de la aplicación"""
     
     # Flask

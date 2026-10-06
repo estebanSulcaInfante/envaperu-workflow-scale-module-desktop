@@ -202,6 +202,20 @@ class CentralApiClient:
             operation="scm_prelabel_print_job",
         )
 
+    def list_post_reprint_jobs(self, station_id):
+        return self._request('GET', f'/api/integration/v1/stations/{station_id}/post-reprint-jobs',
+                             operation='post_reprint_jobs')
+
+    def claim_post_reprint_job(self, station_id, job_id, attempt_id):
+        return self._request('POST', f'/api/integration/v1/stations/{station_id}/post-reprint-jobs/{job_id}/claim',
+                             operation='post_reprint_claim', payload={'attempt_id': attempt_id},
+                             idempotency_key=attempt_id)
+
+    def ack_post_reprint_job(self, station_id, job_id, evidence):
+        return self._request('POST', f'/api/integration/v1/stations/{station_id}/post-reprint-jobs/{job_id}/ack',
+                             operation='post_reprint_ack', payload=evidence,
+                             idempotency_key=evidence['attempt_id'])
+
     def list_scm_print_jobs(self, station_id, *, status="PENDING", limit=20):
         query = urlencode({"status": status, "limit": limit})
         return self._request(

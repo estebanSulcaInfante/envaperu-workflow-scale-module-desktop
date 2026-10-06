@@ -114,6 +114,12 @@ export const scmPrelabelsApi = {
     api.post(`/local/v1/scm/print-jobs/${encodeURIComponent(printJobId)}/print`),
 };
 
+export const scmPostReprintsApi = {
+  list: () => api.get('/local/v1/scm/post-reprint-jobs'),
+  print: (id) => api.post(`/local/v1/scm/post-reprint-jobs/${encodeURIComponent(id)}/print`),
+  sync: () => api.post('/local/v1/scm/post-reprint-jobs/sync-evidence'),
+};
+
 export const scmWeighingApi = {
   resolve: (qr) =>
     api.post('/local/v1/scm/weighing/resolve', { qr }),

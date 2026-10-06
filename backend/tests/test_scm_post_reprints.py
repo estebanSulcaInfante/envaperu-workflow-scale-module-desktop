@@ -1,0 +1,205 @@
+from copy import deepcopy
+import hashlib
+import json
+from uuid import uuid4
+
+import pytest
+from flask import Flask
+
+from app import db
+from app.services.printer_service import PrinterEmissionResult
+from app.services.scm_post_reprint_service import PostReprintRenderer, PostReprintService
+from app.models.scm_post_reprint import ScmPostReprintJournal
+
+
+def job(copies=1):
+    result = {'copy_job_id': str(uuid4()), 'job_kind': 'POSTPESAJE_COPY',
+            'renderer_version': PostReprintRenderer.VERSION, 'copias': copies,
+            'source_label_id': str(uuid4()), 'source_pesaje_id': str(uuid4()),
+            'payload_hash': 'a'*64,
+            'payload': {'document_type': 'POSTPESAJE', 'codigo_manga': 'OF80-OT71-M002',
+                        'template': {'version': 'POSTPESAJE_TSPL_5'},
+                        'peso_neto_real_kg': '8.950', 'kg_fisico': '8.950',
+                        'cantidad_confirmada_un': '100', 'maquinista': 'MUESTRA',
+                        'pieza_color': 'MUESTRA'}}
+    result['payload_hash'] = hashlib.sha256(json.dumps(result['payload'], ensure_ascii=False,
+        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return result
+
+
+class Client:
+    def __init__(self, item):
+        self.item = item
+        self.claims = 0
+        self.acks = []
+        self.offline = False
+
+    def claim_post_reprint_job(self, station, id, attempt):
+        self.claims += 1
+        if self.offline:
+            raise RuntimeError('offline')
+        return deepcopy(self.item)
+
+    def ack_post_reprint_job(self, station, id, evidence):
+        if self.offline:
+            raise RuntimeError('offline')
+        self.acks.append(deepcopy(evidence))
+        return {'ok': True}
+
+
+class Printer:
+    printer_name = 'FAKE_ONLY'
+
+    def __init__(self, status='ACCEPTED', after=None):
+        self.calls = []
+        self.status = status
+        self.after = after
+
+    def print_tspl_result(self, tspl):
+        self.calls.append(tspl)
+        if self.after:
+            self.after()
+        return PrinterEmissionResult(self.status, len(tspl.encode()),
+                                     bytes_written=len(tspl.encode()), simulated=True)
+
+
+@pytest.fixture
+def app(tmp_path):
+    application = Flask(__name__)
+    application.config.update(SQLALCHEMY_DATABASE_URI=f'sqlite:///{tmp_path}/journal.db',
+                              STATION_UUID='station-test', SCM_POST_REPRINT_ENABLED=True)
+    db.init_app(application)
+    with application.app_context():
+        db.create_all()
+        yield application
+        db.session.remove()
+
+
+@pytest.mark.parametrize('copies', [1, 2, 3, 7])
+def test_exact_copy_count_no_inherited_double(copies):
+    tspl, svg = PostReprintRenderer().render(job(copies))
+    assert tspl.count('OF80-OT71-M002') == copies
+    assert tspl.count('PRINT 1,1') == (copies+1)//2
+    assert svg.count('OF80-OT71-M002') == copies
+    assert 'QRCODE' not in tspl
+
+
+def test_pre_and_unknown_renderer_blocked():
+    item = job()
+    item['payload']['document_type'] = 'PREPESAJE'
+    with pytest.raises(ValueError):
+        PostReprintRenderer().render(item)
+    item = job()
+    item['renderer_version'] = 'unknown'
+    with pytest.raises(ValueError):
+        PostReprintRenderer().render(item)
+
+
+def test_replay_and_lost_ack_never_reprints(app):
+    item = job()
+    client = Client(item)
+    printer = Printer(after=lambda: setattr(client, 'offline', True))
+    service = PostReprintService(client=client, printer=printer)
+    first = service.execute(item['copy_job_id'])
+    assert first['ack_pending']
+    assert first['result'] == 'ACCEPTED'
+    db.session.remove()
+    client.offline = False
+    recovered = service.execute(item['copy_job_id'])
+    assert not recovered['ack_pending']
+    assert len(printer.calls) == 1
+    assert len(client.acks) == 1
+    assert client.claims == 1
+
+
+def test_reservation_durable_before_first_byte(app):
+    item = job()
+    def assert_reserved():
+        with db.engine.connect() as connection:
+            assert connection.exec_driver_sql('SELECT state FROM scm_post_reprint_journal').scalar() == 'EMITTING'
+    printer = Printer(after=assert_reserved)
+    PostReprintService(client=Client(item), printer=printer).execute(item['copy_job_id'])
+
+
+def test_uncertain_and_orphan_reservation_block(app):
+    item = job()
+    client = Client(item)
+    printer = Printer('UNCERTAIN')
+    service = PostReprintService(client=client, printer=printer)
+    assert service.execute(item['copy_job_id'])['result'] == 'UNCERTAIN'
+    assert service.execute(item['copy_job_id'])['result'] == 'UNCERTAIN'
+    assert len(printer.calls) == 1
+    orphan = ScmPostReprintJournal(copy_job_id=str(uuid4()), attempt_id=str(uuid4()),
+                                  station_id='station-test', state='RESERVED')
+    db.session.add(orphan)
+    db.session.commit()
+    result = service.execute(orphan.copy_job_id)
+    assert result['result'] == 'UNCERTAIN'
+    assert len(printer.calls) == 1
+
+
+def test_offline_claim_never_prints(app):
+    item = job()
+    client = Client(item)
+    client.offline = True
+    printer = Printer()
+    result = PostReprintService(client=client, printer=printer).execute(item['copy_job_id'])
+    assert result['result'] == 'UNCERTAIN'
+    assert not printer.calls
+
+
+def test_feature_disabled(app):
+    app.config['SCM_POST_REPRINT_ENABLED'] = False
+    with pytest.raises(ValueError, match='habilitada'):
+        PostReprintService(client=Client(job()), printer=Printer()).execute(str(uuid4()))
+
+
+def test_tampered_source_never_reaches_printer(app):
+    item = job()
+    item['payload']['peso_neto_real_kg'] = '100'
+    printer = Printer()
+    result = PostReprintService(client=Client(item), printer=printer).execute(item['copy_job_id'])
+    assert result['result'] == 'NOT_EMITTED'
+    assert not printer.calls
+
+
+def test_control_characters_cannot_inject_tspl():
+    item = job()
+    item['payload']['maquinista'] = 'MUESTRA\nPRINT 999,999'
+    item['payload_hash'] = hashlib.sha256(json.dumps(item['payload'], ensure_ascii=False,
+        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    with pytest.raises(ValueError, match='controles'):
+        PostReprintRenderer().render(item)
+
+
+def test_process_loss_after_emission_boundary_never_replays(app):
+    item = job()
+    def crash():
+        raise SystemExit('simulated process loss')
+    printer = Printer(after=crash)
+    service = PostReprintService(client=Client(item), printer=printer)
+    with pytest.raises(SystemExit):
+        service.execute(item['copy_job_id'])
+    db.session.remove()
+    printer.after = None
+    result = service.execute(item['copy_job_id'])
+    assert result['result'] == 'UNCERTAIN'
+    assert result['state'] == 'EMITTING'
+    assert len(printer.calls) == 1
+
+
+def test_concurrent_execute_reserves_one_copy_job(app):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    item, printer = job(), Printer()
+    client = Client(item)
+    barrier = Barrier(2)
+    def execute():
+        with app.app_context():
+            barrier.wait(timeout=5)
+            return PostReprintService(client=client, printer=printer).execute(item['copy_job_id'])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one, two = pool.submit(execute), pool.submit(execute)
+        assert {one.result()['result'], two.result()['result']} <= {'ACCEPTED', 'UNCERTAIN'}
+    assert len(printer.calls) == 1
+    assert client.claims == 1

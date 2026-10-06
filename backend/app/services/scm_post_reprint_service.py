@@ -150,12 +150,20 @@ class PostReprintService:
                 db.session.commit()
             # Claim may have succeeded remotely. Never infer that paper can be retried.
             return self._view(row)
+        if (not isinstance(job, dict)
+                or str(job.get('copy_job_id')) != str(copy_job_id)
+                or str(job.get('attempt_id')) != row.attempt_id
+                or str(job.get('station_id')) != row.station_id):
+            evidence = {'attempt_id': row.attempt_id, 'result': 'NOT_EMITTED',
+                        'expected_bytes': 0, 'bytes_written': 0, 'write_attempted': False,
+                        'error': 'Concesion central no corresponde al trabajo, intento y estacion'}
+            row.state = 'CLAIM_RESPONSE_REJECTED'
+            row.ack_pending = False
+            row.evidence_json = json.dumps(evidence, sort_keys=True)
+            self._event(row, row.state, evidence)
+            db.session.commit()
+            return self._view(row)
         try:
-            if str(job.get('copy_job_id')) != str(copy_job_id):
-                raise ValueError('Identidad del trabajo no coincide')
-            if (str(job.get('attempt_id')) != row.attempt_id
-                    or str(job.get('station_id')) != row.station_id):
-                raise ValueError('Concesion central no corresponde al intento y estacion')
             tspl, _ = PostReprintRenderer().render(job)
         except (ValueError, KeyError, TypeError) as exc:
             evidence = {'attempt_id': row.attempt_id, 'result': 'NOT_EMITTED', 'error': str(exc),

@@ -205,7 +205,7 @@ def test_concurrent_execute_reserves_one_copy_job(app):
     assert client.claims == 1
 
 
-@pytest.mark.parametrize('field', ['attempt_id', 'station_id'])
+@pytest.mark.parametrize('field', ['attempt_id', 'station_id', 'copy_job_id'])
 def test_crossed_claim_does_not_print(app, field):
     item, printer = job(), Printer()
     class CrossedClient(Client):
@@ -213,8 +213,12 @@ def test_crossed_claim_does_not_print(app, field):
             response = super().claim_post_reprint_job(station, id, attempt)
             response[field] = str(uuid4())
             return response
-    result = PostReprintService(client=CrossedClient(item), printer=printer).execute(item['copy_job_id'])
+    client = CrossedClient(item)
+    result = PostReprintService(client=client, printer=printer).execute(item['copy_job_id'])
     assert result['result'] == 'NOT_EMITTED'
+    assert result['state'] == 'CLAIM_RESPONSE_REJECTED'
+    assert not result['ack_pending']
+    assert not client.acks
     assert not printer.calls
 
 

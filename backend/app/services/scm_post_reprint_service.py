@@ -12,6 +12,7 @@ from app import db
 from app.models.scm_post_reprint import ScmPostReprintJournal, ScmPostReprintEvent
 from app.services.scm_prelabel_service import ScmPrelabelService, _station_timezone
 from app.services.printer_service import get_printer_service
+from app.services.central_api_client import CentralApiError
 
 
 class PostReprintRenderer:
@@ -97,8 +98,13 @@ class PostReprintService:
         # No fallback to print. Offline delivery stores evidence for the next explicit sync.
         if row.evidence_json and row.ack_pending:
             try:
-                self._client().ack_post_reprint_job(row.station_id, row.copy_job_id,
-                                                   json.loads(row.evidence_json))
+                evidence = json.loads(row.evidence_json)
+                receipt = self._client().ack_post_reprint_job(row.station_id, row.copy_job_id, evidence)
+                if (not isinstance(receipt, dict)
+                        or str(receipt.get('copy_job_id')) != row.copy_job_id
+                        or str(receipt.get('attempt_id')) != row.attempt_id
+                        or receipt.get('result') != evidence['result']):
+                    raise ValueError('Acuse central no confirma este intento y resultado')
             except Exception:
                 db.session.rollback()
             else:
@@ -132,12 +138,24 @@ class PostReprintService:
             return self._view(db.session.get(ScmPostReprintJournal, copy_job_id))
         try:
             job = self._client().claim_post_reprint_job(row.station_id, copy_job_id, row.attempt_id)
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, CentralApiError) and exc.http_status in {401, 403, 404, 409, 422}:
+                row.state = 'CLAIM_REJECTED'
+                row.ack_pending = False
+                evidence = {'attempt_id': row.attempt_id, 'result': 'NOT_EMITTED',
+                            'http_status': exc.http_status, 'error': str(exc)[:500],
+                            'expected_bytes': 0, 'bytes_written': 0, 'write_attempted': False}
+                row.evidence_json = json.dumps(evidence, sort_keys=True)
+                self._event(row, 'CLAIM_REJECTED', evidence)
+                db.session.commit()
             # Claim may have succeeded remotely. Never infer that paper can be retried.
             return self._view(row)
         try:
             if str(job.get('copy_job_id')) != str(copy_job_id):
                 raise ValueError('Identidad del trabajo no coincide')
+            if (str(job.get('attempt_id')) != row.attempt_id
+                    or str(job.get('station_id')) != row.station_id):
+                raise ValueError('Concesion central no corresponde al intento y estacion')
             tspl, _ = PostReprintRenderer().render(job)
         except (ValueError, KeyError, TypeError) as exc:
             evidence = {'attempt_id': row.attempt_id, 'result': 'NOT_EMITTED', 'error': str(exc),

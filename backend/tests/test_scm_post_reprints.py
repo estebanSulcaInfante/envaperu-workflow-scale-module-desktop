@@ -38,13 +38,13 @@ class Client:
         self.claims += 1
         if self.offline:
             raise RuntimeError('offline')
-        return deepcopy(self.item)
+        return {**deepcopy(self.item), 'station_id': station, 'attempt_id': attempt}
 
     def ack_post_reprint_job(self, station, id, evidence):
         if self.offline:
             raise RuntimeError('offline')
         self.acks.append(deepcopy(evidence))
-        return {'ok': True}
+        return {'copy_job_id': id, 'attempt_id': evidence['attempt_id'], 'result': evidence['result']}
 
 
 class Printer:
@@ -203,3 +203,42 @@ def test_concurrent_execute_reserves_one_copy_job(app):
         assert {one.result()['result'], two.result()['result']} <= {'ACCEPTED', 'UNCERTAIN'}
     assert len(printer.calls) == 1
     assert client.claims == 1
+
+
+@pytest.mark.parametrize('field', ['attempt_id', 'station_id'])
+def test_crossed_claim_does_not_print(app, field):
+    item, printer = job(), Printer()
+    class CrossedClient(Client):
+        def claim_post_reprint_job(self, station, id, attempt):
+            response = super().claim_post_reprint_job(station, id, attempt)
+            response[field] = str(uuid4())
+            return response
+    result = PostReprintService(client=CrossedClient(item), printer=printer).execute(item['copy_job_id'])
+    assert result['result'] == 'NOT_EMITTED'
+    assert not printer.calls
+
+
+def test_unrelated_200_ack_remains_pending(app):
+    item, printer = job(), Printer()
+    class InvalidReceiptClient(Client):
+        def ack_post_reprint_job(self, *args):
+            return {'ok': True}
+    result = PostReprintService(client=InvalidReceiptClient(item), printer=printer).execute(item['copy_job_id'])
+    assert result['ack_pending']
+    assert len(printer.calls) == 1
+
+
+@pytest.mark.parametrize('status', [401, 403, 404, 409, 422])
+def test_definitive_claim_rejection_is_terminal_without_pending_ack(app, status):
+    from app.services.central_api_client import CentralApiError
+    item, printer = job(), Printer()
+    class RejectedClient(Client):
+        def claim_post_reprint_job(self, *args):
+            raise CentralApiError('REJECTED', 'rejected', http_status=status)
+    client = RejectedClient(item)
+    result = PostReprintService(client=client, printer=printer).execute(item['copy_job_id'])
+    assert result['result'] == 'NOT_EMITTED'
+    assert result['state'] == 'CLAIM_REJECTED'
+    assert not result['ack_pending']
+    assert not printer.calls
+    assert not client.acks

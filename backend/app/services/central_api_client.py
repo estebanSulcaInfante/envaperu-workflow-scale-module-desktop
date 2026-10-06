@@ -6,10 +6,11 @@ import requests
 
 
 class CentralApiError(RuntimeError):
-    def __init__(self, state, message, *, retry_after=None):
+    def __init__(self, state, message, *, retry_after=None, http_status=None):
         super().__init__(message)
         self.state = state
         self.retry_after = retry_after
+        self.http_status = http_status
 
 
 def _is_loopback_host(hostname):
@@ -157,6 +158,7 @@ class CentralApiClient:
                     f"Central rejected {operation} with HTTP {response.status_code}"
                 )),
                 retry_after=retry_after,
+                http_status=response.status_code,
             )
         try:
             return response.json()

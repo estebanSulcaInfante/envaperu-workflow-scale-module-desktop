@@ -166,6 +166,13 @@ def test_legacy_manga_snapshot_never_uses_its_pieza_as_product_identity():
         "captured_at": "2026-10-07T16:00:00Z",
         "pieza": None,
         "color": {"nombre": "ROJO", "source": "MANGA_SNAPSHOT"},
+        "variante": {
+            "sku": "VAR-LEGACY",
+            "nombre": "MANGA LEGACY",
+            "catalog_version": None,
+            "catalog_version_source": "SCM_ARTICULO",
+            "source": "MANGA_SNAPSHOT",
+        },
         "provenance": {"fixture": "test"},
     }
     tspl = ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
@@ -254,3 +261,14 @@ def test_historical_post_without_pieza_does_not_infer_pz_or_color_from_pieza_col
     assert "COLOR:" not in tspl
     assert "TOLVA MUESTRA ROJO (PC-000073)" in tspl
     assert "SIN QR" not in tspl
+
+
+def test_top_level_piece_color_without_identity_stays_historical_layout():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"]["pieza"] = "DISPLAY ONLY"
+    label["payload"]["color"] = "RED"
+    label["payload"].pop("identidad_producto", None)
+    tspl = ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
+
+    assert "PZ:" not in tspl
+    assert "COLOR:" not in tspl

@@ -37,7 +37,8 @@ def versioned_identity(mode="CATALOG_SNAPSHOT", variant="TOLVA MUESTRA ROJO SOLI
         "variante": {
             "sku": "VAR-001",
             "nombre": variant,
-            "catalog_version": "catalog-1",
+            "catalog_version": "catalog-1" if mode == "CATALOG_SNAPSHOT" else None,
+            "catalog_version_source": "SCM_ARTICULO",
             "source": "MANGA_SNAPSHOT",
         },
         "provenance": {"fixture": "test"},

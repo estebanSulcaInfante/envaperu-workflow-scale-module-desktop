@@ -319,10 +319,6 @@ class ScmPrelabelService:
     def _versioned_post_fields(cls, payload):
         """Read only the v1 product snapshot; never split legacy strings."""
         if "identidad_producto" not in payload or payload.get("identidad_producto") is None:
-            # Compatibility/demo payloads may already contain explicit piece
-            # and color strings. They are display-only and never provenance.
-            if cls._snapshot_text(payload.get("pieza")) and cls._snapshot_text(payload.get("color")):
-                return {"PZ": payload["pieza"].strip(), "COLOR": payload["color"].strip()}
             return None
         identity = payload["identidad_producto"]
         if not isinstance(identity, dict) or identity.get("version") != 1:
@@ -348,7 +344,8 @@ class ScmPrelabelService:
             if variante is not None and (
                 not isinstance(variante, dict)
                 or variante.get("source") != "MANGA_SNAPSHOT"
-                or not all(variante.get(key) for key in ("sku", "catalog_version"))
+                or not cls._snapshot_text(variante.get("sku"))
+                or variante.get("catalog_version_source") != "SCM_ARTICULO"
                 or not cls._snapshot_text(variante.get("nombre"))
             ):
                 raise ValueError("identidad_producto variante invalida")

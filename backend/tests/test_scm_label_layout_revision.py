@@ -267,15 +267,20 @@ def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_la
 
 
 @pytest.mark.parametrize(
-    "sku,piece,color,variant,expected_var_start,expected_var_lines,expected_end",
+    "sku,piece,color,variant,expected_pz_lines,expected_color_lines,expected_var_start,expected_var_lines,expected_end",
     [
         (
             "PC-000175",
             "TAPA DE ORGANIZADOR #2 PASTEL",
-            "BLANCO SOLIDO",
-            "TAPA DE ORGANIZADOR #2 BLANCO SOLIDO",
+            "BLANCO SÓLIDO",
+            "TAPA DE ORGANIZADOR #2 BLANCO SÓLIDO",
+            [
+                'TEXT 32,64,"2",0,1,1,"PZ: TAPA DE ORGANIZADOR #2"',
+                'TEXT 32,86,"2",0,1,1,"  PASTEL"',
+            ],
+            ['TEXT 32,108,"2",0,1,1,"COLOR: BLANCO SÓLIDO"'],
             130,
-            ["VAR: TAPA DE ORGANIZADOR #2 BLANCO SOLIDO"],
+            ["VAR: TAPA DE ORGANIZADOR #2 BLANCO SÓLIDO"],
             374,
         ),
         (
@@ -283,6 +288,11 @@ def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_la
             "BASE DE ORGANIZADOR #2",
             "TRANSPARENTE TRANSPARENTE",
             "BASE DE ORGANIZADOR #2 CONFITECA TRANSPARENTE TRANSPARENTE",
+            ['TEXT 32,64,"2",0,1,1,"PZ: BASE DE ORGANIZADOR #2"'],
+            [
+                'TEXT 32,86,"2",0,1,1,"COLOR: TRANSPARENTE"',
+                'TEXT 32,108,"2",0,1,1,"  TRANSPARENTE"',
+            ],
             130,
             [
                 "VAR: BASE DE ORGANIZADOR #2 CONFITECA",
@@ -293,9 +303,10 @@ def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_la
     ],
 )
 def test_long_catalog_variants_use_native_font2_pz_color_and_font1_var(
-    sku, piece, color, variant, expected_var_start, expected_var_lines, expected_end
+    sku, piece, color, variant, expected_pz_lines, expected_color_lines,
+    expected_var_start, expected_var_lines, expected_end
 ):
-    label = _post_weighing_label(f"OF-DEMO-OT007-{sku}")
+    label = _post_weighing_label(f"DEMO-M{sku[-3:]}")
     label["payload"]["identidad_producto"] = _identity_product(
         piece, color, variant
     )
@@ -305,8 +316,10 @@ def test_long_catalog_variants_use_native_font2_pz_color_and_font1_var(
     tspl = service._weight_column(24, label, "07/10/2026 11:00")
     svg = service._svg_weight_column(24, label, "07/10/2026 11:00")
 
-    assert 'TEXT 32,64,"2",0,1,1,"PZ:' in tspl
-    assert 'TEXT 32,86,"2",0,1,1,"COLOR:' in tspl
+    for line in expected_pz_lines + expected_color_lines:
+        assert line in tspl
+        svg_text = line.rsplit(',"', 1)[1][:-1]
+        assert f">{svg_text}</text>" in svg
     assert f'TEXT 32,{expected_var_start},"1",0,1,1,"VAR:' in tspl
     for line in expected_var_lines:
         assert line in tspl
@@ -318,10 +331,10 @@ def test_long_catalog_variants_use_native_font2_pz_color_and_font1_var(
         f'<text x="32" y="{expected_var_start + 12}" '
         'font-family="Arial, sans-serif" font-size="12"'
     ) in svg
-    assert '"PC-' not in tspl.split('VAR:', 1)[1]
-    assert '"PC-' not in svg.split('VAR:', 1)[1]
+    assert sku not in tspl
+    assert sku not in svg
     assert 'font-size="20"' in svg
-    assert 'font-size="14"' in svg
+    assert 'font-size="14"' not in svg
 
 
 def test_structured_post_rejects_unbreakable_or_overlong_identity_instead_of_dropping_it():

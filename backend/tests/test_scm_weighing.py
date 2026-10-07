@@ -462,6 +462,107 @@ def test_f2_confirma_central_antes_de_imprimir_y_no_crea_pesaje_local(
             db.engine.dispose()
 
 
+def test_f2_format_error_returns_confirmed_recoverable_result_and_retry_reuses_operation(
+    tmp_path,
+):
+    operation_id = str(uuid4())
+    label_id = str(uuid4())
+    manga_id = str(uuid4())
+    print_job_id = str(uuid4())
+    calls = []
+    confirm_count = 0
+
+    class Central:
+        def resolve_scm_manga_label(self, _label_id):
+            calls.append("resolve")
+            return {
+                "can_weigh": confirm_count == 0,
+                "can_register_weight_control": False,
+                "manga": {"public_id": manga_id, "tara_nominal_kg": "0.100"},
+            }
+
+        def confirm_scm_manga_weighing(self, requested_operation, payload):
+            nonlocal confirm_count
+            confirm_count += 1
+            calls.append(("confirm", requested_operation, payload))
+            return {
+                "print_job_id": print_job_id,
+                "weighing": {"manga_id": manga_id, "peso_fisico_neto_kg": "10.000"},
+            }
+
+        def get_scm_operation(self, requested_operation):
+            calls.append(("recover", requested_operation))
+            return {
+                "response": {
+                    "print_job_id": print_job_id,
+                    "weighing": {"manga_id": manga_id, "peso_fisico_neto_kg": "10.000"},
+                }
+            }
+
+        def get_scm_print_job(self, _station_id, requested_job_id):
+            calls.append(("fetch_print", requested_job_id))
+            label = _post_label(str(uuid4()), manga_id)
+            label["payload"]["identidad_producto"] = {"version": 2}
+            return {"print_job_id": requested_job_id, "labels": [label]}
+
+        def claim_scm_print_job(self, station_id, requested_job_id):
+            calls.append(("claim_print", requested_job_id))
+            return self.get_scm_print_job(station_id, requested_job_id)
+
+        def acknowledge_scm_print_job(self, *_args, **_kwargs):
+            calls.append("ack_print")
+            raise AssertionError("El error de formato no debe enviar ACK")
+
+    class Printer:
+        printer_name = "NEVER_CALLED"
+
+        def print_tspl(self, _tspl):
+            calls.append("print")
+            raise AssertionError("El error de formato no debe llegar a la impresora")
+
+    database = tmp_path / "format-error.db"
+    app = create_app(
+        config_overrides={
+            "TESTING": True,
+            "SYNC_ENABLED": False,
+            "MONITORING_ENABLED": False,
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database.as_posix()}",
+            "STATION_DATABASE_PATH": str(database),
+            "STATION_BACKUP_DIR": str(tmp_path / "backups"),
+            "STATION_UUID": str(uuid4()),
+            "SCM_OPERATOR_ID": "7",
+        },
+        start_workers=False,
+    )
+    try:
+        with app.app_context():
+            service = ScmWeighingService(
+                client=Central(),
+                printer=Printer(),
+                scale_snapshot=lambda: {"peso_kg": 10.1, "stable": True},
+            )
+            first = service.confirm(operation_id=operation_id, label_id=label_id)
+            second = service.confirm(operation_id=operation_id, label_id=label_id)
+
+        assert confirm_count == 1
+        assert first["confirmed"]["weighing"]["manga_id"] == manga_id
+        assert first["print_result"]["result"] == "NOT_EMITTED"
+        assert first["print_result"]["error_code"] == "PRINT_FORMAT_INVALID"
+        assert first["print_result"]["expected_bytes"] == 0
+        assert first["print_result"]["bytes_written"] == 0
+        assert first["print_result"]["write_attempted"] is False
+        assert first["print_result"]["recoverable"] is True
+        assert first["print_result"]["retry_same_operation"] is True
+        assert second["recovered_operation"] is True
+        assert second["confirmed"]["weighing"]["manga_id"] == manga_id
+        assert second["print_result"]["result"] == "NOT_EMITTED"
+        assert "print" not in calls and "ack_print" not in calls
+    finally:
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+
+
 def test_control_exige_capacidad_especifica_aunque_pesaje_final_este_habilitado(
     tmp_path,
 ):

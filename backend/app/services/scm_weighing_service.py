@@ -12,7 +12,7 @@ from app.models.station_identity import StationIdentity
 from app.routes.balanza import get_last_scale_snapshot
 from app.runtime.token_store import read_configured_station_token
 from app.services.central_api_client import CentralApiClient, CentralApiError
-from app.services.scm_prelabel_service import ScmPrelabelService
+from app.services.scm_prelabel_service import ScmLabelFormatError, ScmPrelabelService
 
 
 class ScmWeighingLocalError(RuntimeError):
@@ -306,12 +306,26 @@ class ScmWeighingService:
                     "auto_reprint_blocked": True,
                 }
         if print_result is None:
-            print_result = print_service.print_job(
-                print_job_id,
-                operation_id=operation_id,
-                capture_id=operation_id,
-                manga_id=manga_id,
-            )
+            try:
+                print_result = print_service.print_job(
+                    print_job_id,
+                    operation_id=operation_id,
+                    capture_id=operation_id,
+                    manga_id=manga_id,
+                )
+            except ScmLabelFormatError as error:
+                print_result = {
+                    "result": "NOT_EMITTED",
+                    "error_code": "PRINT_FORMAT_INVALID",
+                    "error": str(error)[:500],
+                    "print_job_id": print_job_id,
+                    "expected_bytes": 0,
+                    "bytes_written": 0,
+                    "write_attempted": False,
+                    "recoverable": True,
+                    "retry_same_operation": True,
+                    "auto_reprint_blocked": False,
+                }
         return {
             "operation_id": operation_id,
             "confirmed": confirmed,

@@ -45,6 +45,10 @@ def _station_timezone(name):
         raise
 
 
+class ScmLabelFormatError(ValueError):
+    """A label failed validation before any printer bytes were sent."""
+
+
 class ScmPrelabelService:
     LEFT_X = 24
     RIGHT_X = 464
@@ -982,8 +986,14 @@ class ScmPrelabelService:
             self._station_id(), print_job_id
         )
         attempted_at = datetime.now(timezone.utc)
-        tspl = self.generate_tspl(job, printed_at=attempted_at)
-        preview_svg = self.generate_preview_svg(job, printed_at=attempted_at)
+        try:
+            tspl = self.generate_tspl(job, printed_at=attempted_at)
+            preview_svg = self.generate_preview_svg(job, printed_at=attempted_at)
+        except (ValueError, KeyError, TypeError) as exc:
+            # Keep this boundary limited to rendering. Errors after this point
+            # may follow a physical write and must not be reported as a safe
+            # format failure or retried automatically.
+            raise ScmLabelFormatError(str(exc)) from exc
         rendered_payload_hash = hashlib.sha256(
             tspl.encode("utf-8")
         ).hexdigest()

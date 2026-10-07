@@ -5,6 +5,7 @@ import hashlib
 import base64
 import io
 import re
+import textwrap
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html import escape
 from datetime import datetime, timedelta, timezone
@@ -310,6 +311,113 @@ class ScmPrelabelService:
             or is_final,
         }
 
+    @staticmethod
+    def _structured_post_fields(payload):
+        """Return only explicit POST identity fields; never split pieza_color."""
+        if not isinstance(payload.get("pieza"), str) or not payload["pieza"].strip():
+            return None
+        if not isinstance(payload.get("color"), str) or not payload["color"].strip():
+            return None
+        return {"PZ": payload["pieza"].strip(), "COLOR": payload["color"].strip()}
+
+    @classmethod
+    def _structured_post_identity_lines(cls, payload):
+        fields = cls._structured_post_fields(payload)
+        if not fields:
+            return None
+        lines = []
+        for label, value in fields.items():
+            # Keep every character. An unbreakable token or more than four
+            # total font-2 lines is rejected instead of silently abbreviated.
+            value_width = 31 - len(label) - 2
+            wrapped = textwrap.wrap(
+                value,
+                width=value_width,
+                break_long_words=False,
+                break_on_hyphens=False,
+                replace_whitespace=False,
+                drop_whitespace=True,
+            )
+            if not wrapped or any(len(part) > value_width for part in wrapped):
+                raise ValueError(f"Campo {label} excede la columna fisica disponible")
+            lines.append((label, wrapped))
+        if sum(len(parts) for _, parts in lines) > 4:
+            raise ValueError("Identidad PZ/COLOR excede la altura fisica disponible")
+        return lines
+
+    @classmethod
+    def _structured_post_column_values(cls, payload, values, order_context):
+        identity_lines = cls._structured_post_identity_lines(payload)
+        if identity_lines is None:
+            return None
+        rendered_identity = []
+        for label, wrapped in identity_lines:
+            rendered_identity.append(f"{label}: {wrapped[0]}")
+            rendered_identity.extend(f"  {part}" for part in wrapped[1:])
+        net_label_y = 78 + len(rendered_identity) * 22
+        net_value_y = net_label_y + 24
+        # Font 3 at 2x2 occupies 48 dots; leave a four-dot safety gap.
+        theoretical_y = net_value_y + 52
+        bar_y = max(207, theoretical_y + 23 if values["fabricated_theoretical"] is not None else net_value_y + 52)
+        title_y = bar_y + 11
+        contribution_label_y = title_y + 28
+        contribution_y = contribution_label_y + 18
+        units_y = contribution_y + 36
+        order_y = units_y + 26
+        if order_y + 12 > 398:
+            raise ValueError("Identidad PZ/COLOR excede la altura fisica disponible")
+        return {
+            "identity": rendered_identity,
+            "net_label_y": net_label_y,
+            "net_value_y": net_value_y,
+            "theoretical_y": theoretical_y,
+            "bar_y": bar_y,
+            "title_y": title_y,
+            "contribution_label_y": contribution_label_y,
+            "contribution_y": contribution_y,
+            "units_y": units_y,
+            "order_y": order_y,
+        }
+
+    def _structured_post_weight_column(self, x, payload, values, order_context, operational_datetime):
+        geometry = self._structured_post_column_values(payload, values, order_context)
+        commands = [
+            f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
+            f'TEXT {x + 8},12,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
+            f'TEXT {x + 8},38,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
+            f'TEXT {x + 8},58,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
+        ]
+        identity_y = 78
+        for line in geometry["identity"]:
+            commands.append(f'TEXT {x + 8},{identity_y},"2",0,1,1,"{line.replace(chr(34), chr(39))}"')
+            identity_y += 22
+        commands.extend([
+            f'TEXT {x + 8},{geometry["net_label_y"]},"2",0,1,1,"{values["net_label"]}"',
+            f'TEXT {x + 62},{geometry["net_value_y"]},"3",0,2,2,"{_safe(values["net"], 10)}"',
+        ])
+        if values["fabricated_theoretical"] is not None:
+            commands.append(
+                f'TEXT {x + 8},{geometry["theoretical_y"]},"1",0,1,1,'
+                f'"PESO FABRICADO TEORICO (kg): {_safe(values["fabricated_theoretical"], 9)}"'
+            )
+        commands.extend([
+            f'BAR {x + 8},{geometry["bar_y"]},{self.STICKER_WIDTH - 16},2',
+            f'TEXT {x + 8},{geometry["title_y"]},"3",0,1,1,"{_safe(values["title"], 38)}"',
+            f'TEXT {x + 8},{geometry["contribution_label_y"]},"1",0,1,1,"{values["contribution_label"]}"',
+            f'TEXT {x + self.STICKER_WIDTH - 8 - 24 * len("+" + _safe(values["contribution"], 9))},{geometry["contribution_y"]},"4",0,1,1,"+{_safe(values["contribution"], 9)}"',
+        ])
+        if values["shows_units"]:
+            commands.extend([
+                f'TEXT {x + 8},{geometry["units_y"]},"2",0,1,1,"{values["quantity_label"]}: {_safe(values["quantity"], 10)} UN"',
+                f'TEXT {x + 8},{geometry["order_y"]},"1",0,1,1,"{_safe(order_context, 46)}"',
+            ])
+        else:
+            commands.extend([
+                f'TEXT {x + 8},{geometry["units_y"]},"2",0,1,1,"AVANCE EN KG - SIN CONTEO"',
+                f'TEXT {x + 8},{geometry["order_y"]},"1",0,1,1,"{_safe(order_context, 46)}"',
+            ])
+        return "\n".join(commands)
+
     def _weight_column(self, x, item, printed_at):
         payload = item["payload"]
         is_post = self._document_type(payload) == "POSTPESAJE"
@@ -328,6 +436,10 @@ class ScmPrelabelService:
         operational_datetime = self._display_operational_datetime(
             payload, printed_at
         )
+        if is_post and self._structured_post_fields(payload):
+            return self._structured_post_weight_column(
+                x, payload, values, order_context, operational_datetime
+            )
         commands = [
             f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
             f'TEXT {x + 8},12,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
@@ -360,9 +472,10 @@ class ScmPrelabelService:
                 f'TEXT {x + 8},300,"2",0,1,1,"AVANCE EN KG · SIN CONTEO"',
                 f'TEXT {x + 8},326,"1",0,1,1,"{_safe(order_context, 46)}"',
             ))
-        commands.append(
-            f'TEXT {x + 8},375,"1",0,1,1,"SIN QR · CONSERVAR PREETIQUETA"'
-        )
+        if not is_post:
+            commands.append(
+                f'TEXT {x + 8},375,"1",0,1,1,"SIN QR · CONSERVAR PREETIQUETA"'
+            )
         return "\n".join(commands)
 
     @staticmethod
@@ -588,6 +701,55 @@ class ScmPrelabelService:
         ))
         return "".join(parts)
 
+    def _svg_structured_post_weight_column(self, x, payload, values, order_context, operational_datetime):
+        geometry = self._structured_post_column_values(payload, values, order_context)
+        text = lambda y, value, size=15, weight=600, anchor="start", x_pos=None: (
+            f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '
+            f'font-family="Arial, sans-serif" font-size="{size}" '
+            f'font-weight="{weight}" text-anchor="{anchor}">'
+            f'{escape(str(value or ""))}</text>'
+        )
+        parts = [
+            f'<rect x="{x + 1}" y="2" width="{self.STICKER_WIDTH - 3}" height="396" '
+            'rx="4" fill="white" stroke="#111" stroke-width="3"/>',
+            text(28, f'MANGA: {_safe(payload.get("codigo_manga"), 32)}', 20, 800),
+            text(50, operational_datetime, 12, 600),
+            text(70, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
+        ]
+        identity_y = 98
+        for line in geometry["identity"]:
+            parts.append(text(identity_y, line, 20, 700))
+            identity_y += 22
+        parts.extend([
+            text(geometry["net_label_y"] + 18, values["net_label"], 20, 800),
+            text(geometry["net_value_y"] + 48, values["net"], 48, 900, "middle", x + 200),
+        ])
+        if values["fabricated_theoretical"] is not None:
+            parts.append(text(
+                geometry["theoretical_y"] + 14,
+                f'PESO FABRICADO TEORICO (kg): {values["fabricated_theoretical"]}',
+                13,
+                700,
+            ))
+        parts.extend([
+            f'<line x1="{x + 8}" y1="{geometry["bar_y"]}" '
+            f'x2="{x + 392}" y2="{geometry["bar_y"]}" stroke="#111" stroke-width="2"/>',
+            text(geometry["bar_y"] + 25, values["title"], 20, 900),
+            text(geometry["bar_y"] + 48, values["contribution_label"], 13, 700),
+            text(geometry["bar_y"] + 87, f'+{values["contribution"]}', 32, 900, "end", x + 392),
+        ])
+        if values["shows_units"]:
+            parts.extend((
+                text(geometry["bar_y"] + 106, f'{values["quantity_label"]}: {values["quantity"]} UN', 17, 800),
+                text(geometry["bar_y"] + 130, order_context, 12, 600),
+            ))
+        else:
+            parts.extend((
+                text(geometry["bar_y"] + 106, 'AVANCE EN KG - SIN CONTEO', 18, 800),
+                text(geometry["bar_y"] + 130, order_context, 12, 600),
+            ))
+        return "".join(parts)
+
     def _svg_weight_column(self, x, item, printed_at):
         payload = item["payload"]
         is_post = self._document_type(payload) == "POSTPESAJE"
@@ -601,6 +763,10 @@ class ScmPrelabelService:
         operational_datetime = self._display_operational_datetime(
             payload, printed_at
         )
+        if is_post and self._structured_post_fields(payload):
+            return self._svg_structured_post_weight_column(
+                x, payload, values, order_context, operational_datetime
+            )
         text = lambda y, value, size=15, weight=600, anchor="start", x_pos=None: (
             f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '
             f'font-family="Arial, sans-serif" font-size="{size}" '
@@ -648,7 +814,8 @@ class ScmPrelabelService:
                 text(313, 'AVANCE EN KG · SIN CONTEO', 18, 800),
                 text(337, order_context, 12, 600),
             ))
-        parts.append(text(386, 'SIN QR · CONSERVAR PREETIQUETA', 12, 800))
+        if not is_post:
+            parts.append(text(386, 'SIN QR · CONSERVAR PREETIQUETA', 12, 800))
         return "".join(parts)
 
     def _sheets(self, labels):

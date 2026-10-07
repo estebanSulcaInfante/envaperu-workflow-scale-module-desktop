@@ -383,6 +383,7 @@ def test_postpesaje_v5_anterior_sin_fuente_no_afirma_conteo_fisico():
 
 def test_postpesaje_fabricacion_distingue_neto_aporte_y_peso_fabricado():
     label = _post_weighing_label("OF000900-OT001-M001")
+    label["payload"].pop("pieza", None)
     service = ScmPrelabelService()
     tspl = service.generate_tspl({"labels": [label]})
     svg = service.generate_preview_svg({"labels": [label]})

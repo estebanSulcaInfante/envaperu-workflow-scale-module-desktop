@@ -7,6 +7,23 @@ from app.services.scm_prelabel_service import ScmPrelabelService
 from test_scm_prelabels import _color_work_label, _post_weighing_label
 
 
+def _identity_product(piece, color, variant=None):
+    return {
+        "version": 1,
+        "mode": "CATALOG_SNAPSHOT",
+        "captured_at": "2026-10-07T16:00:00Z",
+        "pieza": {"id": "pieza-1", "codigo": "PZ-001", "nombre": piece, "version": 2},
+        "color": {"id": "color-1", "nombre": color, "source": "MANGA_SNAPSHOT"},
+        "variante": {
+            "sku": "VAR-001",
+            "nombre": variant or f"{piece} {color}",
+            "catalog_version": "catalog-1",
+            "source": "MANGA_SNAPSHOT",
+        },
+        "provenance": {"fixture": "test"},
+    }
+
+
 @pytest.mark.parametrize('numbers', [(2,), (2, 999)])
 def test_distinct_native_prelabels_preserve_sources_and_blank_odd_slot(numbers):
     labels = [_color_work_label(f'OF-DEMO-OT007-M{n:03}') for n in numbers]
@@ -50,9 +67,10 @@ def test_post_piece_name_immediately_above_net_without_catalog_id_or_source_muta
     tspl = service.generate_tspl({'labels': [label]})
     svg = service.generate_preview_svg({'labels': [label]})
     assert label == before
-    assert 'PC-000073' not in tspl and 'PC-000073' not in svg
-    assert 'TEXT 32,78,"1",0,1,1,"TOLVA MUESTRA ROJO"\nTEXT 32,100,"2",0,1,1,"PESO NETO FINAL (kg)"' in tspl
-    assert svg.index('TOLVA MUESTRA ROJO') < svg.index('PESO NETO FINAL')
+    assert 'TOLVA MUESTRA ROJO (PC-000073)' in tspl
+    assert 'TOLVA MUESTRA ROJO (PC-000073)' in svg
+    assert 'TEXT 32,78,"1",0,1,1,"TOLVA MUESTRA ROJO (PC-000073)"\nTEXT 32,100,"2",0,1,1,"PESO NETO FINAL (kg)"' in tspl
+    assert svg.index('TOLVA MUESTRA ROJO (PC-000073)') < svg.index('PESO NETO FINAL')
     assert 'QRCODE' not in tspl
 
 
@@ -95,6 +113,7 @@ def test_structured_post_prints_explicit_pz_and_color_in_font2_without_footer():
     label = _post_weighing_label("OF-DEMO-OT007-M002")
     label["payload"]["pieza"] = "TOLVA MUESTRA"
     label["payload"]["color"] = "ROJO SOLIDO"
+    label["payload"]["identidad_producto"] = _identity_product("TOLVA MUESTRA", "ROJO SOLIDO")
     service = ScmPrelabelService()
 
     tspl = service._weight_column(24, label, "07/10/2026 11:00")
@@ -110,10 +129,69 @@ def test_structured_post_prints_explicit_pz_and_color_in_font2_without_footer():
     assert "SIN QR" not in svg
 
 
+def test_versioned_snapshot_prints_variant_only_when_not_exact_pz_plus_color():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"]["identidad_producto"] = _identity_product(
+        "TOLVA MUESTRA", "ROJO SOLIDO", "TOLVA MUESTRA ROJO SOLIDO PREMIUM"
+    )
+    service = ScmPrelabelService()
+
+    tspl = service._weight_column(24, label, "07/10/2026 11:00")
+    svg = service._svg_weight_column(24, label, "07/10/2026 11:00")
+
+    assert 'TEXT 32,122,"2",0,1,1,"VAR: TOLVA MUESTRA ROJO SOLIDO"' in tspl
+    assert 'TEXT 32,144,"2",0,1,1,"  PREMIUM"' in tspl
+    assert "VAR: TOLVA MUESTRA ROJO SOLIDO" in svg
+    assert "PREMIUM" in svg
+
+    label["payload"]["identidad_producto"] = _identity_product(
+        "TOLVA MUESTRA", "ROJO SOLIDO", "TOLVA MUESTRA ROJO SOLIDO"
+    )
+    exact_tspl = service._weight_column(24, label, "07/10/2026 11:00")
+    assert "VAR:" not in exact_tspl
+
+
+def test_malformed_versioned_identity_fails_instead_of_silently_using_legacy():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"]["identidad_producto"] = {"version": 2, "pieza": {"nombre": "NO"}}
+    with pytest.raises(ValueError, match="identidad_producto"):
+        ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
+
+
+def test_legacy_manga_snapshot_never_uses_its_pieza_as_product_identity():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"]["identidad_producto"] = {
+        "version": 1,
+        "mode": "LEGACY_MANGA_SNAPSHOT",
+        "captured_at": "2026-10-07T16:00:00Z",
+        "pieza": None,
+        "color": {"nombre": "ROJO", "source": "MANGA_SNAPSHOT"},
+        "provenance": {"fixture": "test"},
+    }
+    tspl = ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
+
+    assert "NO USAR" not in tspl
+    assert "Asa fucsia" in tspl
+
+
+def test_legacy_identity_with_piece_object_is_rejected_as_malformed():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"]["identidad_producto"] = _identity_product("NO USAR", "ROJO")
+    label["payload"]["identidad_producto"]["mode"] = "LEGACY_MANGA_SNAPSHOT"
+    label["payload"]["identidad_producto"]["pieza"] = {
+        "id": "legacy-pieza", "nombre": "NO USAR", "version": 1
+    }
+    with pytest.raises(ValueError, match="LEGACY_MANGA_SNAPSHOT"):
+        ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
+
+
 def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_label():
     label = _post_weighing_label("OF-DEMO-OT007-M002")
     label["payload"]["pieza"] = "BASE DE ORGANIZADOR DE MUESTRA EXTRA GRANDE"
     label["payload"]["color"] = "ROJO SOLIDO DE MUESTRA"
+    label["payload"]["identidad_producto"] = _identity_product(
+        label["payload"]["pieza"], label["payload"]["color"]
+    )
     service = ScmPrelabelService()
 
     tspl = service._weight_column(24, label, "07/10/2026 11:00")
@@ -131,6 +209,9 @@ def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_la
     assert 'TEXT 32,362,"1"' in tspl
 
     label["payload"]["color"] = "ROJO SOLIDO DE MUESTRA EXTRA"
+    label["payload"]["identidad_producto"] = _identity_product(
+        label["payload"]["pieza"], label["payload"]["color"]
+    )
     worst_case_tspl = service._weight_column(24, label, "07/10/2026 11:00")
     assert 'COLOR: ROJO SOLIDO DE MUESTRA' in worst_case_tspl
     assert '  EXTRA' in worst_case_tspl
@@ -142,13 +223,25 @@ def test_structured_post_rejects_unbreakable_or_overlong_identity_instead_of_dro
     label = _post_weighing_label("OF-DEMO-OT007-M002")
     service = ScmPrelabelService()
     label["payload"]["pieza"] = "X" * 40
+    label["payload"]["identidad_producto"] = _identity_product("X" * 40, label["payload"]["color"])
     with pytest.raises(ValueError, match="Campo PZ"):
         service._weight_column(24, label, "07/10/2026 11:00")
 
     label["payload"]["pieza"] = "UNO DOS TRES CUATRO CINCO SEIS SIETE OCHO NUEVE DIEZ"
     label["payload"]["color"] = "UNO DOS TRES CUATRO CINCO SEIS SIETE OCHO NUEVE DIEZ"
+    label["payload"]["identidad_producto"] = _identity_product(
+        label["payload"]["pieza"], label["payload"]["color"]
+    )
     with pytest.raises(ValueError, match="Identidad PZ/COLOR"):
         service._weight_column(24, label, "07/10/2026 11:00")
+
+
+def test_historical_post_long_name_fails_explicitly_instead_of_truncating():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"].pop("pieza", None)
+    label["payload"]["pieza_color"] = "NOMBRE HISTORICO " + "MUY " * 20
+    with pytest.raises(ValueError, match="Nombre historico POST"):
+        ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
 
 
 def test_historical_post_without_pieza_does_not_infer_pz_or_color_from_pieza_color():
@@ -159,5 +252,5 @@ def test_historical_post_without_pieza_does_not_infer_pz_or_color_from_pieza_col
 
     assert "PZ:" not in tspl
     assert "COLOR:" not in tspl
-    assert "TOLVA MUESTRA ROJO" in tspl
+    assert "TOLVA MUESTRA ROJO (PC-000073)" in tspl
     assert "SIN QR" not in tspl

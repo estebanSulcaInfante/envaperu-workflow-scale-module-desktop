@@ -163,9 +163,11 @@ class PostReprintService:
             self._event(row, row.state, evidence)
             db.session.commit()
             return self._view(row)
+        render_rejected = False
         try:
             tspl, _ = PostReprintRenderer().render(job)
         except (ValueError, KeyError, TypeError) as exc:
+            render_rejected = True
             evidence = {'attempt_id': row.attempt_id, 'result': 'NOT_EMITTED', 'error': str(exc),
                         'expected_bytes': 0, 'bytes_written': 0, 'write_attempted': False}
         else:
@@ -187,7 +189,11 @@ class PostReprintService:
                         'renderer_version': PostReprintRenderer.VERSION,
                         'printer_name': getattr(printer, 'printer_name', None)}
         row.state = evidence['result']
+        if render_rejected:
+            row.ack_pending = False
         row.evidence_json = json.dumps(evidence, sort_keys=True)
         self._event(row, row.state, evidence)
         db.session.commit()
+        if render_rejected:
+            return self._view(row)
         return self._ack(row)

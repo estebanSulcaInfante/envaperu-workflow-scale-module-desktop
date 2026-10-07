@@ -312,13 +312,74 @@ class ScmPrelabelService:
         }
 
     @staticmethod
-    def _structured_post_fields(payload):
-        """Return only explicit POST identity fields; never split pieza_color."""
-        if not isinstance(payload.get("pieza"), str) or not payload["pieza"].strip():
+    def _snapshot_text(value):
+        return isinstance(value, str) and bool(value.strip())
+
+    @classmethod
+    def _versioned_post_fields(cls, payload):
+        """Read only the v1 product snapshot; never split legacy strings."""
+        if "identidad_producto" not in payload or payload.get("identidad_producto") is None:
+            # Compatibility/demo payloads may already contain explicit piece
+            # and color strings. They are display-only and never provenance.
+            if cls._snapshot_text(payload.get("pieza")) and cls._snapshot_text(payload.get("color")):
+                return {"PZ": payload["pieza"].strip(), "COLOR": payload["color"].strip()}
             return None
-        if not isinstance(payload.get("color"), str) or not payload["color"].strip():
+        identity = payload["identidad_producto"]
+        if not isinstance(identity, dict) or identity.get("version") != 1:
+            raise ValueError("identidad_producto v1 invalida")
+        if identity.get("mode") not in {"CATALOG_SNAPSHOT", "LEGACY_MANGA_SNAPSHOT"}:
+            raise ValueError("identidad_producto mode invalido")
+        if not cls._snapshot_text(identity.get("captured_at")):
+            raise ValueError("identidad_producto captured_at invalido")
+        if not isinstance(identity.get("provenance"), dict) or not identity["provenance"]:
+            raise ValueError("identidad_producto provenance invalida")
+        if "bindings" in identity and not isinstance(identity["bindings"], dict):
+            raise ValueError("identidad_producto bindings invalida")
+        if identity["mode"] == "LEGACY_MANGA_SNAPSHOT":
+            # Legacy manga snapshots never become a fabricated PZ. They stay
+            # on the historical renderer, even when color/variant snapshots
+            # are available for audit.
+            if identity.get("pieza") is not None:
+                raise ValueError("identidad_producto pieza invalida para LEGACY_MANGA_SNAPSHOT")
+            color = identity.get("color")
+            if not isinstance(color, dict) or color.get("source") != "MANGA_SNAPSHOT" or not cls._snapshot_text(color.get("nombre")):
+                raise ValueError("identidad_producto color invalido")
+            variante = identity.get("variante")
+            if variante is not None and (
+                not isinstance(variante, dict)
+                or variante.get("source") != "MANGA_SNAPSHOT"
+                or not all(variante.get(key) for key in ("sku", "catalog_version"))
+                or not cls._snapshot_text(variante.get("nombre"))
+            ):
+                raise ValueError("identidad_producto variante invalida")
             return None
-        return {"PZ": payload["pieza"].strip(), "COLOR": payload["color"].strip()}
+        pieza = identity.get("pieza")
+        color = identity.get("color")
+        if not isinstance(pieza, dict) or not all(pieza.get(key) for key in ("id", "version")):
+            raise ValueError("identidad_producto pieza invalida")
+        if not cls._snapshot_text(pieza.get("nombre")):
+            raise ValueError("identidad_producto pieza.nombre invalido")
+        if not isinstance(color, dict) or color.get("source") != "MANGA_SNAPSHOT":
+            raise ValueError("identidad_producto color invalido")
+        if not cls._snapshot_text(color.get("nombre")):
+            raise ValueError("identidad_producto color.nombre invalido")
+        fields = {"PZ": pieza["nombre"].strip(), "COLOR": color["nombre"].strip()}
+        variante = identity.get("variante")
+        if not isinstance(variante, dict) or variante.get("source") != "MANGA_SNAPSHOT":
+            raise ValueError("identidad_producto variante invalida")
+        if not all(variante.get(key) for key in ("sku", "catalog_version")):
+            raise ValueError("identidad_producto variante incompleta")
+        if not cls._snapshot_text(variante.get("nombre")):
+            raise ValueError("identidad_producto variante.nombre invalido")
+        variant_name = variante["nombre"].strip()
+        if variant_name != f'{fields["PZ"]} {fields["COLOR"]}':
+            fields["VAR"] = variant_name
+        return fields
+
+    @classmethod
+    def _structured_post_fields(cls, payload):
+        """Return v1 snapshot fields only; legacy payloads stay on old layout."""
+        return cls._versioned_post_fields(payload)
 
     @classmethod
     def _structured_post_identity_lines(cls, payload):
@@ -440,12 +501,13 @@ class ScmPrelabelService:
             return self._structured_post_weight_column(
                 x, payload, values, order_context, operational_datetime
             )
+        legacy_post_name = self._legacy_post_name(payload) if is_post else None
         commands = [
             f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
             f'TEXT {x + 8},12,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
             f'TEXT {x + 8},38,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
             f'TEXT {x + 8},58,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
-            *([f'TEXT {x + 8},78,"1",0,1,1,"{_safe(self._piece_name(payload), 46)}"'] if is_post else []),
+            *([f'TEXT {x + 8},78,"1",0,1,1,"{legacy_post_name}"'] if is_post else []),
             f'TEXT {x + 8},{100 if is_post else 84},"2",0,1,1,"{values["net_label"]}"',
             f'TEXT {x + 62},{124 if is_post else 108},"3",0,2,2,"{_safe(values["net"], 10)}"',
         ]
@@ -488,6 +550,14 @@ class ScmPrelabelService:
         # Historical payloads omit a separate SKU. Restrict fallback to catalog
         # families present in SCM rather than removing arbitrary name parentheses.
         return re.sub(r'\s+\((?:PC|P|PT)-[A-Z0-9]+(?:-[A-Z0-9]+)*\)\s*$', '', text).strip()
+
+    @classmethod
+    def _legacy_post_name(cls, payload):
+        """Keep the historical source string complete or reject it."""
+        value = str(payload.get("pieza_color") or "").strip().replace('"', "'")
+        if len(value) > 46:
+            raise ValueError("Nombre historico POST excede la columna fisica disponible")
+        return value
 
     @staticmethod
     def _manga_number(payload):
@@ -767,6 +837,7 @@ class ScmPrelabelService:
             return self._svg_structured_post_weight_column(
                 x, payload, values, order_context, operational_datetime
             )
+        legacy_post_name = self._legacy_post_name(payload) if is_post else None
         text = lambda y, value, size=15, weight=600, anchor="start", x_pos=None: (
             f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '
             f'font-family="Arial, sans-serif" font-size="{size}" '
@@ -785,7 +856,7 @@ class ScmPrelabelService:
             ),
             text(50, operational_datetime, 12, 600),
             text(70, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
-            *([text(90, _safe(self._piece_name(payload), 46), 12, 600)] if is_post else []),
+            *([text(90, legacy_post_name, 12, 600)] if is_post else []),
             text(118 if is_post else 98, values["net_label"], 18, 800),
             text(178 if is_post else 174, values["net"], 48, 900, "middle", x + 200),
         ]

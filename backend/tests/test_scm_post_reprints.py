@@ -27,6 +27,23 @@ def job(copies=1):
     return result
 
 
+def versioned_identity(mode="CATALOG_SNAPSHOT", variant="TOLVA MUESTRA ROJO SOLIDO PREMIUM"):
+    return {
+        "version": 1,
+        "mode": mode,
+        "captured_at": "2026-10-07T16:00:00Z",
+        "pieza": {"id": "pieza-1", "codigo": "PZ-001", "nombre": "TOLVA MUESTRA", "version": 2},
+        "color": {"id": "color-1", "nombre": "ROJO SOLIDO", "source": "MANGA_SNAPSHOT"},
+        "variante": {
+            "sku": "VAR-001",
+            "nombre": variant,
+            "catalog_version": "catalog-1",
+            "source": "MANGA_SNAPSHOT",
+        },
+        "provenance": {"fixture": "test"},
+    }
+
+
 class Client:
     def __init__(self, item):
         self.item = item
@@ -82,6 +99,40 @@ def test_exact_copy_count_no_inherited_double(copies):
     assert tspl.count('PRINT 1,1') == (copies+1)//2
     assert svg.count('OF80-OT71-M002') == copies
     assert 'QRCODE' not in tspl
+
+
+def test_copy_renderer_uses_catalog_snapshot_identity_and_keeps_tspl_svg_in_sync():
+    item = job(copies=3)
+    item["payload"]["identidad_producto"] = versioned_identity("CATALOG_SNAPSHOT")
+    item["payload_hash"] = hashlib.sha256(json.dumps(
+        item["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+    tspl, svg = PostReprintRenderer().render(item)
+
+    assert tspl.count("PZ: TOLVA MUESTRA") == 3
+    assert tspl.count("COLOR: ROJO SOLIDO") == 3
+    assert tspl.count("VAR: TOLVA MUESTRA ROJO SOLIDO") == 3
+    assert svg.count("PZ: TOLVA MUESTRA") == 3
+    assert svg.count("COLOR: ROJO SOLIDO") == 3
+    assert svg.count("VAR: TOLVA MUESTRA ROJO SOLIDO") == 3
+    assert "SIN QR" not in tspl
+    assert "SIN QR" not in svg
+
+
+def test_copy_renderer_keeps_legacy_manga_snapshot_on_legacy_layout():
+    item = job(copies=1)
+    item["payload"]["identidad_producto"] = versioned_identity("LEGACY_MANGA_SNAPSHOT")
+    item["payload"]["identidad_producto"]["pieza"] = None
+    item["payload_hash"] = hashlib.sha256(json.dumps(
+        item["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+    tspl, svg = PostReprintRenderer().render(item)
+
+    assert "NO USAR" not in tspl
+    assert "PZ:" not in tspl and "COLOR:" not in tspl and "VAR:" not in tspl
+    assert "MUESTRA" in tspl and "MUESTRA" in svg
 
 
 def test_pre_and_unknown_renderer_blocked():
@@ -163,11 +214,41 @@ def test_tampered_source_never_reaches_printer(app):
     assert not printer.calls
 
 
+def test_malformed_identity_never_reaches_printer_or_ack(app):
+    item = job()
+    item['payload']['identidad_producto'] = {'version': 2}
+    item['payload_hash'] = hashlib.sha256(json.dumps(
+        item['payload'], ensure_ascii=False, sort_keys=True, separators=(',', ':')
+    ).encode()).hexdigest()
+    client = Client(item)
+    printer = Printer()
+
+    result = PostReprintService(client=client, printer=printer).execute(item['copy_job_id'])
+
+    assert result['result'] == 'NOT_EMITTED'
+    assert result['evidence']['expected_bytes'] == 0
+    assert result['evidence']['write_attempted'] is False
+    assert not printer.calls
+    assert not client.acks
+
+
 def test_control_characters_cannot_inject_tspl():
     item = job()
     item['payload']['maquinista'] = 'MUESTRA\nPRINT 999,999'
     item['payload_hash'] = hashlib.sha256(json.dumps(item['payload'], ensure_ascii=False,
         sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    with pytest.raises(ValueError, match='controles'):
+        PostReprintRenderer().render(item)
+
+
+def test_versioned_variant_control_characters_never_reach_renderer():
+    item = job()
+    item['payload']['identidad_producto'] = versioned_identity(
+        variant='TOLVA MUESTRA ROJO\nCONFITECA'
+    )
+    item['payload_hash'] = hashlib.sha256(json.dumps(
+        item['payload'], ensure_ascii=False, sort_keys=True, separators=(',', ':')
+    ).encode()).hexdigest()
     with pytest.raises(ValueError, match='controles'):
         PostReprintRenderer().render(item)
 

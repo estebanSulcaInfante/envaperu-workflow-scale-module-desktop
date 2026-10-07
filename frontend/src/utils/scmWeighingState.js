@@ -1,5 +1,12 @@
 const state = (kind, title, recovery = '') => ({ kind, title, recovery, ready: kind === 'ready' });
 
+export function needsPrintRetry(result) {
+  const printResult = result?.print_result || {};
+  const status = String(printResult.result || printResult.estado || '').toUpperCase();
+  return ['NOT_EMITTED', 'NO_EMITIDO', 'NO_EMITIDA'].includes(status)
+    || printResult.error_code === 'PRINT_FORMAT_INVALID';
+}
+
 function legacyBlocker(context) {
   const manga = context.manga || {};
   if (manga.estado === 'ANULADA') {
@@ -21,6 +28,11 @@ function legacyBlocker(context) {
 export function getWeighingState({ context, busy, result, centralAvailable, listening,
   controlOnly, peso, tare, net, lastControlNet, validPartialClose, partialClose, error,
   scanConsumed }) {
+  if (needsPrintRetry(result) && !busy) return state(
+    'print-retry',
+    'Pesaje confirmado; etiqueta no emitida',
+    'El pesaje ya est� guardado. Reintente solo la emisi�n con la misma operaci�n; no se releer� la balanza.',
+  );
   if (busy) return state('waiting', 'Operación en curso', 'Espere la respuesta; no retire ni cambie la manga.');
   if (result) return state('success', 'Cierre registrado · manga cerrada', 'Revise el resultado de impresión y escanee la siguiente manga.');
   if (scanConsumed) return state(

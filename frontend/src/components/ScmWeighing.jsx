@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { scmWeighingApi } from '../services/api';
-import { getWeighingState, mangaStateLabel } from '../utils/scmWeighingState';
+import { getWeighingState, mangaStateLabel, needsPrintRetry } from '../utils/scmWeighingState';
 
 const PORTFOLIO_DEMO_QR = JSON.stringify({
   v: 1,
@@ -117,6 +117,7 @@ export default function ScmWeighing({
   const canSubmit = weighingState.ready;
   const canConfirm = canSubmit && !controlOnly;
   const canRecordControl = canSubmit && controlOnly;
+  const printRetry = needsPrintRetry(result);
   const controlAvailable = Boolean(context?.can_register_weight_control);
   const showIntentSelector = Boolean(
     !context?.demo_only
@@ -129,7 +130,7 @@ export default function ScmWeighing({
 
   const resolveQr = async (requestedValue = qr) => {
     const requestedQr = typeof requestedValue === 'string' ? requestedValue : qr;
-    if (!requestedQr.trim() || busy || requestInFlightRef.current || !centralAvailable) return;
+    if (!requestedQr.trim() || busy || requestInFlightRef.current || !centralAvailable || printRetry) return;
     requestInFlightRef.current = true;
     setBusy(true);
     setError('');
@@ -169,7 +170,8 @@ export default function ScmWeighing({
   };
 
   const confirm = async () => {
-    if (!canConfirm || requestInFlightRef.current) return;
+    if ((!canConfirm && !printRetry) || requestInFlightRef.current || (printRetry && !operationIdRef.current)) return;
+    const retryingPrint = printRetry;
     requestInFlightRef.current = true;
     if (!operationIdRef.current) operationIdRef.current = newOperationId();
     setBusy(true);
@@ -181,8 +183,12 @@ export default function ScmWeighing({
         operationIdRef.current,
         {},
       );
+      const retryAgain = needsPrintRetry(data);
       setResult(data);
-      setScanConsumed(true);
+      setScanConsumed(!retryAgain);
+      if (retryAgain) {
+        setError(data.print_result?.error || 'El pesaje qued� confirmado, pero la etiqueta no fue emitida.');
+      }
       setCloseConfirmationOpen(false);
       setControlOnly(false);
       setContext((previous) => ({
@@ -196,6 +202,11 @@ export default function ScmWeighing({
         },
       }));
     } catch (requestError) {
+      if (retryingPrint) {
+        setError(requestError.response?.data?.message
+          || 'No se pudo reemitir la etiqueta. El pesaje ya est� confirmado; conserva la misma operaci�n.');
+        return;
+      }
       setError(
         requestError.response?.data?.message
           || 'No se confirmó el pesaje. F2 reutilizará la misma operación.',
@@ -376,6 +387,7 @@ export default function ScmWeighing({
               ref={scannerInputRef}
               autoFocus
               value={qr}
+              disabled={busy || printRetry}
               onChange={(event) => setQr(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
@@ -388,7 +400,7 @@ export default function ScmWeighing({
             />
             <button
               className="btn btn-primary"
-              disabled={!qr.trim() || busy || (!online && !simulationEnabled)}
+              disabled={!qr.trim() || busy || printRetry || (!online && !simulationEnabled)}
               onClick={resolveQr}
             >
               Resolver
@@ -728,6 +740,21 @@ export default function ScmWeighing({
                 </div>
               )}
               <span>Etiqueta final: {printState}</span>
+              {printRetry && (
+                <>
+                  <strong>El pesaje est� confirmado; la etiqueta no fue emitida.</strong>
+                  <span>No se releer� la balanza ni se crear� otro pesaje.</span>
+                  {result.print_result?.error && <small>{result.print_result.error}</small>}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={confirm}
+                  >
+                    Reintentar solo emisi�n
+                  </button>
+                </>
+              )}
               <small>
                 Estado inventario: NO_INGRESADA · pendiente de recepción
               </small>

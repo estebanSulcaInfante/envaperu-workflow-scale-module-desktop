@@ -192,6 +192,46 @@ def test_legacy_identity_with_piece_object_is_rejected_as_malformed():
         ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
 
 
+def test_legacy_nullable_color_and_sku_keep_full_historical_layout():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"]["identidad_producto"] = {
+        "version": 1,
+        "mode": "LEGACY_MANGA_SNAPSHOT",
+        "captured_at": "2026-10-07T16:00:00Z",
+        "pieza": None,
+        "color": {"nombre": None, "source": "MANGA_SNAPSHOT"},
+        "variante": {
+            "sku": None,
+            "nombre": "MANGA LEGACY SIN COLOR",
+            "catalog_version": None,
+            "catalog_version_source": "SCM_ARTICULO",
+            "source": "MANGA_SNAPSHOT",
+        },
+        "provenance": {"fixture": "legacy-nullable"},
+    }
+
+    tspl = ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
+
+    assert "Asa fucsia" in tspl
+    assert "PZ:" not in tspl and "COLOR:" not in tspl and "VAR:" not in tspl
+
+
+def test_legacy_identity_requires_variant_snapshot_object():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"]["identidad_producto"] = {
+        "version": 1,
+        "mode": "LEGACY_MANGA_SNAPSHOT",
+        "captured_at": "2026-10-07T16:00:00Z",
+        "pieza": None,
+        "color": {"nombre": None, "source": "MANGA_SNAPSHOT"},
+        "variante": None,
+        "provenance": {"fixture": "legacy-malformed"},
+    }
+
+    with pytest.raises(ValueError, match="variante"):
+        ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
+
+
 def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_label():
     label = _post_weighing_label("OF-DEMO-OT007-M002")
     label["payload"]["pieza"] = "BASE DE ORGANIZADOR DE MUESTRA EXTRA GRANDE"

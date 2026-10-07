@@ -338,16 +338,19 @@ class ScmPrelabelService:
             if identity.get("pieza") is not None:
                 raise ValueError("identidad_producto pieza invalida para LEGACY_MANGA_SNAPSHOT")
             color = identity.get("color")
-            if not isinstance(color, dict) or color.get("source") != "MANGA_SNAPSHOT" or not cls._snapshot_text(color.get("nombre")):
+            if not isinstance(color, dict) or color.get("source") != "MANGA_SNAPSHOT":
+                raise ValueError("identidad_producto color invalido")
+            color_name = color.get("nombre")
+            if color_name is not None and not cls._snapshot_text(color_name):
                 raise ValueError("identidad_producto color invalido")
             variante = identity.get("variante")
-            if variante is not None and (
-                not isinstance(variante, dict)
-                or variante.get("source") != "MANGA_SNAPSHOT"
-                or not cls._snapshot_text(variante.get("sku"))
-                or variante.get("catalog_version_source") != "SCM_ARTICULO"
-                or not cls._snapshot_text(variante.get("nombre"))
-            ):
+            if not isinstance(variante, dict) or variante.get("source") != "MANGA_SNAPSHOT":
+                raise ValueError("identidad_producto variante invalida")
+            if variante.get("sku") is not None and not cls._snapshot_text(variante.get("sku")):
+                raise ValueError("identidad_producto variante invalida")
+            if variante.get("catalog_version") is not None and not cls._snapshot_text(variante.get("catalog_version")):
+                raise ValueError("identidad_producto variante invalida")
+            if variante.get("catalog_version_source") != "SCM_ARTICULO" or not cls._snapshot_text(variante.get("nombre")):
                 raise ValueError("identidad_producto variante invalida")
             return None
         pieza = identity.get("pieza")

@@ -129,7 +129,7 @@ def _qr_size_dots(payload):
     return qr.modules_count * 4
 
 
-def test_una_identidad_ocupa_ambas_columnas_como_copias_gemelas():
+def test_una_identidad_deja_columna_derecha_vacia():
     tspl = ScmPrelabelService().generate_tspl(
         {"labels": [_label("OP0084-OT001-M001")]},
         printed_at=datetime(2026, 7, 28, 12, 30, tzinfo=timezone.utc),
@@ -142,9 +142,10 @@ def test_una_identidad_ocupa_ambas_columnas_como_copias_gemelas():
     assert "F.OT ORIG.: 2026-07-28" in tspl
     assert "MAQ.ORIG.: Juan Perez" in tspl
     assert "QRCODE 144" in tspl
-    assert "QRCODE 584" in tspl
+    assert "QRCODE 584" not in tspl
     assert ",L,4,A,0," in tspl
-    assert "TEXT 469" in tspl
+    assert "TEXT 469" not in tspl
+    assert tspl.count("QRCODE") == 1
     assert tspl.count("PRINT 1,1") == 1
 
 
@@ -229,8 +230,8 @@ def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
     )
 
     assert 'TEXT 31,10,"0",0,6,6,"MANGA:"' in tspl
-    # Both copies need the same 12-dot top inset as the weighing sticker.
-    for x in (99, 539):
+    # Single PRE identity uses only the left slot and preserves native font2.
+    for x in (99,):
         assert f'TEXT {x},12,"2",0,1,1,"OF000017-OT007-M003"' in tspl
     assert 'PZA: Asa fucsia' in tspl
     assert 'COLOR: FUCSIA SOLIDO' in tspl
@@ -250,7 +251,9 @@ def test_preetiqueta_v5_aplica_identidad_separador_y_kg_teoricos():
     assert "OF/OT:" not in tspl
     assert "CANT.:" not in tspl
     assert 'font-size="20"' in svg
-    assert svg.count('font-size="16"') == 22
+    assert svg.count('font-size="16"') == 11
+    assert '"2",0,3,6,"3"' in tspl
+    assert 'BAR 284,79,1,145' in tspl
 
     scalable_sizes = re.findall(
         r'TEXT \d+,\d+,"0",0,(\d+),(\d+),',
@@ -280,15 +283,15 @@ def test_armado_renderiza_oa_ot_sin_perder_la_identidad():
     assert "OA/OT: OA-000321 - OT-000777" in svg
 
 
-def test_dos_identidades_generan_dos_hojas_duplicadas():
+def test_dos_identidades_generan_una_fila_sin_duplicar():
     left = _label("OP0084-OT001-M001")
     right = deepcopy(_label("OP0084-OT001-M002"))
     tspl = ScmPrelabelService().generate_tspl({
         "labels": [left, right]
     })
 
-    assert tspl.count("QRCODE") == 4
-    assert tspl.count("PRINT 1,1") == 2
+    assert tspl.count("QRCODE") == 2
+    assert tspl.count("PRINT 1,1") == 1
     assert "OP0084-OT001-M001" in tspl
     assert "OP0084-OT001-M002" in tspl
     assert left["payload"]["qr"]["label_id"] in tspl
@@ -318,7 +321,7 @@ def test_preview_web_respeta_hoja_fisica_y_genera_qr():
     assert "data:image/png;base64," in svg
     qr_size = _qr_size_dots(label["payload"])
     assert f'width="{qr_size}" height="{qr_size}"' in svg
-    assert svg.count("OP0084-OT001-M001") == 2
+    assert svg.count("OP0084-OT001-M001") == 1
 
 
 def test_postpesaje_no_crea_segundo_qr_y_declara_utf8_para_nombre_acentuado():
@@ -388,8 +391,8 @@ def test_postpesaje_fabricacion_distingue_neto_aporte_y_peso_fabricado():
     assert "APORTE ULTIMO TRAMO (kg)" in tspl
     assert "PESO FABRICADO TEORICO (kg): 8.75" in tspl
     assert 'TEXT 32,12,"2",0,1,1,"MANGA: OF000900-OT001-M001"' in tspl
-    assert 'TEXT 86,108,"3",0,2,2,"8.95"' in tspl
-    assert 'TEXT 310,244,"4",0,1,1,"+4.15"' in tspl
+    assert 'TEXT 86,124,"3",0,2,2,"8.95"' in tspl
+    assert 'TEXT 296,264,"4",0,1,1,"+4.15"' in tspl
     assert 'font-size="48"' in svg
     assert 'font-size="32"' in svg
     assert ">8.95</text>" in svg

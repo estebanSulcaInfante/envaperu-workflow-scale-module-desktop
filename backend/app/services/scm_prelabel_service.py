@@ -4,6 +4,7 @@ import json
 import hashlib
 import base64
 import io
+import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html import escape
 from datetime import datetime, timedelta, timezone
@@ -311,7 +312,13 @@ class ScmPrelabelService:
 
     def _weight_column(self, x, item, printed_at):
         payload = item["payload"]
+        is_post = self._document_type(payload) == "POSTPESAJE"
         values = self._weight_values(payload)
+        contribution_text = "+" + _safe(values["contribution"], 9)
+        contribution_x = (
+            x + self.STICKER_WIDTH - 8 - 24 * len(contribution_text)
+            if is_post else x + 286
+        )
         order_label, order_value = self._order_row(payload)
         order_context = (
             f'OT CIERRE: {payload["ot_cierre"]}'
@@ -326,8 +333,9 @@ class ScmPrelabelService:
             f'TEXT {x + 8},12,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
             f'TEXT {x + 8},38,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
             f'TEXT {x + 8},58,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
-            f'TEXT {x + 8},84,"2",0,1,1,"{values["net_label"]}"',
-            f'TEXT {x + 62},108,"3",0,2,2,"{_safe(values["net"], 10)}"',
+            *([f'TEXT {x + 8},78,"1",0,1,1,"{_safe(self._piece_name(payload), 46)}"'] if is_post else []),
+            f'TEXT {x + 8},{100 if is_post else 84},"2",0,1,1,"{values["net_label"]}"',
+            f'TEXT {x + 62},{124 if is_post else 108},"3",0,2,2,"{_safe(values["net"], 10)}"',
         ]
         if values["fabricated_theoretical"] is not None:
             commands.append(
@@ -339,8 +347,8 @@ class ScmPrelabelService:
             f'BAR {x + 8},207,{self.STICKER_WIDTH - 16},2',
             f'TEXT {x + 8},218,"3",0,1,1,"{_safe(values["title"], 38)}"',
             f'TEXT {x + 8},246,"1",0,1,1,"{values["contribution_label"]}"',
-            f'TEXT {x + 286},244,"4",0,1,1,"+{_safe(values["contribution"], 9)}"',
-            f'TEXT {x + 8},276,"1",0,1,1,"{_safe(payload.get("pieza_color"), 46)}"',
+            f'TEXT {contribution_x},{264 if is_post else 244},"4",0,1,1,"{contribution_text}"',
+            *([] if is_post else [f'TEXT {x + 8},276,"1",0,1,1,"{_safe(payload.get("pieza_color"), 46)}"']),
         ))
         if values["shows_units"]:
             commands.extend((
@@ -356,6 +364,39 @@ class ScmPrelabelService:
             f'TEXT {x + 8},375,"1",0,1,1,"SIN QR · CONSERVAR PREETIQUETA"'
         )
         return "\n".join(commands)
+
+    @staticmethod
+    def _piece_name(payload):
+        # Remove only the catalog-code suffix, never edit the historical payload.
+        text = str(payload.get("pieza_color") or "").strip()
+        sku = payload.get("pieza_color_sku") or payload.get("sku")
+        if sku:
+            return re.sub(r'\s*\(' + re.escape(str(sku)) + r'\)\s*$', '', text).strip()
+        # Historical payloads omit a separate SKU. Restrict fallback to catalog
+        # families present in SCM rather than removing arbitrary name parentheses.
+        return re.sub(r'\s+\((?:PC|P|PT)-[A-Z0-9]+(?:-[A-Z0-9]+)*\)\s*$', '', text).strip()
+
+    @staticmethod
+    def _manga_number(payload):
+        match = re.search(r'(?:^|-)M(\d+)$', str(payload.get("codigo_manga") or ""))
+        if not match:
+            raise ValueError("El codigo de manga no contiene correlativo imprimible")
+        number = str(int(match.group(1)))
+        scale = min(3, 119 // (12 * len(number)))
+        if scale < 1:
+            raise ValueError("Correlativo excede la columna fisica disponible")
+        return number, scale
+
+    @staticmethod
+    def _compact_display(label, value, body):
+        text = f"{label}: {_safe(value, 46)}"
+        # Only descriptive names may be visually abbreviated in the narrow body.
+        # Identifiers, dates and kg values must remain complete.
+        if body and len(text) > 29:
+            if label in {"MAQUINA", "TIPO MANGA", "OPE"}:
+                return text[:26] + "..."
+            raise ValueError("Campo de preetiqueta excede la columna: " + label)
+        return text
 
     def _column(self, x, item, printed_at):
         payload = item["payload"]
@@ -413,19 +454,27 @@ class ScmPrelabelService:
             ),
         ]
         y = self.COMPACT_ROW_START_Y
+        body = False
         for label, value in self._compact_rows(payload, printed_at):
             if label is None:
                 commands.append(
                     f"BAR {x + 7},{y},{self.STICKER_WIDTH - 16},2"
                 )
                 y += 5
+                body = True
                 continue
             commands.append(
                 f'TEXT {x + 7},{y},"0",0,{general_points},'
                 f'{general_points},'
-                f'"{label}: {_safe(value, 46)}"'
+                f'"{self._compact_display(label, value, body)}"'
             )
             y += self.COMPACT_LINE_HEIGHT
+        number, scale = self._manga_number(payload)
+        number_x = x + 272 + (119 - len(number) * 12 * scale) // 2
+        commands.extend((
+            f'BAR {x + 260},79,1,{self.COMPACT_SEPARATOR_Y - 79}',
+            f'TEXT {number_x},87,"2",0,{scale},6,"{number}"',
+        ))
         commands.extend((
             f"BAR {x + 1},{self.COMPACT_SEPARATOR_Y},"
             f"{self.STICKER_WIDTH - 3},2",
@@ -501,6 +550,7 @@ class ScmPrelabelService:
             ),
         ]
         y = 54
+        body = False
         for label, value in self._compact_rows(payload, printed_at):
             if label is None:
                 separator_y = y - 14
@@ -510,14 +560,23 @@ class ScmPrelabelService:
                     f'y2="{separator_y}" stroke="#111" stroke-width="2"/>'
                 )
                 y += 5
+                body = True
                 continue
             parts.append(
                 f'<text x="{x + 7}" y="{y}" '
                 'font-family="Arial, sans-serif" '
                 f'font-size="{self.COMPACT_GENERAL_DOTS}" font-weight="700">'
-                f'{escape(f"{label}: {_safe(value, 46)}")}</text>'
+                f'{escape(self._compact_display(label, value, body))}</text>'
             )
             y += self.COMPACT_LINE_HEIGHT
+        number, scale = self._manga_number(payload)
+        number_x = x + 272 + (119 - len(number) * 12 * scale) // 2
+        parts.extend((
+            f'<path d="M{x + 260} 79V{self.COMPACT_SEPARATOR_Y}" stroke="#111"/>',
+            f'<text x="{number_x}" y="199" font-family="monospace" '
+            f'font-size="120" textLength="{len(number) * 12 * scale}" '
+            f'lengthAdjust="spacingAndGlyphs">{number}</text>',
+        ))
         parts.extend((
             f'<line x1="{x + 1}" y1="{self.COMPACT_SEPARATOR_Y}" '
             f'x2="{x + self.STICKER_WIDTH - 2}" '
@@ -531,6 +590,7 @@ class ScmPrelabelService:
 
     def _svg_weight_column(self, x, item, printed_at):
         payload = item["payload"]
+        is_post = self._document_type(payload) == "POSTPESAJE"
         values = self._weight_values(payload)
         order_label, order_value = self._order_row(payload)
         order_context = (
@@ -559,8 +619,9 @@ class ScmPrelabelService:
             ),
             text(50, operational_datetime, 12, 600),
             text(70, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
-            text(98, values["net_label"], 18, 800),
-            text(174, values["net"], 48, 900, "middle", x + 200),
+            *([text(90, _safe(self._piece_name(payload), 46), 12, 600)] if is_post else []),
+            text(118 if is_post else 98, values["net_label"], 18, 800),
+            text(178 if is_post else 174, values["net"], 48, 900, "middle", x + 200),
         ]
         if values["fabricated_theoretical"] is not None:
             parts.append(text(
@@ -574,8 +635,8 @@ class ScmPrelabelService:
             'stroke="#111" stroke-width="2"/>',
             text(232, values["title"], 20, 900),
             text(254, values["contribution_label"], 13, 700),
-            text(270, f'+{values["contribution"]}', 32, 900, "end", x + 392),
-            text(289, _safe(payload.get("pieza_color"), 46), 13, 600),
+            text(294 if is_post else 270, f'+{values["contribution"]}', 32, 900, "end", x + 392),
+            *([] if is_post else [text(289, _safe(payload.get("pieza_color"), 46), 13, 600)]),
         ])
         if values["shows_units"]:
             parts.extend((
@@ -590,11 +651,26 @@ class ScmPrelabelService:
         parts.append(text(386, 'SIN QR · CONSERVAR PREETIQUETA', 12, 800))
         return "".join(parts)
 
+    def _sheets(self, labels):
+        if not 1 <= len(labels) <= 2:
+            raise ValueError("El trabajo debe contener una o dos etiquetas")
+        pre_flags = [self._requires_qr(item["payload"]) for item in labels]
+        if any(pre_flags) and not all(pre_flags):
+            raise ValueError("No mezclar PREPESAJE con comprobantes de pesaje en una fila")
+        if all(pre_flags):
+            identities = [item["payload"].get("codigo_manga") for item in labels]
+            label_ids = [self._qr_text(item["payload"]) for item in labels]
+            if len(set(identities)) != len(labels) or len(set(label_ids)) != len(labels):
+                raise ValueError("La fila PREPESAJE requiere mangas y etiquetas diferentes")
+            return [labels]
+        # Existing original weighing/control emission is outside the PRE pairing change.
+        # Formal POST copies use PostReprintRenderer's exact requested copy count.
+        return [[label, label] for label in labels]
+
     def generate_preview_svg(self, job, *, printed_at=None):
         """Render web-preview from the same coordinates as the TSPL."""
         labels = job.get("labels") or []
-        if not 1 <= len(labels) <= 2:
-            raise ValueError("El trabajo debe contener una o dos etiquetas")
+        physical_sheets = self._sheets(labels)
         actual_printed_at = printed_at or datetime.now(timezone.utc)
         timezone_name = (
             current_app.config.get("TIMEZONE", "America/Lima")
@@ -605,21 +681,21 @@ class ScmPrelabelService:
         ).strftime("%d/%m/%Y %H:%M")
         sheet_height = 400
         sheets = []
-        for index, label in enumerate(labels):
+        for index, row in enumerate(physical_sheets):
             content = (
                 '<rect width="872" height="400" fill="#e9edf2"/>'
-                + self._svg_column(self.LEFT_X, label, local_printed_at)
-                + self._svg_column(self.RIGHT_X, label, local_printed_at)
+                + ''.join(self._svg_column(x, label, local_printed_at)
+                          for x, label in zip((self.LEFT_X, self.RIGHT_X), row))
             )
             sheets.append(
                 f'<g transform="translate(0,{index * sheet_height})">'
                 f'{content}</g>'
             )
-        total_height = sheet_height * len(labels)
+        total_height = sheet_height * len(physical_sheets)
         return (
             '<svg xmlns="http://www.w3.org/2000/svg" '
             f'viewBox="0 0 872 {total_height}" width="109mm" '
-            f'height="{50 * len(labels)}mm" '
+            f'height="{50 * len(physical_sheets)}mm" '
             'role="img" aria-label="Vista previa física de etiquetas">'
             + "".join(sheets)
             + "</svg>"
@@ -627,8 +703,7 @@ class ScmPrelabelService:
 
     def generate_tspl(self, job, *, printed_at=None):
         labels = job.get("labels") or []
-        if not 1 <= len(labels) <= 2:
-            raise ValueError("El trabajo debe contener una o dos etiquetas")
+        physical_sheets = self._sheets(labels)
         actual_printed_at = printed_at or datetime.now(timezone.utc)
         timezone_name = (
             current_app.config.get("TIMEZONE", "America/Lima")
@@ -638,13 +713,11 @@ class ScmPrelabelService:
             _station_timezone(timezone_name)
         ).strftime("%d/%m/%Y %H:%M")
         pages = []
-        for label in labels:
-            pages.extend((
-                "CLS",
-                self._column(self.LEFT_X, label, local_printed_at),
-                self._column(self.RIGHT_X, label, local_printed_at),
-                "PRINT 1,1",
-            ))
+        for row in physical_sheets:
+            pages.append("CLS")
+            pages.extend(self._column(x, label, local_printed_at)
+                         for x, label in zip((self.LEFT_X, self.RIGHT_X), row))
+            pages.append("PRINT 1,1")
         return "\n".join((
             "SIZE 109 mm, 50 mm",
             "GAP 3 mm, 0 mm",

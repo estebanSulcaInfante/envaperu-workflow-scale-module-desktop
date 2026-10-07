@@ -407,7 +407,7 @@ export default function ScmPrelabels({ initialJobId = '' }) {
                   <figure className="scm-render-preview">
                     <img src={previewSrc} alt="Simulación física 109 × 50 mm de la hoja TSPL" />
                     <figcaption>
-                      Simulación web del layout TSPL · 109 × 50 mm · 203 DPI
+                      Simulación del layout TSPL · 109 × 50 mm · 203 DPI. La tipografía en pantalla es aproximada; el papel usa fuentes nativas.
                     </figcaption>
                   </figure>
                 ) : (
@@ -421,7 +421,7 @@ export default function ScmPrelabels({ initialJobId = '' }) {
                     <span key={label.public_id}>
                       <span>{label.payload?.codigo_manga || label.manga_codigo}</span>
                       <span>{`QR: ${label.payload?.qr?.label_id || label.public_id}`}</span>
-                      <span>2 copias físicas de la misma identidad</span>
+                      <span>{label.payload?.qr ? '1 sticker por manga; derecha vacía si es impar' : '2 copias físicas de la misma identidad'}</span>
                     </span>
                   ))}
                 </div>
@@ -442,7 +442,9 @@ export default function ScmPrelabels({ initialJobId = '' }) {
 
                 <div className="scm-print-summary">
                   <span>
-                    {job.labels?.length || 0} identidad(es) · 2 copias por identidad
+                    {job.labels?.length || 0} identidad(es) · {(job.labels || []).every((label) => label.payload?.qr)
+                      ? '1 sticker por manga; 2 mangas diferentes por fila'
+                      : '2 copias por identidad'}
                   </span>
                   <button
                     className="btn btn-primary"

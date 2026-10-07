@@ -167,7 +167,7 @@ describe('ScmPrelabels', () => {
     expect(screen.getByLabelText('ID del trabajo de impresión')).toBeTruthy();
   });
 
-  it('previsualiza dos copias físicas de la misma identidad', async () => {
+  it('previsualiza una copia por manga con derecha vacía si es impar', async () => {
     scmPrelabelsApi.preview.mockResolvedValue({ data: { print_job: job } });
     render(<ScmPrelabels />);
 
@@ -179,7 +179,7 @@ describe('ScmPrelabels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Previsualizar' }));
 
     expect(await screen.findByText('OP0084-OT001-M001')).toBeTruthy();
-    expect(screen.getByText('2 copias físicas de la misma identidad')).toBeTruthy();
+    expect(screen.getByText('1 sticker por manga; derecha vacía si es impar')).toBeTruthy();
     expect(screen.getByText('QR: label-001')).toBeTruthy();
   });
 

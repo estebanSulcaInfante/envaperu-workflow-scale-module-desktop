@@ -119,9 +119,9 @@ def test_structured_post_prints_explicit_pz_and_color_in_font2_without_footer():
     tspl = service._weight_column(24, label, "07/10/2026 11:00")
     svg = service._svg_weight_column(24, label, "07/10/2026 11:00")
 
-    assert 'TEXT 32,78,"2",0,1,1,"PZ: TOLVA MUESTRA"' in tspl
-    assert 'TEXT 32,100,"2",0,1,1,"COLOR: ROJO SOLIDO"' in tspl
-    assert 'TEXT 32,122,"2",0,1,1,"PESO NETO FINAL (kg)"' in tspl
+    assert 'TEXT 32,64,"2",0,1,1,"PZ: TOLVA MUESTRA"' in tspl
+    assert 'TEXT 32,86,"2",0,1,1,"COLOR: ROJO SOLIDO"' in tspl
+    assert 'TEXT 32,108,"2",0,1,1,"PESO NETO FINAL (kg)"' in tspl
     assert "SIN QR" not in tspl
     assert 'font-size="20"' in svg
     assert "PZ: TOLVA MUESTRA" in svg
@@ -139,8 +139,8 @@ def test_versioned_snapshot_prints_variant_only_when_not_exact_pz_plus_color():
     tspl = service._weight_column(24, label, "07/10/2026 11:00")
     svg = service._svg_weight_column(24, label, "07/10/2026 11:00")
 
-    assert 'TEXT 32,122,"2",0,1,1,"VAR: TOLVA MUESTRA ROJO SOLIDO"' in tspl
-    assert 'TEXT 32,144,"2",0,1,1,"  PREMIUM"' in tspl
+    assert 'TEXT 32,108,"1",0,1,1,"VAR: TOLVA MUESTRA ROJO SOLIDO PREMIUM"' in tspl
+    assert 'TEXT 32,122,"2",0,1,1,"PESO NETO FINAL (kg)"' in tspl
     assert "VAR: TOLVA MUESTRA ROJO SOLIDO" in svg
     assert "PREMIUM" in svg
 
@@ -252,8 +252,8 @@ def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_la
     assert 'COLOR: ROJO SOLIDO DE MUESTRA' in svg
     assert "..." not in tspl
     assert 'TEXT 32,243,"3"' not in tspl
-    assert 'BAR 32,243,384,2' in tspl
-    assert 'TEXT 32,362,"1"' in tspl
+    assert 'BAR 32,229,384,2' in tspl
+    assert 'TEXT 32,348,"1"' in tspl
 
     label["payload"]["color"] = "ROJO SOLIDO DE MUESTRA EXTRA"
     label["payload"]["identidad_producto"] = _identity_product(
@@ -262,8 +262,66 @@ def test_structured_post_wraps_without_truncating_and_keeps_worst_case_inside_la
     worst_case_tspl = service._weight_column(24, label, "07/10/2026 11:00")
     assert 'COLOR: ROJO SOLIDO DE MUESTRA' in worst_case_tspl
     assert '  EXTRA' in worst_case_tspl
-    assert 'BAR 32,265,384,2' in worst_case_tspl
-    assert 'TEXT 32,384,"1"' in worst_case_tspl
+    assert 'BAR 32,251,384,2' in worst_case_tspl
+    assert 'TEXT 32,370,"1"' in worst_case_tspl
+
+
+@pytest.mark.parametrize(
+    "sku,piece,color,variant,expected_var_start,expected_var_lines,expected_end",
+    [
+        (
+            "PC-000175",
+            "TAPA DE ORGANIZADOR #2 PASTEL",
+            "BLANCO SOLIDO",
+            "TAPA DE ORGANIZADOR #2 BLANCO SOLIDO",
+            130,
+            ["VAR: TAPA DE ORGANIZADOR #2 BLANCO SOLIDO"],
+            374,
+        ),
+        (
+            "PC-000188",
+            "BASE DE ORGANIZADOR #2",
+            "TRANSPARENTE TRANSPARENTE",
+            "BASE DE ORGANIZADOR #2 CONFITECA TRANSPARENTE TRANSPARENTE",
+            130,
+            [
+                "VAR: BASE DE ORGANIZADOR #2 CONFITECA",
+                "  TRANSPARENTE TRANSPARENTE",
+            ],
+            388,
+        ),
+    ],
+)
+def test_long_catalog_variants_use_native_font2_pz_color_and_font1_var(
+    sku, piece, color, variant, expected_var_start, expected_var_lines, expected_end
+):
+    label = _post_weighing_label(f"OF-DEMO-OT007-{sku}")
+    label["payload"]["identidad_producto"] = _identity_product(
+        piece, color, variant
+    )
+    label["payload"]["identidad_producto"]["variante"]["sku"] = sku
+    service = ScmPrelabelService()
+
+    tspl = service._weight_column(24, label, "07/10/2026 11:00")
+    svg = service._svg_weight_column(24, label, "07/10/2026 11:00")
+
+    assert 'TEXT 32,64,"2",0,1,1,"PZ:' in tspl
+    assert 'TEXT 32,86,"2",0,1,1,"COLOR:' in tspl
+    assert f'TEXT 32,{expected_var_start},"1",0,1,1,"VAR:' in tspl
+    for line in expected_var_lines:
+        assert line in tspl
+        assert line in svg
+    assert f'TEXT 32,{expected_end - 12},"1"' in tspl
+    assert '<text x="32" y="84" font-family="Arial, sans-serif" font-size="20"' in svg
+    assert '<text x="32" y="106" font-family="Arial, sans-serif" font-size="20"' in svg
+    assert (
+        f'<text x="32" y="{expected_var_start + 12}" '
+        'font-family="Arial, sans-serif" font-size="12"'
+    ) in svg
+    assert '"PC-' not in tspl.split('VAR:', 1)[1]
+    assert '"PC-' not in svg.split('VAR:', 1)[1]
+    assert 'font-size="20"' in svg
+    assert 'font-size="14"' in svg
 
 
 def test_structured_post_rejects_unbreakable_or_overlong_identity_instead_of_dropping_it():

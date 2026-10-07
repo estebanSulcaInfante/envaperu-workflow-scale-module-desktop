@@ -392,9 +392,11 @@ class ScmPrelabelService:
             return None
         lines = []
         for label, value in fields.items():
-            # Keep every character. An unbreakable token or more than four
-            # total font-2 lines is rejected instead of silently abbreviated.
-            value_width = 31 - len(label) - 2
+            # PZ/COLOR retain the native font-2 geometry. VAR is an audit
+            # qualifier only: use the smaller native font-1 and its wider
+            # 43-character column, without SKU/PC identifiers or truncation.
+            is_variant = label == "VAR"
+            value_width = 43 if is_variant else 31 - len(label) - 2
             wrapped = textwrap.wrap(
                 value,
                 width=value_width,
@@ -405,8 +407,8 @@ class ScmPrelabelService:
             )
             if not wrapped or any(len(part) > value_width for part in wrapped):
                 raise ValueError(f"Campo {label} excede la columna fisica disponible")
-            lines.append((label, wrapped))
-        if sum(len(parts) for _, parts in lines) > 4:
+            lines.append((label, wrapped, 14 if is_variant else 22, 1 if is_variant else 2))
+        if sum(len(parts) for _, parts, _, _ in lines) > 6:
             raise ValueError("Identidad PZ/COLOR excede la altura fisica disponible")
         return lines
 
@@ -416,10 +418,14 @@ class ScmPrelabelService:
         if identity_lines is None:
             return None
         rendered_identity = []
-        for label, wrapped in identity_lines:
-            rendered_identity.append(f"{label}: {wrapped[0]}")
-            rendered_identity.extend(f"  {part}" for part in wrapped[1:])
-        net_label_y = 78 + len(rendered_identity) * 22
+        identity_height = 0
+        for label, wrapped, line_height, font in identity_lines:
+            rendered_identity.append((f"{label}: {wrapped[0]}", line_height, font))
+            rendered_identity.extend(
+                (f"  {part}", line_height, font) for part in wrapped[1:]
+            )
+            identity_height += len(wrapped) * line_height
+        net_label_y = 64 + identity_height
         net_value_y = net_label_y + 24
         # Font 3 at 2x2 occupies 48 dots; leave a four-dot safety gap.
         theoretical_y = net_value_y + 52
@@ -449,13 +455,19 @@ class ScmPrelabelService:
         commands = [
             f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
             f'TEXT {x + 8},12,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
-            f'TEXT {x + 8},38,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
-            f'TEXT {x + 8},58,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
+            # The structured identity starts at y=64. Compact only these
+            # header rows; keep their existing native font sizes and leave a
+            # real four-dot gap before PZ/COLOR.
+            f'TEXT {x + 8},34,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
+            f'TEXT {x + 8},48,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
         ]
-        identity_y = 78
-        for line in geometry["identity"]:
-            commands.append(f'TEXT {x + 8},{identity_y},"2",0,1,1,"{line.replace(chr(34), chr(39))}"')
-            identity_y += 22
+        identity_y = 64
+        for line, line_height, font in geometry["identity"]:
+            commands.append(
+                f'TEXT {x + 8},{identity_y},"{font}",0,1,1,"'
+                f'{line.replace(chr(34), chr(39))}"'
+            )
+            identity_y += line_height
         commands.extend([
             f'TEXT {x + 8},{geometry["net_label_y"]},"2",0,1,1,"{values["net_label"]}"',
             f'TEXT {x + 62},{geometry["net_value_y"]},"3",0,2,2,"{_safe(values["net"], 10)}"',
@@ -787,13 +799,20 @@ class ScmPrelabelService:
             f'<rect x="{x + 1}" y="2" width="{self.STICKER_WIDTH - 3}" height="396" '
             'rx="4" fill="white" stroke="#111" stroke-width="3"/>',
             text(28, f'MANGA: {_safe(payload.get("codigo_manga"), 32)}', 20, 800),
-            text(50, operational_datetime, 12, 600),
-            text(70, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
+            text(46, operational_datetime, 12, 600),
+            text(60, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
         ]
-        identity_y = 98
-        for line in geometry["identity"]:
-            parts.append(text(identity_y, line, 20, 700))
-            identity_y += 22
+        identity_y = 64
+        for line, line_height, font in geometry["identity"]:
+            parts.append(
+                text(
+                    identity_y + (20 if font == 2 else 12),
+                    line,
+                    20 if font == 2 else 12,
+                    700,
+                )
+            )
+            identity_y += line_height
         parts.extend([
             text(geometry["net_label_y"] + 18, values["net_label"], 20, 800),
             text(geometry["net_value_y"] + 48, values["net"], 48, 900, "middle", x + 200),

@@ -16,6 +16,49 @@ function newOperationId() {
     || '00000000-0000-4000-8000-000000000001';
 }
 
+const PENDING_PRINT_STORAGE_KEY = 'scm-weighing:pending-print:v1';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function readPendingPrint() {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(PENDING_PRINT_STORAGE_KEY);
+    if (!raw) return null;
+    const envelope = JSON.parse(raw);
+    if (!envelope || envelope.version !== 1
+      || !UUID_RE.test(envelope.operation_id || '')
+      || !UUID_RE.test(envelope.scanned_label_id || '')
+      || !envelope.context?.manga
+      || envelope.context.scanned_label_id !== envelope.scanned_label_id
+      || !needsPrintRetry(envelope.result)) {
+      globalThis.sessionStorage?.removeItem(PENDING_PRINT_STORAGE_KEY);
+      return null;
+    }
+    return envelope;
+  } catch {
+    try { globalThis.sessionStorage?.removeItem(PENDING_PRINT_STORAGE_KEY); } catch { /* fail closed */ }
+    return null;
+  }
+}
+
+function writePendingPrint(envelope) {
+  try {
+    const storage = globalThis.sessionStorage;
+    if (!storage) return false;
+    storage.setItem(PENDING_PRINT_STORAGE_KEY, JSON.stringify(envelope));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearPendingPrint() {
+  try {
+    globalThis.sessionStorage?.removeItem(PENDING_PRINT_STORAGE_KEY);
+  } catch {
+    // The UI still reports the durable operation; storage cleanup is best effort.
+  }
+}
+
 function normalizedColorToken(value) {
   return String(value || '')
     .normalize('NFD')
@@ -57,6 +100,7 @@ export default function ScmWeighing({
   const closeCancelRef = useRef(null);
   const closeF2ReleasedRef = useRef(false);
   const requestInFlightRef = useRef(false);
+  const restoredPendingRef = useRef(false);
   const online = centralState === 'ONLINE';
   const centralAvailable = online || simulationEnabled || portfolioDemoMode;
   const otContext = context?.manga?.ot;
@@ -128,6 +172,39 @@ export default function ScmWeighing({
     window.setTimeout(() => scannerInputRef.current?.focus(), 0);
   };
 
+  useEffect(() => {
+    if (restoredPendingRef.current) return;
+    restoredPendingRef.current = true;
+    const pending = readPendingPrint();
+    if (!pending) return;
+    operationIdRef.current = pending.operation_id;
+    setContext(pending.context);
+    setResult(pending.result);
+    setScanConsumed(false);
+    setControlOnly(false);
+    setError('Pesaje confirmado restaurado localmente; reintente solo la emision. No se releera la balanza.');
+    setContextNotice('Se restauro una emision pendiente sin consultar nuevamente la balanza.');
+  }, []);
+
+  useEffect(() => {
+    if (!printRetry || !context?.manga || !result || !operationIdRef.current) return;
+    if (!writePendingPrint({
+      version: 1,
+      operation_id: operationIdRef.current,
+      scanned_label_id: context.scanned_label_id,
+      context,
+      result,
+    })) {
+      setError('No se pudo conservar la emision pendiente en esta estacion; no cierres la pantalla antes de reintentar.');
+    }
+  }, [context, printRetry, result]);
+
+  useEffect(() => {
+    // Once the durable operation has reached any post-write/terminal result,
+    // the old pre-emission envelope must not resurrect a duplicate retry.
+    if (result && !needsPrintRetry(result)) clearPendingPrint();
+  }, [result]);
+
   const resolveQr = async (requestedValue = qr) => {
     const requestedQr = typeof requestedValue === 'string' ? requestedValue : qr;
     if (!requestedQr.trim() || busy || requestInFlightRef.current || !centralAvailable || printRetry) return;
@@ -187,7 +264,7 @@ export default function ScmWeighing({
       setResult(data);
       setScanConsumed(!retryAgain);
       if (retryAgain) {
-        setError(data.print_result?.error || 'El pesaje qued� confirmado, pero la etiqueta no fue emitida.');
+        setError(data.print_result?.error || 'El pesaje quedo confirmado, pero la etiqueta no fue emitida.');
       }
       setCloseConfirmationOpen(false);
       setControlOnly(false);
@@ -204,7 +281,7 @@ export default function ScmWeighing({
     } catch (requestError) {
       if (retryingPrint) {
         setError(requestError.response?.data?.message
-          || 'No se pudo reemitir la etiqueta. El pesaje ya est� confirmado; conserva la misma operaci�n.');
+          || 'No se pudo reemitir la etiqueta. El pesaje ya esta confirmado; conserva la misma operacion.');
         return;
       }
       setError(
@@ -742,8 +819,8 @@ export default function ScmWeighing({
               <span>Etiqueta final: {printState}</span>
               {printRetry && (
                 <>
-                  <strong>El pesaje est� confirmado; la etiqueta no fue emitida.</strong>
-                  <span>No se releer� la balanza ni se crear� otro pesaje.</span>
+                  <strong>El pesaje esta confirmado; la etiqueta no fue emitida.</strong>
+                  <span>No se releera la balanza ni se creara otro pesaje.</span>
                   {result.print_result?.error && <small>{result.print_result.error}</small>}
                   <button
                     type="button"

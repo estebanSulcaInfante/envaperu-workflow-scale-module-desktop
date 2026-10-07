@@ -3,6 +3,8 @@ const state = (kind, title, recovery = '') => ({ kind, title, recovery, ready: k
 export function needsPrintRetry(result) {
   const printResult = result?.print_result || {};
   const status = String(printResult.result || printResult.estado || '').toUpperCase();
+  const bytesWritten = Number(printResult.bytes_written || 0);
+  if (printResult.write_attempted === true || bytesWritten > 0) return false;
   return ['NOT_EMITTED', 'NO_EMITIDO', 'NO_EMITIDA'].includes(status)
     || printResult.error_code === 'PRINT_FORMAT_INVALID';
 }
@@ -31,7 +33,7 @@ export function getWeighingState({ context, busy, result, centralAvailable, list
   if (needsPrintRetry(result) && !busy) return state(
     'print-retry',
     'Pesaje confirmado; etiqueta no emitida',
-    'El pesaje ya est� guardado. Reintente solo la emisi�n con la misma operaci�n; no se releer� la balanza.',
+    'El pesaje ya esta guardado. Reintente solo la emision con la misma operacion; no se releera la balanza.',
   );
   if (busy) return state('waiting', 'Operación en curso', 'Espere la respuesta; no retire ni cambie la manga.');
   if (result) return state('success', 'Cierre registrado · manga cerrada', 'Revise el resultado de impresión y escanee la siguiente manga.');

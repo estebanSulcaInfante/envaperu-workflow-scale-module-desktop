@@ -354,12 +354,27 @@ def test_structured_post_rejects_unbreakable_or_overlong_identity_instead_of_dro
         service._weight_column(24, label, "07/10/2026 11:00")
 
 
-def test_historical_post_long_name_fails_explicitly_instead_of_truncating():
+def test_historical_post_long_name_wraps_without_identity_loss():
     label = _post_weighing_label("OF-DEMO-OT007-M002")
     label["payload"].pop("pieza", None)
-    label["payload"]["pieza_color"] = "NOMBRE HISTORICO " + "MUY " * 20
-    with pytest.raises(ValueError, match="Nombre historico POST"):
-        ScmPrelabelService()._weight_column(24, label, "07/10/2026 11:00")
+    source = ("NOMBRE HISTORICO " + "MUY " * 20).strip()
+    label["payload"]["pieza_color"] = source
+    service = ScmPrelabelService()
+
+    lines = service._legacy_post_name_lines(label["payload"])
+    tspl = service.generate_tspl({"labels": [label]})
+    svg = service.generate_preview_svg({"labels": [label]})
+
+    assert "".join(lines) == source
+    assert all(len(line) <= 46 for line in lines)
+    assert len(lines) == 3
+    for line in lines:
+        assert line in tspl
+        assert line in svg
+    assert 'TEXT 32,126,"2",0,1,1,"PESO NETO FINAL (kg)"' in tspl
+    assert 'TEXT 32,352,"1"' in tspl
+    assert "PESO NETO FINAL" in svg
+    assert "QRCODE" not in tspl
 
 
 def test_historical_post_without_pieza_does_not_infer_pz_or_color_from_pieza_color():

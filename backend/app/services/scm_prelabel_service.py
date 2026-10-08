@@ -517,38 +517,46 @@ class ScmPrelabelService:
             return self._structured_post_weight_column(
                 x, payload, values, order_context, operational_datetime
             )
-        legacy_post_name = self._legacy_post_name(payload) if is_post else None
+        legacy_post_lines = (
+            self._legacy_post_name_lines(payload) if is_post else ()
+        )
+        legacy_shift = (
+            (len(legacy_post_lines) - 1) * self.LINE_HEIGHT if is_post else 0
+        )
         commands = [
             f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
             f'TEXT {x + 8},12,"2",0,1,1,"MANGA: {_safe(payload.get("codigo_manga"), 32)}"',
             f'TEXT {x + 8},38,"1",0,1,1,"{_safe(operational_datetime, 46)}"',
             f'TEXT {x + 8},58,"1",0,1,1,"MAQUINISTA: {_safe(payload.get("maquinista"), 31)}"',
-            *([f'TEXT {x + 8},78,"1",0,1,1,"{legacy_post_name}"'] if is_post else []),
-            f'TEXT {x + 8},{100 if is_post else 84},"2",0,1,1,"{values["net_label"]}"',
-            f'TEXT {x + 62},{124 if is_post else 108},"3",0,2,2,"{_safe(values["net"], 10)}"',
+            *([
+                f'TEXT {x + 8},{78 + index * self.LINE_HEIGHT},"1",0,1,1,"{line}"'
+                for index, line in enumerate(legacy_post_lines)
+            ] if is_post else []),
+            f'TEXT {x + 8},{(100 + legacy_shift) if is_post else 84},"2",0,1,1,"{values["net_label"]}"',
+            f'TEXT {x + 62},{(124 + legacy_shift) if is_post else 108},"3",0,2,2,"{_safe(values["net"], 10)}"',
         ]
         if values["fabricated_theoretical"] is not None:
             commands.append(
-                f'TEXT {x + 8},184,"1",0,1,1,'
+                f'TEXT {x + 8},{184 + legacy_shift},"1",0,1,1,'
                 f'"PESO FABRICADO TEORICO (kg): '
                 f'{_safe(values["fabricated_theoretical"], 9)}"'
             )
         commands.extend((
-            f'BAR {x + 8},207,{self.STICKER_WIDTH - 16},2',
-            f'TEXT {x + 8},218,"3",0,1,1,"{_safe(values["title"], 38)}"',
-            f'TEXT {x + 8},246,"1",0,1,1,"{values["contribution_label"]}"',
-            f'TEXT {contribution_x},{264 if is_post else 244},"4",0,1,1,"{contribution_text}"',
+            f'BAR {x + 8},{207 + legacy_shift},{self.STICKER_WIDTH - 16},2',
+            f'TEXT {x + 8},{218 + legacy_shift},"3",0,1,1,"{_safe(values["title"], 38)}"',
+            f'TEXT {x + 8},{246 + legacy_shift},"1",0,1,1,"{values["contribution_label"]}"',
+            f'TEXT {contribution_x},{(264 + legacy_shift) if is_post else 244},"4",0,1,1,"{contribution_text}"',
             *([] if is_post else [f'TEXT {x + 8},276,"1",0,1,1,"{_safe(payload.get("pieza_color"), 46)}"']),
         ))
         if values["shows_units"]:
             commands.extend((
-                f'TEXT {x + 8},300,"2",0,1,1,"{values["quantity_label"]}: {_safe(values["quantity"], 10)} UN"',
-                f'TEXT {x + 8},326,"1",0,1,1,"{_safe(order_context, 46)}"',
+                f'TEXT {x + 8},{(300 + legacy_shift) if is_post else 300},"2",0,1,1,"{values["quantity_label"]}: {_safe(values["quantity"], 10)} UN"',
+                f'TEXT {x + 8},{(326 + legacy_shift) if is_post else 326},"1",0,1,1,"{_safe(order_context, 46)}"',
             ))
         else:
             commands.extend((
-                f'TEXT {x + 8},300,"2",0,1,1,"AVANCE EN KG · SIN CONTEO"',
-                f'TEXT {x + 8},326,"1",0,1,1,"{_safe(order_context, 46)}"',
+                f'TEXT {x + 8},{(300 + legacy_shift) if is_post else 300},"2",0,1,1,"AVANCE EN KG · SIN CONTEO"',
+                f'TEXT {x + 8},{(326 + legacy_shift) if is_post else 326},"1",0,1,1,"{_safe(order_context, 46)}"',
             ))
         if not is_post:
             commands.append(
@@ -568,12 +576,24 @@ class ScmPrelabelService:
         return re.sub(r'\s+\((?:PC|P|PT)-[A-Z0-9]+(?:-[A-Z0-9]+)*\)\s*$', '', text).strip()
 
     @classmethod
-    def _legacy_post_name(cls, payload):
-        """Keep the historical source string complete or reject it."""
+    def _legacy_post_name_lines(cls, payload):
+        """Wrap a historical POST name without changing its source text.
+
+        Legacy POST payloads do not have the structured identity contract, so
+        the original ``pieza_color`` value remains the only authoritative
+        display source.  The old renderer rejected values over one physical
+        line; wrapping keeps every character while allowing the numeric and
+        correlativo rows to move down as one block.
+        """
         value = str(payload.get("pieza_color") or "").strip().replace('"', "'")
-        if len(value) > 46:
-            raise ValueError("Nombre historico POST excede la columna fisica disponible")
-        return value
+        return textwrap.wrap(
+            value,
+            width=46,
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=False,
+            drop_whitespace=False,
+        ) or [""]
 
     @staticmethod
     def _manga_number(payload):
@@ -860,7 +880,12 @@ class ScmPrelabelService:
             return self._svg_structured_post_weight_column(
                 x, payload, values, order_context, operational_datetime
             )
-        legacy_post_name = self._legacy_post_name(payload) if is_post else None
+        legacy_post_lines = (
+            self._legacy_post_name_lines(payload) if is_post else ()
+        )
+        legacy_shift = (
+            (len(legacy_post_lines) - 1) * self.LINE_HEIGHT if is_post else 0
+        )
         text = lambda y, value, size=15, weight=600, anchor="start", x_pos=None: (
             f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '
             f'font-family="Arial, sans-serif" font-size="{size}" '
@@ -879,34 +904,37 @@ class ScmPrelabelService:
             ),
             text(50, operational_datetime, 12, 600),
             text(70, f'MAQUINISTA: {_safe(payload.get("maquinista"), 31)}', 12, 700),
-            *([text(90, legacy_post_name, 12, 600)] if is_post else []),
-            text(118 if is_post else 98, values["net_label"], 18, 800),
-            text(178 if is_post else 174, values["net"], 48, 900, "middle", x + 200),
+            *([
+                text(90 + index * self.LINE_HEIGHT, line, 12, 600)
+                for index, line in enumerate(legacy_post_lines)
+            ] if is_post else []),
+            text((118 + legacy_shift) if is_post else 98, values["net_label"], 18, 800),
+            text((178 + legacy_shift) if is_post else 174, values["net"], 48, 900, "middle", x + 200),
         ]
         if values["fabricated_theoretical"] is not None:
             parts.append(text(
-                198,
+                198 + legacy_shift,
                 f'PESO FABRICADO TEÓRICO (kg): {values["fabricated_theoretical"]}',
                 13,
                 700,
             ))
         parts.extend([
-            f'<line x1="{x + 8}" y1="207" x2="{x + 392}" y2="207" '
+            f'<line x1="{x + 8}" y1="{207 + legacy_shift}" x2="{x + 392}" y2="{207 + legacy_shift}" '
             'stroke="#111" stroke-width="2"/>',
-            text(232, values["title"], 20, 900),
-            text(254, values["contribution_label"], 13, 700),
-            text(294 if is_post else 270, f'+{values["contribution"]}', 32, 900, "end", x + 392),
+            text(232 + legacy_shift, values["title"], 20, 900),
+            text(254 + legacy_shift, values["contribution_label"], 13, 700),
+            text((294 + legacy_shift) if is_post else 270, f'+{values["contribution"]}', 32, 900, "end", x + 392),
             *([] if is_post else [text(289, _safe(payload.get("pieza_color"), 46), 13, 600)]),
         ])
         if values["shows_units"]:
             parts.extend((
-                text(313, f'{values["quantity_label"]}: {values["quantity"]} UN', 17, 800),
-                text(337, order_context, 12, 600),
+                text((313 + legacy_shift) if is_post else 313, f'{values["quantity_label"]}: {values["quantity"]} UN', 17, 800),
+                text((337 + legacy_shift) if is_post else 337, order_context, 12, 600),
             ))
         else:
             parts.extend((
-                text(313, 'AVANCE EN KG · SIN CONTEO', 18, 800),
-                text(337, order_context, 12, 600),
+                text((313 + legacy_shift) if is_post else 313, 'AVANCE EN KG · SIN CONTEO', 18, 800),
+                text((337 + legacy_shift) if is_post else 337, order_context, 12, 600),
             ))
         if not is_post:
             parts.append(text(386, 'SIN QR · CONSERVAR PREETIQUETA', 12, 800))

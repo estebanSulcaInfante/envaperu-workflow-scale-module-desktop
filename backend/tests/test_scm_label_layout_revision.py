@@ -377,6 +377,43 @@ def test_historical_post_long_name_wraps_without_identity_loss():
     assert "QRCODE" not in tspl
 
 
+def test_historical_post_real_name_wraps_with_safe_coordinates():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"].pop("pieza", None)
+    source = "MUELLE VOLQUETE COLORES AMARILLO MINERO SÓLIDO (PC-000359)"
+    label["payload"]["pieza_color"] = source
+    service = ScmPrelabelService()
+
+    lines = service._legacy_post_name_lines(label["payload"])
+    tspl = service.generate_tspl({"labels": [label]})
+    svg = service.generate_preview_svg({"labels": [label]})
+
+    assert len(source) == 58
+    assert "".join(lines) == source
+    assert len(lines) == 2
+    assert 'TEXT 32,113,"2",0,1,1,"PESO NETO FINAL (kg)"' in tspl
+    assert 'TEXT 32,339,"1"' in tspl
+    assert '<text x="32" y="350"' in svg
+    assert "PESO NETO FINAL" in svg
+
+
+def test_historical_post_five_lines_rejected_before_tspl_or_svg_generation():
+    label = _post_weighing_label("OF-DEMO-OT007-M002")
+    label["payload"].pop("pieza", None)
+    label["payload"]["pieza_color"] = "X" * (46 * 4 + 1)
+    service = ScmPrelabelService()
+
+    label["payload"]["pieza_color"] = "X" * (46 * 4)
+    assert len(service._legacy_post_name_lines(label["payload"])) == 4
+    label["payload"]["pieza_color"] += "X"
+    with pytest.raises(ValueError, match="altura fisica"):
+        service._legacy_post_name_lines(label["payload"])
+    with pytest.raises(ValueError, match="altura fisica"):
+        service.generate_tspl({"labels": [label]})
+    with pytest.raises(ValueError, match="altura fisica"):
+        service.generate_preview_svg({"labels": [label]})
+
+
 def test_historical_post_without_pieza_does_not_infer_pz_or_color_from_pieza_color():
     label = _post_weighing_label("OF-DEMO-OT007-M002")
     label["payload"].pop("pieza", None)

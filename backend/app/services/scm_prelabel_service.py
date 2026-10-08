@@ -54,6 +54,9 @@ class ScmPrelabelService:
     RIGHT_X = 464
     STICKER_WIDTH = 400
     LABEL_HEIGHT_DOTS = 400
+    LEGACY_POST_NAME_MAX_LINES = 4
+    LEGACY_POST_SVG_ORDER_Y = 337
+    LEGACY_POST_SVG_ORDER_EXTENT = 12
     TOP_BAR_Y = 14
     TEXT_START_Y = 18
     LINE_HEIGHT = 13
@@ -521,7 +524,7 @@ class ScmPrelabelService:
             self._legacy_post_name_lines(payload) if is_post else ()
         )
         legacy_shift = (
-            (len(legacy_post_lines) - 1) * self.LINE_HEIGHT if is_post else 0
+            self._legacy_post_layout_shift(legacy_post_lines) if is_post else 0
         )
         commands = [
             f"BOX {x + 1},2,{x + self.STICKER_WIDTH - 2},398,2",
@@ -583,10 +586,12 @@ class ScmPrelabelService:
         the original ``pieza_color`` value remains the only authoritative
         display source.  The old renderer rejected values over one physical
         line; wrapping keeps every character while allowing the numeric and
-        correlativo rows to move down as one block.
+        correlativo rows to move down as one block.  Four lines is the maximum
+        that keeps the SVG baseline and its text extent inside the 400-dot
+        physical cell.
         """
         value = str(payload.get("pieza_color") or "").strip().replace('"', "'")
-        return textwrap.wrap(
+        lines = textwrap.wrap(
             value,
             width=46,
             break_long_words=True,
@@ -594,6 +599,19 @@ class ScmPrelabelService:
             replace_whitespace=False,
             drop_whitespace=False,
         ) or [""]
+        cls._legacy_post_layout_shift(lines)
+        return lines
+
+    @classmethod
+    def _legacy_post_layout_shift(cls, lines):
+        shift = (len(lines) - 1) * cls.LINE_HEIGHT
+        svg_order_y = cls.LEGACY_POST_SVG_ORDER_Y + shift
+        if (
+            len(lines) > cls.LEGACY_POST_NAME_MAX_LINES
+            or svg_order_y + cls.LEGACY_POST_SVG_ORDER_EXTENT > cls.LABEL_HEIGHT_DOTS
+        ):
+            raise ValueError("Nombre historico POST excede la altura fisica disponible")
+        return shift
 
     @staticmethod
     def _manga_number(payload):
@@ -884,7 +902,7 @@ class ScmPrelabelService:
             self._legacy_post_name_lines(payload) if is_post else ()
         )
         legacy_shift = (
-            (len(legacy_post_lines) - 1) * self.LINE_HEIGHT if is_post else 0
+            self._legacy_post_layout_shift(legacy_post_lines) if is_post else 0
         )
         text = lambda y, value, size=15, weight=600, anchor="start", x_pos=None: (
             f'<text x="{x_pos if x_pos is not None else x + 8}" y="{y}" '

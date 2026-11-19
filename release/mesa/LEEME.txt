@@ -1,0 +1,60 @@
+ENVAPERU | Mesa de pesaje de retornos e inventario
+Windows x64 · Estación 2
+
+1. Extraiga el ZIP completo en la PC de la mesa y abra «Instalar Mesa.cmd».
+   Se crean tres accesos en el escritorio. «Estación 2 - Inventario y retornos»
+   abre el SCM con la cuenta del equipo. Sistemas aprovisiona esa cuenta
+   y guarda la credencial en central.json cifrada para el usuario de Windows.
+   Si falta la configuración central, contacte a Sistemas.
+2. Puede abrir «Mesa de pesaje (piloto)» antes de conectar la balanza y la TSC.
+   Cuando conecte el adaptador RS232, identifique su COM en Administrador de
+   dispositivos > Puertos (COM y LPT). Indíquelo en «Configurar balanza de mesa».
+   Para usar el C66, introduzca también la IPv4 privada de la PC en la red del lector.
+   Con Enter puede dejar el C66 para después. El navegador abre la mesa.
+3. Mantenga abierta la ventana de la mesa. Para cambiar puerto o red, cierre la mesa,
+   abra «Configurar balanza de mesa» y vuelva a iniciarla.
+
+Prueba con el indicador
+
+Seleccione kg y transmisión continua en la balanza, en la configuración que ya
+funcionó con la Accura SB53 02018. Se escucha a 9600, 8 bits, sin paridad, 1 bit
+de parada y sin control de flujo. El puerto del ensayo original fue COM9, pero el
+número lo asigna Windows en cada PC. Si no aparece ningún COM, revise el cable y
+el controlador del adaptador USB-serie. Cierre otras aplicaciones que usen ese COM.
+
+En Inventario deje la tara del indicador en cero. Coloque la manga completa,
+capture su peso estable e ingrese la tara real del recipiente en la mesa. La mesa
+resta esa tara una vez. Por ejemplo, con 10,400 kg en el visor y una tara de
+0,400 kg, el neto debe ser 10,000 kg. El texto NT por sí solo no indica si el
+operario ha tarado el recipiente.
+
+En Retornos el valor que se captura del indicador debe ser el neto de la manga.
+Compruebe la tara del indicador al cambiar de operación. Escanee una manga
+de ensayo y compare el resultado con el visor. Cambie a Pcs, mueva la carga y desconecte
+el cable durante lecturas separadas. Compruebe que una captura nueva requiere kg
+estables y que al reconectar el equipo se obtiene otra lectura.
+
+Desde la PC se accede a http://127.0.0.1:5196/. Para un C66 en la misma red abra
+«Conectar C66» y lea el QR. La comunicación del C66 usa el puerto 5198 de la IPv4
+elegida. Si cambia de red, vuelva a configurar esa dirección y a emparejar.
+Para retirar el acceso a equipos ya vinculados, cierre y reinicie la mesa. Después
+empareje de nuevo los lectores que deban usar el piloto.
+
+Datos de cada acceso
+
+«Estación 2 - Inventario y retornos» consulta las mangas del SCM. Las
+confirmaciones autorizadas se registran en el Kardex central. Durante la puesta
+en marcha las consultas están disponibles y los movimientos esperan la prueba física.
+«Mesa de pesaje (piloto)» usa un catálogo y mangas de demostración y guarda las operaciones solo
+en esta PC. Los datos creados aquí permanecen en
+%LOCALAPPDATA%\EnvaPeru\MesaPesajePiloto\datos\mesa-piloto.sqlite3.
+Una reinstalación conserva esos datos y el puerto configurado. Para hacer una
+copia, cierre la mesa y copie su carpeta «datos». Los stickers de inventario
+de 50 × 50 se pueden previsualizar y enviar a la TSC. Las etiquetas de pesaje
+usan ambas columnas del rollo con el mismo QR. La identidad ocupa una columna.
+Si Windows informa una emisión incierta, revise primero el papel.
+
+Diagnóstico: en el modo de prueba, abra datos\logs\mesa_station.log dentro de
+%LOCALAPPDATA%\EnvaPeru\MesaPesajePiloto. El modo central utiliza
+datos-central\logs\mesa_station.log. Hay hasta diez archivos rotados de 10 MiB.
+El registro distingue que Windows aceptó un trabajo de su salida física.

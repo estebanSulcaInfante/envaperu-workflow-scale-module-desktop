@@ -1,0 +1,195 @@
+.mesa-pilot-route-nav { display: flex; align-items: center; gap: 0.85rem; min-height: 2.35rem; padding: 0.35rem 1rem; border-bottom: 1px solid #c7d5e1; background: #102a45; overflow-x: auto; }
+.mesa-pilot-route-nav a { flex: 0 0 auto; color: #e9f2f8; font-size: 0.75rem; font-weight: 800; text-decoration: none; white-space: nowrap; }
+.mesa-pilot-route-nav a:hover,
+.mesa-pilot-route-nav a:focus-visible { color: #fff; text-decoration: underline; text-underline-offset: 0.15em; }
+
+.mesa-inventory {
+  --inventory-ink: #162536;
+  --inventory-muted: #526677;
+  --inventory-line: #d5dee6;
+  --inventory-blue: #1e3a5f;
+  --inventory-blue-dark: #102a45;
+  --inventory-green: #216e3a;
+  --inventory-green-soft: #eaf6ee;
+  color: var(--inventory-ink);
+  min-height: 100vh;
+  background: #f5f5f5;
+}
+
+.mesa-inventory-header { padding: 0.8rem 1.5rem; }
+.mesa-inventory-header h1 { margin: 0; }
+.mesa-inventory-header p { margin-top: 0.22rem; color: #dbe8f3; font-size: 0.78rem; }
+.mesa-inventory-tabs { display: flex; gap: 0.1rem; align-items: center; padding: 0.45rem 1rem 0; border-bottom: 2px solid var(--inventory-line); background: #fff; overflow-x: auto; }
+.mesa-inventory-tabs button,
+.mesa-inventory-tabs a { flex: 0 0 auto; padding: 0.78rem 1.05rem 0.65rem; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--inventory-muted); cursor: pointer; font: inherit; font-size: 0.86rem; font-weight: 800; text-decoration: none; white-space: nowrap; }
+.mesa-inventory-tabs button:hover,
+.mesa-inventory-tabs a:hover { color: var(--inventory-blue); background: #f5f8fb; }
+.mesa-inventory-tabs button.active { color: var(--inventory-blue); border-bottom-color: var(--inventory-blue); }
+.mesa-inventory-lan-label { padding: 0.78rem 0.7rem 0.65rem; color: var(--inventory-blue); font-size: 0.78rem; font-weight: 800; }
+.mesa-inventory-tabs button:focus-visible,
+.mesa-inventory-tabs a:focus-visible,
+.mesa-inventory-btn:focus-visible,
+.mesa-inventory-link:focus-visible { outline: 3px solid #e19b2f; outline-offset: 2px; }
+.mesa-inventory-main { padding: 1.2rem 1.5rem 2rem; }
+.mesa-inventory-title-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 1320px; margin: 0 auto 1rem; }
+.mesa-inventory-title-row h2 { margin: 0; color: var(--inventory-blue-dark); font-size: clamp(1.2rem, 2vw, 1.65rem); }
+.mesa-inventory-title-row p { margin: 0.25rem 0 0; color: var(--inventory-muted); font-size: 0.85rem; }
+.mesa-inventory-columns { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr); gap: 1rem; align-items: start; max-width: 1320px; margin: 0 auto; }
+.mesa-inventory-panel { min-width: 0; border: 1px solid #cad8e4; border-radius: 8px; background: #fff; box-shadow: 0 3px 12px rgba(15, 35, 58, 0.07); }
+.primary-panel { overflow: hidden; }
+.mesa-inventory-panel > h2,
+.mesa-inventory-panel-heading { margin: 0; padding: 1rem 1.1rem; border-bottom: 1px solid var(--inventory-line); color: var(--inventory-blue-dark); }
+.mesa-inventory-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.mesa-inventory-panel-heading h2 { margin: 0; font-size: 1.08rem; }
+.mesa-inventory-panel-heading p,
+.mesa-inventory-panel > p { margin: 0.35rem 0 0; color: var(--inventory-muted); font-size: 0.8rem; line-height: 1.4; }
+.mesa-inventory-panel > p { padding: 0 1.1rem; }
+.mesa-inventory-status,
+.mesa-inventory-scale,
+.mesa-inventory-pc-only { color: var(--inventory-muted); font-size: 0.73rem; font-weight: 800; white-space: nowrap; }
+.mesa-inventory-status.ready { color: var(--inventory-green); }
+.mesa-inventory-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; padding: 1rem 1.1rem; }
+.mesa-inventory-form-grid label,
+.mesa-inventory-stack label,
+.mesa-inventory-reason { display: grid; gap: 0.35rem; color: var(--inventory-ink); font-size: 0.8rem; font-weight: 800; }
+.mesa-inventory-form-grid input,
+.mesa-inventory-form-grid select,
+.mesa-inventory-stack input,
+.mesa-inventory-stack select,
+.mesa-inventory-scan-form input,
+.mesa-inventory-reason textarea { width: 100%; min-height: 2.7rem; padding: 0.55rem 0.65rem; border: 2px solid #a7b9c9; border-radius: 5px; background: #fff; color: var(--inventory-ink); font: inherit; font-size: 0.95rem; }
+.mesa-inventory-reason textarea { min-height: 5rem; resize: vertical; }
+.mesa-inventory-form-grid input:focus,
+.mesa-inventory-form-grid select:focus,
+.mesa-inventory-stack input:focus,
+.mesa-inventory-stack select:focus,
+.mesa-inventory-scan-form input:focus,
+.mesa-inventory-reason textarea:focus { outline: none; border-color: var(--inventory-blue); box-shadow: 0 0 0 3px rgba(30, 58, 95, 0.15); }
+.mesa-inventory-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.session-actions { padding: 1rem 1.1rem; }
+.mesa-inventory-session-code { color: var(--inventory-muted); font-family: "Courier New", monospace; font-size: 0.8rem; overflow-wrap: anywhere; }
+.mesa-inventory-btn { min-height: 2.7rem; padding: 0.55rem 0.85rem; border: 0; border-radius: 5px; cursor: pointer; font: inherit; font-size: 0.82rem; font-weight: 800; }
+.mesa-inventory-btn.primary { background: var(--inventory-blue); color: #fff; }
+.mesa-inventory-btn.primary:hover:not(:disabled) { background: var(--inventory-blue-dark); }
+.mesa-inventory-btn.secondary { border: 1px solid #bccbd8; background: #f5f8fa; color: var(--inventory-blue); }
+.mesa-inventory-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.mesa-inventory-scan-form { display: grid; gap: 0.4rem; padding: 0 1.1rem 1.05rem; }
+.mesa-inventory-scan-form label { font-size: 0.82rem; font-weight: 800; }
+.mesa-inventory-scan-form > div { display: flex; gap: 0.55rem; }
+.mesa-inventory-scan-form small,
+.mesa-inventory-hint { color: var(--inventory-muted); font-size: 0.74rem; line-height: 1.4; }
+.mesa-inventory-scan-feedback { margin: -0.5rem 1.1rem 1rem; padding: 0.55rem 0.7rem; border-left: 3px solid var(--inventory-green); background: var(--inventory-green-soft); color: #174d2a; font-size: 0.78rem; font-weight: 800; }
+.mesa-inventory-field-error { margin: 0; color: #8b2d2d; font-size: 0.76rem; font-weight: 800; line-height: 1.35; }
+.mesa-inventory-discrepancy { display: grid; gap: 0.55rem; margin: 0 1.1rem 1rem; padding: 0.8rem; border: 1px solid #d8b46e; background: #fff8e8; color: #643f04; }
+.mesa-inventory-discrepancy span { font-size: 0.8rem; }
+.mesa-inventory-discrepancy p { margin: 0; font-size: 0.78rem; line-height: 1.4; }
+.mesa-inventory-reading-list { padding: 0 1.1rem 1rem; }
+.mesa-inventory-reading-list h3,
+.mesa-inventory-pending-list h3 { display: flex; justify-content: space-between; margin: 0 0 0.45rem; color: var(--inventory-blue-dark); font-size: 0.9rem; }
+.mesa-inventory-reading-list h3 span { min-width: 1.4rem; padding: 0.1rem 0.3rem; border-radius: 999px; background: #e8f0f6; color: var(--inventory-blue); text-align: center; font-size: 0.72rem; }
+.mesa-inventory-reading { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.6rem; padding: 0.65rem 0; border-bottom: 1px solid #e4ebf0; }
+.mesa-inventory-reading strong,
+.mesa-inventory-pending-row strong,
+.mesa-inventory-result > strong { overflow-wrap: anywhere; font-family: "Courier New", ui-monospace, monospace; font-size: 0.85rem; }
+.mesa-inventory-reading span { color: var(--inventory-muted); font-size: 0.75rem; }
+.mesa-inventory-link { padding: 0; border: 0; background: transparent; color: #8b2d2d; cursor: pointer; font: inherit; font-size: 0.73rem; font-weight: 800; text-decoration: underline; }
+.mesa-inventory-empty { padding: 0.5rem 0; color: var(--inventory-muted); font-size: 0.8rem; }
+.mesa-inventory-secondary { display: grid; gap: 1rem; min-width: 0; }
+.mesa-inventory-secondary > .mesa-inventory-panel { padding-bottom: 1rem; }
+.mesa-inventory-stack { display: grid; gap: 0.75rem; padding: 1rem 1.1rem; }
+.mesa-inventory-stack .mesa-inventory-btn { justify-self: start; }
+.mesa-inventory-secondary .mesa-inventory-actions { padding: 0 1.1rem; }
+.mesa-inventory-existing-labels { display: grid; gap: 0.35rem; margin: 1rem 1.1rem 0; padding-top: 0.75rem; border-top: 1px solid var(--inventory-line); }
+.mesa-inventory-existing-labels strong { color: var(--inventory-muted); font-size: 0.72rem; }
+.mesa-inventory-existing-labels button { width: fit-content; padding: 0; border: 0; background: transparent; color: var(--inventory-blue); cursor: pointer; font: inherit; font-family: "Courier New", monospace; font-size: 0.75rem; text-decoration: underline; }
+.mesa-inventory-label { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 0.8rem; align-items: center; margin: 1rem 1.1rem 0; padding-top: 0.8rem; border-top: 1px solid var(--inventory-line); }
+.mesa-inventory-label > div { display: grid; gap: 0.25rem; min-width: 0; }
+.mesa-inventory-label strong { overflow-wrap: anywhere; font-family: "Courier New", monospace; font-size: 0.82rem; }
+.mesa-inventory-label-size { color: var(--inventory-muted); font-size: 0.7rem; font-weight: 800; }
+.mesa-inventory-label img { width: 110px; height: auto; aspect-ratio: 109 / 50; padding: 0.25rem; border: 1px solid #c1cdd7; background: #fff; object-fit: contain; }
+.mesa-inventory-kicker { color: var(--inventory-muted); font-size: 0.68rem; font-weight: 800; text-transform: uppercase; }
+.mesa-inventory-label-actions { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+.mesa-inventory-label-actions a { color: var(--inventory-blue); font-size: 0.72rem; font-weight: 800; text-decoration: underline; text-underline-offset: 0.15em; }
+.mesa-inventory-print-controls { display: grid; gap: 0.35rem; margin-top: 0.45rem; }
+.mesa-inventory-print-controls label { color: var(--inventory-muted); font-size: 0.68rem; font-weight: 800; }
+.mesa-inventory-print-controls select { min-height: 2rem; border: 1px solid var(--inventory-line); border-radius: 0.3rem; background: #fff; padding: 0.25rem 0.4rem; }
+.mesa-inventory-print-controls small { color: var(--inventory-muted); font-size: 0.68rem; }
+.mesa-inventory-print-feedback { margin: 0; font-size: 0.72rem; font-weight: 700; }
+.mesa-inventory-print-feedback.success { color: #147d53; }
+.mesa-inventory-print-feedback.error { color: #a33434; }
+.mesa-inventory-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; padding: 0.8rem; border: 1px solid #cad8e4; border-radius: 8px; background: #edf4fa; color: var(--inventory-muted); font-size: 0.72rem; text-align: center; }
+.mesa-inventory-summary strong { display: block; color: var(--inventory-blue); font-size: 1.25rem; }
+.mesa-inventory-pending-list { padding: 0 1.1rem 1rem; }
+.mesa-inventory-pending-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: center; width: 100%; gap: 0.6rem; padding: 0.7rem 0; border: 0; border-bottom: 1px solid #e4ebf0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.mesa-inventory-pending-row:hover,
+.mesa-inventory-pending-row.selected { background: #edf7ef; }
+.mesa-inventory-pending-row span { color: var(--inventory-muted); font-size: 0.74rem; }
+.mesa-inventory-pending-row em { color: var(--inventory-green); font-size: 0.74rem; font-style: normal; font-weight: 800; }
+.mesa-inventory-weighing { display: grid; gap: 0.8rem; margin: 0 1.1rem 1rem; padding: 1rem; border: 2px solid #236f3a; border-radius: 8px; background: var(--inventory-green-soft); }
+.mesa-inventory-weight-display { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
+.mesa-inventory-weight-display span { color: #245a36; font-size: 0.76rem; font-weight: 800; }
+.mesa-inventory-weight-display strong { color: #103f20; font-size: clamp(2rem, 5vw, 3.4rem); font-variant-numeric: tabular-nums; line-height: 1; }
+.mesa-inventory-weight-display small { font-size: 1rem; }
+.mesa-inventory-weighing .mesa-inventory-form-grid { padding: 0; }
+.mesa-inventory-result { display: grid; gap: 0.55rem; margin: 0 1.1rem 1.1rem; padding: 0.95rem; border: 1px solid #a9d1b4; background: var(--inventory-green-soft); color: #205a35; }
+.mesa-inventory-result > span { font-size: 0.8rem; }
+.mesa-inventory-result .mesa-inventory-label { margin: 0.35rem 0 0; }
+.mesa-inventory-result .mesa-inventory-btn { justify-self: start; }
+.mesa-inventory-reason { margin-top: 0.35rem; }
+.mesa-inventory-pc-only { color: #7a5310; font-size: 0.72rem; font-weight: 800; }
+.mesa-inventory-checks { display: grid; gap: 0.55rem; padding: 0.2rem 0; }
+.mesa-inventory-checks label { display: flex; align-items: center; gap: 0.5rem; color: var(--inventory-ink); font-size: 0.8rem; font-weight: 700; }
+.mesa-inventory-checks input { width: 1rem; height: 1rem; accent-color: var(--inventory-blue); }
+.mesa-inventory-movement-list { display: grid; gap: 0.55rem; margin: 0; padding: 1rem 1.1rem 0; list-style: none; }
+.mesa-inventory-movement-list li { display: flex; justify-content: space-between; gap: 0.6rem; padding-bottom: 0.55rem; border-bottom: 1px solid #e4ebf0; font-size: 0.76rem; }
+.mesa-inventory-movement-list span { color: var(--inventory-muted); }
+
+@media (max-width: 900px) {
+  .mesa-inventory-columns { grid-template-columns: minmax(0, 1fr); }
+  .mesa-inventory-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mesa-inventory-secondary > .mesa-inventory-summary { align-self: start; }
+  .mesa-inventory-result .mesa-inventory-btn:disabled,
+  .revision-columns .mesa-inventory-btn:disabled { opacity: 0.45; }
+}
+
+@media (max-width: 560px) {
+  .mesa-inventory-header { align-items: flex-start; flex-direction: column; padding: 0.8rem 1rem; }
+  .mesa-inventory-tabs { padding-left: 0.5rem; }
+  .mesa-inventory-tabs button,
+  .mesa-inventory-tabs a { padding-inline: 0.7rem; font-size: 0.76rem; }
+  .mesa-inventory-main { padding: 0.9rem 0.65rem 1.5rem; }
+  .mesa-inventory-title-row { align-items: flex-start; flex-direction: column; }
+  .mesa-inventory-form-grid,
+  .mesa-inventory-secondary { grid-template-columns: minmax(0, 1fr); }
+  .mesa-inventory-scan-form > div { display: grid; }
+  .mesa-inventory-reading { grid-template-columns: minmax(0, 1fr) auto; }
+  .mesa-inventory-reading span { grid-column: 1; }
+  .mesa-inventory-reading .mesa-inventory-link { grid-column: 2; grid-row: 1 / span 2; }
+  .mesa-inventory-pending-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .mesa-inventory-pending-row span { grid-column: 1; }
+  .mesa-inventory-pending-row em { grid-column: 2; grid-row: 1 / span 2; }
+  .mesa-inventory-label { grid-template-columns: minmax(0, 1fr) 84px; }
+  .mesa-inventory-label img { width: 84px; height: auto; }
+}
+
+.mesa-scale-warning {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border-left: 4px solid #b7791f;
+  border-radius: 6px;
+  background: #fff8e1;
+  color: #6b4600;
+  line-height: 1.4;
+}
+
+.mesa-scale-warning-wrap {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.mesa-scale-capture-actions {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}

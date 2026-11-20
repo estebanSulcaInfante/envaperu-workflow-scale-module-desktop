@@ -121,6 +121,204 @@ describe('MesaReturnsPilot', () => {
     expect(screen.getByText(/escanee el QR nuevo/i)).toBeTruthy();
   });
 
+  it('resuelve el JSON compacto PREPESAJE por label_id vigente al unir mangas', async () => {
+    const labeledUnits = units.slice(0, 2).map((unit, index) => ({
+      ...unit,
+      aliases: [unit.code, `L1|00000000-0000-4000-8000-00000000000${index + 1}`, JSON.stringify({ v: 1, label_id: `00000000-0000-4000-8000-00000000000${index + 1}`, manga_id: 'no-confiar' })],
+    }));
+    const fetcher = vi.fn((url, options) => {
+      if (url === '/api/mesa/state') return answer({ units: labeledUnits, receipts: [] });
+      if (url === '/api/mesa/unions') return answer({ code: 'UNION-JSON-001' });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    stubFetch(fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza manual');
+    fireEvent.click(screen.getByRole('tab', { name: 'Unión de mangas' }));
+    const scan = screen.getByLabelText('Escanear manga de origen');
+    for (const labelId of ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002']) {
+      fireEvent.change(scan, { target: { value: JSON.stringify({ label_id: labelId, v: 1 }) } });
+      fireEvent.submit(scan.closest('form'));
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Crear identidad de unión' }));
+
+    await screen.findByRole('img', { name: 'QR de UNION-JSON-001' });
+    const union = fetcher.mock.calls.find(([url]) => url === '/api/mesa/unions');
+    expect(JSON.parse(union[1].body)).toMatchObject({
+      codes: [units[0].code, units[1].code],
+      label_ids: { [units[0].code]: '00000000-0000-4000-8000-000000000001', [units[1].code]: '00000000-0000-4000-8000-000000000002' },
+    });
+  });
+
+  it('resuelve el JSON compacto PREPESAJE por label_id vigente al pesar y recibir', async () => {
+    const labeledUnit = {
+      ...units[0],
+      aliases: [units[0].code, 'L1|00000000-0000-4000-8000-000000000003', JSON.stringify({ v: 1, label_id: '00000000-0000-4000-8000-000000000003' })],
+    };
+    const fetcher = vi.fn((url, options) => {
+      if (url === '/api/mesa/state') return answer({ units: [labeledUnit], receipts: [] });
+      if (url === '/api/mesa/receive') return answer({ code: labeledUnit.code, net_kg: '2.125', created_at: '2026-11-20T12:00:00Z' });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    stubFetch(fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza manual');
+    const scan = screen.getByLabelText('Escanear manga a recibir');
+    fireEvent.change(scan, { target: { value: '{"v":1,"label_id":"00000000-0000-4000-8000-000000000003"}' } });
+    fireEvent.submit(scan.closest('form'));
+    fireEvent.change(screen.getByLabelText('Peso NETO manual'), { target: { value: '2,125' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+
+    await screen.findByText(/2.125 kg netos registrados/i);
+    const receive = fetcher.mock.calls.find(([url]) => url === '/api/mesa/receive');
+    expect(JSON.parse(receive[1].body)).toMatchObject({ code: labeledUnit.code, label_id: '00000000-0000-4000-8000-000000000003' });
+  });
+
+  it('conserva label_id al reintentar y no muta si Central invalida la etiqueta entre lecturas', async () => {
+    const labelId = '00000000-0000-4000-8000-000000000005';
+    const labeledUnit = { ...units[0], aliases: [units[0].code, JSON.stringify({ v: 1, label_id: labelId })] };
+    let stateCalls = 0;
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/state') {
+        stateCalls += 1;
+        return answer({ units: [{ ...labeledUnit, status: stateCalls > 1 ? 'reserved' : 'available' }], receipts: [] });
+      }
+      if (url === '/api/mesa/receive') return answer({ error: 'La etiqueta PREPESAJE ya no está vigente para esta manga.' }, 409);
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    stubFetch(fetcher);
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza manual');
+    fireEvent.change(screen.getByLabelText('Escanear manga a recibir'), { target: { value: JSON.stringify({ v: 1, label_id: labelId }) } });
+    fireEvent.submit(screen.getByLabelText('Escanear manga a recibir').closest('form'));
+    fireEvent.change(screen.getByLabelText('Peso NETO manual'), { target: { value: '2,125' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/La manga ya no está disponible para este ingreso/i);
+    const receive = fetcher.mock.calls.find(([url]) => url === '/api/mesa/receive');
+    expect(JSON.parse(receive[1].body)).toMatchObject({ code: labeledUnit.code, label_id: labelId });
+    expect(fetcher.mock.calls.filter(([url]) => url === '/api/mesa/receive')).toHaveLength(1);
+  });
+
+  it('rechaza JSON PREPESAJE inválido, desconocido o con campos manipulables', async () => {
+    const labeledUnit = {
+      ...units[0],
+      aliases: [units[0].code, JSON.stringify({ v: 1, label_id: '00000000-0000-4000-8000-000000000004' })],
+    };
+    stubFetch(() => answer({ units: [labeledUnit], receipts: [] }));
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza manual');
+    const scan = screen.getByLabelText('Escanear manga a recibir');
+
+    fireEvent.change(scan, { target: { value: '{"v":1,"label_id":' } });
+    fireEvent.submit(scan.closest('form'));
+    await screen.findByText(/QR PREPESAJE inválido/i);
+
+    fireEvent.change(scan, { target: { value: '{"v":1,"label_id":"00000000-0000-4000-8000-000000000099"}' } });
+    fireEvent.submit(scan.closest('form'));
+    await screen.findByText(/Etiqueta PREPESAJE desconocida o no vigente/i);
+
+    fireEvent.change(scan, { target: { value: '{"v":1,"label_id":"00000000-0000-4000-8000-000000000099","code":"OFDEMO-OT101-M001"}' } });
+    fireEvent.submit(scan.closest('form'));
+    await screen.findByText(/Etiqueta PREPESAJE desconocida o no vigente/i);
+    expect(screen.queryByText(/Manga escaneada/)).toBeNull();
+  });
+
+  it('mantiene Unión activa para escanear, pesar y confirmar la identidad nueva', async () => {
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/unions') return answer({ code: 'UNION-001' });
+      if (url === '/api/mesa/receive') return answer({ code: 'UNION-001', net_kg: '4.250', created_at: '2026-11-18T12:00:00Z' });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    stubFetch(fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza manual');
+    fireEvent.click(screen.getByRole('tab', { name: 'Unión de mangas' }));
+    const originScan = screen.getByLabelText('Escanear manga de origen');
+    for (const code of [units[0].code, units[1].code]) {
+      fireEvent.change(originScan, { target: { value: code } });
+      fireEvent.submit(originScan.closest('form'));
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Crear identidad de unión' }));
+
+    await screen.findByRole('img', { name: 'QR de UNION-001' });
+    expect(screen.getByRole('tab', { name: 'Unión de mangas' }).getAttribute('aria-selected')).toBe('true');
+    const newQr = screen.getByLabelText('Escanear QR nuevo');
+    await waitFor(() => expect(document.activeElement).toBe(newQr));
+    fireEvent.change(newQr, { target: { value: 'UNION-001' } });
+    fireEvent.submit(newQr.closest('form'));
+    fireEvent.change(screen.getByLabelText('Peso NETO manual'), { target: { value: '4,250' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+
+    await screen.findByText(/4.250 kg netos registrados/i);
+    await screen.findByText(/Retorno confirmado: UNION-001/);
+    expect(screen.queryByText(/No pudimos verificar el ingreso/)).toBeNull();
+    expect(fetcher.mock.calls.filter(([url]) => url === '/api/mesa/receive')).toHaveLength(1);
+  });
+
+  it('sale explícitamente de Unión para recibir una manga individual y no mezcla su peso', async () => {
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/unions') return answer({ code: 'UNION-001' });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    stubFetch(fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza manual');
+    fireEvent.click(screen.getByRole('tab', { name: 'Unión de mangas' }));
+    const originScan = screen.getByLabelText('Escanear manga de origen');
+    for (const code of [units[0].code, units[1].code]) {
+      fireEvent.change(originScan, { target: { value: code } });
+      fireEvent.submit(originScan.closest('form'));
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Crear identidad de unión' }));
+    await screen.findByRole('img', { name: 'QR de UNION-001' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ir a retorno individual' }));
+    expect(screen.getByRole('tab', { name: 'Pesar y recibir' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByLabelText('Escanear manga a recibir')).toBeTruthy();
+    expect(screen.getByLabelText('Peso NETO manual').disabled).toBe(true);
+  });
+
+  it('captura Accura dentro de Unión y liga el token al QR UNION', async () => {
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: null, mensaje: 'ST' });
+      if (url === '/api/mesa/unions') return answer({ code: 'UNION-001' });
+      if (url === '/api/mesa/balanza/capturas') return answer({ kg: '5.125', scale_token: 'scale-union-1' });
+      if (url === '/api/mesa/receive') return answer({ code: 'UNION-001', net_kg: '5.125', created_at: '2026-11-18T12:00:00Z' });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza Accura conectada · esperando lectura');
+    fireEvent.click(screen.getByRole('tab', { name: 'Unión de mangas' }));
+    const originScan = screen.getByLabelText('Escanear manga de origen');
+    for (const code of [units[0].code, units[1].code]) {
+      fireEvent.change(originScan, { target: { value: code } });
+      fireEvent.submit(originScan.closest('form'));
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Crear identidad de unión' }));
+    await screen.findByRole('img', { name: 'QR de UNION-001' });
+    const newQr = screen.getByLabelText('Escanear QR nuevo');
+    fireEvent.change(newQr, { target: { value: 'UNION-001' } });
+    fireEvent.submit(newQr.closest('form'));
+    fireEvent.click(screen.getByRole('button', { name: 'Leer balanza' }));
+    await screen.findByText(/Lectura Accura capturada para UNION-001/);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/5.125 kg netos registrados/i);
+
+    const capture = fetcher.mock.calls.find(([url]) => url === '/api/mesa/balanza/capturas');
+    expect(JSON.parse(capture[1].body)).toMatchObject({ codigo: 'UNION-001' });
+    const receive = fetcher.mock.calls.find(([url]) => url === '/api/mesa/receive');
+    expect(JSON.parse(receive[1].body)).toMatchObject({ code: 'UNION-001', scale_token: 'scale-union-1' });
+  });
+
   it('no recibe una unión si no se escanea su nueva identidad y envía el peso como string', async () => {
     const fetcher = vi.fn((url, options) => {
       if (url === '/api/mesa/state') return answer({ units, receipts: [] });

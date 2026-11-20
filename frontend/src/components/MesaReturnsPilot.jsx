@@ -9,6 +9,7 @@ import {
 
 const STATE_URL = '/api/mesa/state';
 const PENDING_KEY = 'mesa-returns-pilot.pending-union';
+const MODE_KEY = 'mesa-returns-pilot.mode';
 const REQUEST_KEY = 'mesa-returns-pilot.receive-request-ids';
 const ORIGINS_KEY = 'mesa-returns-pilot.receipt-origins';
 const receiptFormatter = new Intl.DateTimeFormat('es-PE', {
@@ -34,6 +35,16 @@ const readPending = () => {
   }
 };
 
+const readMode = () => {
+  try {
+    const stored = window.localStorage.getItem(MODE_KEY);
+    if (stored === 'union' || stored === 'receive') return stored;
+    return readPending() ? 'union' : 'receive';
+  } catch {
+    return 'receive';
+  }
+};
+
 const readJson = (key, fallback) => {
   try {
     const value = window.localStorage.getItem(key);
@@ -44,6 +55,41 @@ const readJson = (key, fallback) => {
 };
 
 const normalizeCode = (value) => String(value || '').trim().toUpperCase();
+
+const PREPESAJE_INVALID = 'QR PREPESAJE inválido. Verifique que tenga solo v:1 y label_id, y vuelva a escanear.';
+const PREPESAJE_UNKNOWN = 'Etiqueta PREPESAJE desconocida o no vigente. Verifique el QR y vuelva a escanear.';
+const LABEL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parsePrepesajeQr(value) {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith('{') && !raw.startsWith('[')) return { kind: 'literal', value: raw };
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return { kind: 'json', valid: false };
+  }
+  if (!payload || Array.isArray(payload) || typeof payload !== 'object') return { kind: 'json', valid: false };
+  if (payload.v !== 1 || typeof payload.label_id !== 'string' || !LABEL_ID_PATTERN.test(payload.label_id.trim())) {
+    return { kind: 'json', valid: false };
+  }
+  return { kind: 'json', valid: true, labelId: payload.label_id.trim() };
+}
+
+function aliasHasLabelId(alias, labelId) {
+  const raw = String(alias || '').trim();
+  if (!raw) return false;
+  if (raw.startsWith('L1|')) return normalizeCode(raw.slice(3)) === normalizeCode(labelId);
+  const parsed = parsePrepesajeQr(raw);
+  return parsed.kind === 'json' && parsed.valid && normalizeCode(parsed.labelId) === normalizeCode(labelId);
+}
+
+function labelIdFromAlias(alias) {
+  const raw = String(alias || '').trim();
+  if (raw.startsWith('L1|') && LABEL_ID_PATTERN.test(raw.slice(3))) return raw.slice(3);
+  const parsed = parsePrepesajeQr(raw);
+  return parsed.kind === 'json' && parsed.valid ? parsed.labelId : null;
+}
 
 const weightValue = (value) => {
   const normalized = String(value || '').trim().replace(',', '.');
@@ -210,10 +256,11 @@ function WeightInput({ value, onChange, disabled, manual = true }) {
 }
 
 export default function MesaReturnsPilot({ showExamples = false }) {
-  const [mode, setMode] = useState('receive');
+  const [mode, setMode] = useState(readMode);
   const [units, setUnits] = useState([]);
   const [receipts, setReceipts] = useState([]);
   const [selectedCodes, setSelectedCodes] = useState([]);
+  const [selectedLabelIds, setSelectedLabelIds] = useState({});
   const [unionInput, setUnionInput] = useState('');
   const [receiveInput, setReceiveInput] = useState('');
   const [receiveUnit, setReceiveUnit] = useState(null);
@@ -231,6 +278,12 @@ export default function MesaReturnsPilot({ showExamples = false }) {
   const [scaleBusy, setScaleBusy] = useState(false);
   const scaleCaptures = useRef(new Map());
   const { notices, notify: setNotice, dismiss } = useMesaNotices();
+  const unionStepNotice = useRef(null);
+  const notifyStep = (notice) => {
+    if (mode !== 'union') return setNotice(notice);
+    if (unionStepNotice.current) dismiss(unionStepNotice.current);
+    unionStepNotice.current = setNotice(notice);
+  };
 
   const refreshScaleStatus = async () => {
     try {
@@ -306,6 +359,12 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (!pendingUnion || !receivingPending) return undefined;
+    const focusTimer = window.setTimeout(() => receiveInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [pendingUnion?.code, receivingPending, mode]);
+
   const retryLoad = async () => {
     if (loading) return;
     setLoading(true);
@@ -326,7 +385,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     [selectedCodes, units],
   );
   const currentWeight = weightValue(netWeight);
-  const controlsDisabled = loading || loadError || busy;
+  const controlsDisabled = loading || loadError || busy || scaleBusy;
   const alreadyReceived = receiveUnit && (receiveUnit.status === 'received' || receiveResult);
   const accuraMode = scaleStatus.modo === 'accura';
   const manualMode = scaleStatus.modo === 'manual';
@@ -340,10 +399,23 @@ export default function MesaReturnsPilot({ showExamples = false }) {
         ? 'Balanza Accura lista'
         : 'Balanza Accura conectada · esperando lectura';
 
-  const findUnit = (value) => {
-    const scanned = normalizeCode(value);
-    return units.find((unit) => [unit.code, ...(unit.aliases || [])].some(alias => normalizeCode(alias) === scanned));
+  const resolveUnit = (value) => {
+    const parsed = parsePrepesajeQr(value);
+    if (parsed.kind === 'json') {
+      if (!parsed.valid) return { unit: null, error: PREPESAJE_INVALID };
+      const unit = units.find((candidate) => (candidate.aliases || []).some((alias) => aliasHasLabelId(alias, parsed.labelId)));
+      return { unit: unit || null, labelId: parsed.labelId, error: unit ? null : PREPESAJE_UNKNOWN };
+    }
+    const scanned = normalizeCode(parsed.value);
+    const unit = units.find((candidate) => [candidate.code, ...(candidate.aliases || [])].some(alias => normalizeCode(alias) === scanned));
+    const matchedAlias = unit && [unit.code, ...(unit.aliases || [])].find(alias => normalizeCode(alias) === scanned);
+    return {
+      unit: unit || null,
+      labelId: labelIdFromAlias(matchedAlias),
+      error: null,
+    };
   };
+  const findUnit = (value) => resolveUnit(value).unit;
   const requestSlot = (unit) => unit.cycle_id ? `${normalizeCode(unit.code)}:${unit.cycle_id}` : normalizeCode(unit.code);
   const availableUnits = units.filter((unit) => unit.status === 'available');
   const pendingUnions = useMemo(() => {
@@ -368,11 +440,17 @@ export default function MesaReturnsPilot({ showExamples = false }) {
   }
 
   const addOriginCode = (rawCode) => {
-    const code = normalizeCode(findUnit(rawCode)?.code || rawCode);
-    if (!code || controlsDisabled) return;
-    const unit = findUnit(code);
+    const resolved = resolveUnit(rawCode);
+    if (controlsDisabled) return;
+    if (resolved.error) {
+      setNotice({ type: 'error', text: resolved.error });
+      return;
+    }
+    const code = normalizeCode(resolved.unit?.code || rawCode);
+    if (!code) return;
+    const unit = resolved.unit || findUnit(code);
     if (!unit) {
-      setNotice({ type: 'error', text: 'Manga desconocida. Verifique el QR y vuelva a escanear.' });
+      setNotice({ type: 'error', text: resolved.error || 'Manga desconocida. Verifique el QR y vuelva a escanear.' });
       return;
     }
     const linked = linkedMessage(code);
@@ -391,8 +469,9 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       return;
     }
     setSelectedCodes((codes) => [...codes, code]);
+    if (resolved.labelId) setSelectedLabelIds((labels) => ({ ...labels, [code]: resolved.labelId }));
     setUnionInput('');
-    setNotice({ type: 'info', text: 'Origen incorporado. Puede agregar otro QR compatible.' });
+    notifyStep({ type: 'info', text: 'Origen incorporado. Puede agregar otro QR compatible.' });
   };
 
   const addOrigin = (event) => {
@@ -402,6 +481,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
 
   const removeOrigin = (code) => {
     setSelectedCodes((codes) => codes.filter((item) => item !== code));
+    setSelectedLabelIds((labels) => { const next = { ...labels }; delete next[code]; return next; });
     setNotice({ type: 'info', text: 'Origen retirado de la selección. Todavía no se registró ningún movimiento.' });
   };
 
@@ -409,7 +489,9 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     if (selectedCodes.length < 2 || controlsDisabled) return;
     setBusy(true);
     try {
-      const value = await request('/api/mesa/unions', { codes: selectedCodes });
+      const labelIds = Object.fromEntries(selectedCodes.filter((code) => selectedLabelIds[code]).map((code) => [code, selectedLabelIds[code]]));
+      const unionPayload = { codes: selectedCodes, ...(Object.keys(labelIds).length ? { label_ids: labelIds } : {}) };
+      const value = await request('/api/mesa/unions', unionPayload);
       const code = normalizeCode(value.code);
       if (!code) throw new Error('No se recibió el código de la unión. Reintente con las mismas mangas.');
       const firstLot = selectedUnits[0]?.lot || null;
@@ -421,8 +503,8 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       window.localStorage.setItem(ORIGINS_KEY, JSON.stringify(knownOrigins));
       setPendingUnion(nextPending);
       setSelectedCodes([]);
+      setSelectedLabelIds({});
       setUnionInput('');
-      setMode('receive');
       setReceiveInput('');
       setReceiveUnit(null);
       setReceiveResult(null);
@@ -435,7 +517,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
         refreshed = false;
         setLoadError(true);
       }
-      setNotice({
+      notifyStep({
         type: 'success',
         text: refreshed
           ? `Identidad ${code} creada. Imprima el sticker y escanee su QR nuevo antes de recibir.`
@@ -455,8 +537,17 @@ export default function MesaReturnsPilot({ showExamples = false }) {
   };
 
   const scanReceiveCode = (rawCode) => {
-    const code = normalizeCode(findUnit(rawCode)?.code || rawCode);
-    if (!code || controlsDisabled) return;
+    const resolved = resolveUnit(rawCode);
+    if (controlsDisabled) return;
+    if (resolved.error) {
+      setReceiveUnit(null);
+      setReceiveResult(null);
+      setNetWeight('');
+      setNotice({ type: 'error', text: resolved.error || 'No se encontró esa identidad. Revise el QR y vuelva a escanear.' });
+      return;
+    }
+    const code = normalizeCode(resolved.unit?.code || rawCode);
+    if (!code) return;
     if (pendingUnion && receivingPending) {
       const expectedCode = normalizeCode(pendingUnion.code);
       const candidate = pendingUnions.find((item) => normalizeCode(item.code) === expectedCode) || pendingUnion;
@@ -466,7 +557,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
         setReceiveResult(null);
         setNetWeight('');
         setReceiveRequestId('');
-        setNotice({ type: 'error', text: [`Esperaba ${candidate.code}. Escaneaste ${code}.`, linked].filter(Boolean).join(' ') });
+        notifyStep({ type: 'error', text: [`Esperaba ${candidate.code}. Escaneaste ${code}.`, linked].filter(Boolean).join(' ') });
         return;
       }
       setPendingUnion(candidate);
@@ -476,7 +567,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       setReceiveRequestId(requestId);
       requestIds[normalizeCode(candidate.code)] = requestId;
       window.localStorage.setItem(REQUEST_KEY, JSON.stringify(requestIds));
-      setNotice({ type: 'info', text: accuraMode ? 'QR nuevo confirmado. Pulse Leer balanza para obtener el NETO.' : 'QR nuevo confirmado. Ingrese la lectura NETO manual.' });
+      notifyStep({ type: 'info', text: accuraMode ? 'QR nuevo confirmado. Pulse Leer balanza para obtener el NETO.' : 'QR nuevo confirmado. Ingrese la lectura NETO manual.' });
       return;
     }
     const unit = findUnit(code);
@@ -491,10 +582,10 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     if (unit.status === 'received') {
       const originDetails = (unit.origins || []).map((originCode) => findUnit(originCode) || { code: originCode });
       const receipt = receipts.find((item) => normalizeCode(item.code) === code);
-      setReceiveUnit({ ...unit, originDetails });
+      setReceiveUnit({ ...unit, label_id: resolved.labelId, originDetails });
       setReceiveResult(receipt ? { ...receipt, origins: originDetails } : null);
       setNetWeight('');
-      setNotice({ type: 'info', text: 'Esta manga ya tiene una recepción registrada.' });
+      notifyStep({ type: 'info', text: 'Esta manga ya tiene una recepción registrada.' });
       return;
     }
     if (unit.status !== 'available') {
@@ -504,7 +595,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       setNotice({ type: 'error', text: unit.status === 'pending' ? `Retoma la unión ${code} y escanea su QR.` : 'Esta manga no está disponible para recibir. Revisa su estado antes de pesar.' });
       return;
     }
-    setReceiveUnit(unit);
+    setReceiveUnit({ ...unit, label_id: resolved.labelId });
     const requestIds = readJson(REQUEST_KEY, {});
     const requestId = requestIds[requestSlot(unit)] || getRequestId();
     setReceiveRequestId(requestId);
@@ -546,7 +637,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       scaleCaptures.current.set(code, { operationId, token: value.token });
       setNetWeight(value.kg);
       setScaleStatus((current) => ({ ...current, kg: value.kg, disponible: true, mensaje: value.mensaje || current.mensaje }));
-      setNotice({ type: 'success', text: `Lectura Accura capturada para ${code}: ${value.kg} kg NET.` });
+      notifyStep({ type: 'success', text: `Lectura Accura capturada para ${code}: ${value.kg} kg NET.` });
     } catch (error) {
       scaleCaptures.current.set(code, { operationId, token: previous.token });
       setNotice({ type: 'error', text: scaleErrorMessage(error, 'No se pudo actualizar/capturar la balanza. Reintente con el mismo código.') });
@@ -569,6 +660,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       const scaleCapture = scaleCaptures.current.get(normalizeCode(receiveUnit.code));
       const value = await request('/api/mesa/receive', {
         code: receiveUnit.code,
+        ...(receiveUnit.label_id ? { label_id: receiveUnit.label_id } : {}),
         net_kg: currentWeight,
         request_id: requestId,
         ...(scaleCapture?.token ? { scale_token: scaleCapture.token } : {}),
@@ -592,14 +684,13 @@ export default function MesaReturnsPilot({ showExamples = false }) {
         setPendingUnion(null);
         setReceivingPending(false);
       }
-      setPrintLabelData({ code: value.code, net: value.net_kg });
       try { await refreshState(); } catch { /* la confirmación ya fue devuelta por receive */ }
       setReceiveInput('');
       setReceiveUnit(null);
       setNetWeight('');
       setReceiveRequestId('');
       window.setTimeout(() => receiveInputRef.current?.focus(), 0);
-      setNotice({ type: 'success', text: `Retorno confirmado: ${value.code}. El ingreso se registró una sola vez.` });
+      notifyStep({ type: 'success', text: `Retorno confirmado: ${value.code}. El ingreso se registró una sola vez.` });
     } catch (error) {
       if ([404,409].includes(error.status)) {
         try {
@@ -609,9 +700,9 @@ export default function MesaReturnsPilot({ showExamples = false }) {
           setNetWeight('');
           if (receipt && unit) {
             const origins = unit.origins.map(code => latest.units.find(item => item.code === code) || { code });
-            setReceiveUnit({ ...unit, originDetails: origins });
+            setReceiveUnit({ ...unit, label_id: receiveUnit.label_id, originDetails: origins });
             setReceiveResult({ ...receipt, origins });
-            setNotice({ type: 'info', text: 'Esta manga ya tiene una recepción registrada.' });
+            notifyStep({ type: 'info', text: 'Esta manga ya tiene una recepción registrada.' });
             return;
           }
           setReceiveUnit(null);
@@ -622,7 +713,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
           return;
         }
       }
-      setNotice({ type: 'error', text: mesaOperationError(error, 'receive') });
+      notifyStep({ type: 'error', text: mesaOperationError(error, 'receive') });
     } finally {
       setBusy(false);
     }
@@ -638,6 +729,62 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     }
   };
 
+  const clearReceiveContext = () => {
+    setReceiveInput('');
+    setReceiveUnit(null);
+    setReceiveResult(null);
+    setNetWeight('');
+    setReceiveRequestId('');
+  };
+
+  const switchMode = (nextMode) => {
+    if (nextMode === mode || busy || scaleBusy) return;
+    clearReceiveContext();
+    setReceivingPending(nextMode === 'union' && Boolean(pendingUnion));
+    setMode(nextMode);
+    window.localStorage.setItem(MODE_KEY, nextMode);
+  };
+
+  const renderReceiveFlow = (headingId, headingText, unionContext = false) => (
+    <section className="mesa-flow-section" aria-labelledby={headingId}>
+      <div className="mesa-section-heading"><div><h2 id={headingId}>{headingText}</h2></div></div>
+      {pendingUnion && (
+        <section className="mesa-pending-union" aria-label="Unión pendiente de pesaje">
+          <div className="mesa-pending-copy"><span>Unión pendiente</span><strong>{pendingUnion.code}</strong><p>Imprima el sticker y escanee el QR nuevo antes de introducir el peso.</p><ul className="mesa-pending-origins">{pendingUnion.origins.map((origin) => <li key={origin.code}>{origin.code} · {otContext(origin)}</li>)}</ul><img className="mesa-qr-preview" src={`/api/mesa/qr/${encodeURIComponent(pendingUnion.code)}.svg`} alt={`QR de ${pendingUnion.code}`} /></div>
+          <div className="mesa-pending-actions">
+            <ReturnPrintControls code={pendingUnion.code} kind="identidad" />
+            {!receivingPending && (
+              <button type="button" className="btn btn-secondary" disabled={controlsDisabled} onClick={() => {
+                setReceivingPending(true);
+                setReceiveInput('');
+                setReceiveUnit(null);
+                setNetWeight('');
+                setNotice({ type: 'info', text: `Retomada la unión ${pendingUnion.code}. Escanee su QR nuevo.` });
+              }}>Retomar esta unión</button>
+            )}
+             </div>
+            </section>
+      )}
+      {pendingUnion && receivingPending && <p className="mesa-continue-other"><button type="button" className="mesa-link-button" disabled={controlsDisabled} onClick={() => {
+        clearReceiveContext();
+        setReceivingPending(false);
+        if (unionContext) {
+          setMode('receive');
+          window.localStorage.setItem(MODE_KEY, 'receive');
+          setNotice({ type: 'info', text: `Unión ${pendingUnion.code} pendiente. Pesar y recibir quedó listo para un retorno individual.` });
+        } else {
+          setNotice({ type: 'info', text: 'Puede recibir otra manga. La unión pendiente queda disponible para retomarla después.' });
+        }
+      }}>{unionContext ? 'Ir a retorno individual' : 'Recibir otra manga mientras tanto'}</button></p>}
+      <form className="mesa-scan-form scm-scan-row" onSubmit={scanReceive}>
+        <label htmlFor={pendingUnion && receivingPending ? 'mesa-new-qr' : 'mesa-receive-qr'}>{pendingUnion && receivingPending ? 'Escanear QR nuevo' : 'Escanear manga a recibir'}</label>
+        <div className="mesa-scan-controls scm-scan-row"><input ref={receiveInputRef} id={pendingUnion && receivingPending ? 'mesa-new-qr' : 'mesa-receive-qr'} value={receiveInput} onChange={(event) => setReceiveInput(event.target.value)} autoComplete="off" placeholder={pendingUnion && receivingPending ? pendingUnion.code : 'OFDEMO-OT101-M001'} /><button type="submit" className="btn btn-primary" disabled={!receiveInput.trim() || controlsDisabled}>Resolver QR</button></div>
+        <small>{pendingUnion && receivingPending ? 'No se permite recibir la unión hasta validar exactamente su nuevo QR.' : 'Puede ingresar manualmente el código si no hay lector conectado.'}</small>
+      </form>
+      {receiveUnit && <UnitIdentity unit={receiveUnit} label={receivingPending ? 'Nueva identidad escaneada' : 'Manga escaneada'} />}
+    </section>
+  );
+
   return (
     <section className="mesa-returns-pilot app" aria-label="Segunda estación de pesaje de Armado">
       <header className="header">
@@ -651,10 +798,10 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       </header>
 
       <nav className="tab-nav" role="tablist" aria-label="Tareas de la estación">
-        <button type="button" role="tab" aria-label="Pesar y recibir" aria-selected={mode === 'receive'} className={`tab-btn ${mode === 'receive' ? 'active' : ''}`} onClick={() => setMode('receive')}>
+        <button type="button" role="tab" aria-label="Pesar y recibir" aria-selected={mode === 'receive'} className={`tab-btn ${mode === 'receive' ? 'active' : ''}`} onClick={() => switchMode('receive')} disabled={busy || scaleBusy}>
           Pesar y recibir
         </button>
-        <button type="button" role="tab" aria-label="Unión de mangas" aria-selected={mode === 'union'} className={`tab-btn ${mode === 'union' ? 'active' : ''}`} onClick={() => setMode('union')}>
+        <button type="button" role="tab" aria-label="Unión de mangas" aria-selected={mode === 'union'} className={`tab-btn ${mode === 'union' ? 'active' : ''}`} onClick={() => switchMode('union')} disabled={busy || scaleBusy}>
           Unión de mangas
         </button>
       </nav>
@@ -665,58 +812,32 @@ export default function MesaReturnsPilot({ showExamples = false }) {
           <div className="panel-body">
 
           {mode === 'union' ? (
-            <section className="mesa-flow-section" aria-labelledby="mesa-union-title">
-              <div className="mesa-section-heading">
-                <div><h2 id="mesa-union-title">Seleccione las mangas que se vaciarán juntas</h2></div>
-                <strong className="mesa-count">{selectedCodes.length} / 2 mínimo</strong>
-              </div>
-              <form className="mesa-scan-form scm-scan-row" onSubmit={addOrigin}>
-                <label htmlFor="mesa-union-scan">Escanear manga de origen</label>
-                <div className="mesa-scan-controls scm-scan-row"><input id="mesa-union-scan" value={unionInput} onChange={(event) => setUnionInput(event.target.value)} autoComplete="off" placeholder="OFDEMO-OT101-M001" /><button type="submit" className="btn btn-primary" disabled={!unionInput.trim() || controlsDisabled}>Agregar origen</button></div>
-                <small>También puede escribir el código y pulsar Enter.</small>
-              </form>
-              {selectedUnits.length > 0 ? (
-                <div className="mesa-origin-list" aria-label="Orígenes seleccionados">
-                  {selectedUnits.map((unit) => <div className="mesa-origin-row" key={unit.code}><div><strong>{unit.code}</strong><span>{unit.piece} · {unit.color} · {otContext(unit)}</span></div><button type="button" className="btn btn-secondary" onClick={() => removeOrigin(normalizeCode(unit.code))} disabled={controlsDisabled}>Quitar</button></div>)}
-                  <p className="mesa-origin-rule">Las mangas deben compartir pieza y color.</p>
+            <>
+              <section className="mesa-flow-section" aria-labelledby="mesa-union-title">
+                <div className="mesa-section-heading">
+                  <div><h2 id="mesa-union-title">Seleccione las mangas que se vaciarán juntas</h2></div>
+                  <strong className="mesa-count">{selectedCodes.length} / 2 mínimo</strong>
                 </div>
-              ) : <p className="mesa-empty-line">Aún no hay orígenes. Comience con el QR de una manga disponible.</p>}
-              <button type="button" className="btn btn-primary mesa-wide-action" onClick={createUnion} disabled={selectedCodes.length < 2 || controlsDisabled}>Crear identidad de unión</button>
-            </section>
-          ) : (
-            <section className="mesa-flow-section" aria-labelledby="mesa-receive-title">
-              <div className="mesa-section-heading"><div><h2 id="mesa-receive-title">Escanee la identidad que retorna</h2></div></div>
-              {pendingUnion && (
-                <section className="mesa-pending-union" aria-label="Unión pendiente de pesaje">
-                  <div className="mesa-pending-copy"><span>Unión pendiente</span><strong>{pendingUnion.code}</strong><p>Imprima el sticker y escanee el QR nuevo antes de introducir el peso.</p><ul className="mesa-pending-origins">{pendingUnion.origins.map((origin) => <li key={origin.code}>{origin.code} · {otContext(origin)}</li>)}</ul><img className="mesa-qr-preview" src={`/api/mesa/qr/${encodeURIComponent(pendingUnion.code)}.svg`} alt={`QR de ${pendingUnion.code}`} /></div>
-                  <div className="mesa-pending-actions">
-                    <ReturnPrintControls code={pendingUnion.code} kind="identidad" />
-                    {!receivingPending && (
-                      <button type="button" className="btn btn-secondary" onClick={() => {
-                        setReceivingPending(true);
-                        setReceiveInput('');
-                        setReceiveUnit(null);
-                        setNetWeight('');
-                        setNotice({ type: 'info', text: `Retomada la unión ${pendingUnion.code}. Escanee su QR nuevo.` });
-                      }}>Retomar esta unión</button>
-                    )}
+                <form className="mesa-scan-form scm-scan-row" onSubmit={addOrigin}>
+                  <label htmlFor="mesa-union-scan">Escanear manga de origen</label>
+                  <div className="mesa-scan-controls scm-scan-row"><input id="mesa-union-scan" value={unionInput} onChange={(event) => setUnionInput(event.target.value)} autoComplete="off" placeholder="OFDEMO-OT101-M001" /><button type="submit" className="btn btn-primary" disabled={!unionInput.trim() || controlsDisabled}>Agregar origen</button></div>
+                  <small>También puede escribir el código y pulsar Enter.</small>
+                </form>
+                {selectedUnits.length > 0 ? (
+                  <div className="mesa-origin-list" aria-label="Orígenes seleccionados">
+                    {selectedUnits.map((unit) => <div className="mesa-origin-row" key={unit.code}><div><strong>{unit.code}</strong><span>{unit.piece} · {unit.color} · {otContext(unit)}</span></div><button type="button" className="btn btn-secondary" onClick={() => removeOrigin(normalizeCode(unit.code))} disabled={controlsDisabled}>Quitar</button></div>)}
+                    <p className="mesa-origin-rule">Las mangas deben compartir pieza y color.</p>
                   </div>
-                </section>
-              )}
-              {pendingUnion && receivingPending && <p className="mesa-continue-other"><button type="button" className="mesa-link-button" onClick={() => { setReceivingPending(false); setReceiveInput(''); setReceiveUnit(null); setNetWeight(''); setNotice({ type: 'info', text: 'Puede recibir otra manga. La unión pendiente queda disponible para retomarla después.' }); }}>Recibir otra manga mientras tanto</button></p>}
-              <form className="mesa-scan-form scm-scan-row" onSubmit={scanReceive}>
-                <label htmlFor={pendingUnion && receivingPending ? 'mesa-new-qr' : 'mesa-receive-qr'}>{pendingUnion && receivingPending ? 'Escanear QR nuevo' : 'Escanear manga a recibir'}</label>
-                <div className="mesa-scan-controls scm-scan-row"><input ref={receiveInputRef} id={pendingUnion && receivingPending ? 'mesa-new-qr' : 'mesa-receive-qr'} value={receiveInput} onChange={(event) => setReceiveInput(event.target.value)} autoComplete="off" placeholder={pendingUnion && receivingPending ? pendingUnion.code : 'OFDEMO-OT101-M001'} /><button type="submit" className="btn btn-primary" disabled={!receiveInput.trim() || controlsDisabled}>Resolver QR</button></div>
-                <small>{pendingUnion && receivingPending ? 'No se permite recibir la unión hasta validar exactamente su nuevo QR.' : 'Puede ingresar manualmente el código si no hay lector conectado.'}</small>
-              </form>
-              {receiveUnit && <UnitIdentity unit={receiveUnit} label={receivingPending ? 'Nueva identidad escaneada' : 'Manga escaneada'} />}
-            </section>
-          )}
+                ) : <p className="mesa-empty-line">Aún no hay orígenes. Comience con el QR de una manga disponible.</p>}
+                <button type="button" className="btn btn-primary mesa-wide-action" onClick={createUnion} disabled={selectedCodes.length < 2 || controlsDisabled}>Crear identidad de unión</button>
+              </section>
+              {pendingUnion && renderReceiveFlow('mesa-union-receive-title', 'Pesar la unión creada', true)}
+            </>
+          ) : renderReceiveFlow('mesa-receive-title', 'Escanee la identidad que retorna')}
           </div>
         </main>
 
-        {mode === 'receive' && (
-          <section className="panel" aria-labelledby="mesa-scale-title">
+        <section className="panel" aria-labelledby="mesa-scale-title">
             <h2 id="mesa-scale-title" className="panel-header">Lectura de balanza</h2>
             <div className="panel-body">
               <div className={`scm-live-weight ${accuraMode ? 'connected' : 'manual'}`} aria-label={`Lectura neta ${accuraMode ? 'Accura' : 'manual'}`}>
@@ -749,9 +870,8 @@ export default function MesaReturnsPilot({ showExamples = false }) {
               <button type="button" className="btn btn-primary mesa-wide-action" onClick={receive} disabled={!receiveUnit || !currentWeight || controlsDisabled || Boolean(alreadyReceived) || (!manualMode && !(accuraMode && scaleStatus.base === 'NT'))}>{busy ? 'Confirmando…' : alreadyReceived ? 'Ingreso ya registrado' : 'Pesar y recibir'}</button>
                {receiveResult && <section className="mesa-success-result" aria-label="Retorno confirmado"><div className="mesa-success-copy"><strong>{receiveResult.net_kg} kg netos registrados</strong><span>Movimiento único confirmado para {receiveResult.code} · {receiptTime(receiveResult.created_at)}</span>{receiveResult.origins?.length > 0 && <span>Procedencias: {receiveResult.origins.map((origin) => `${origin.code} · ${otContext(origin)}`).join(' · ')}</span>}</div><img className="mesa-qr-preview" src={`/api/mesa/qr/${encodeURIComponent(receiveResult.code)}.svg`} alt={`QR de ${receiveResult.code}`} /><ReturnPrintControls code={receiveResult.code} /></section>}
             </div>
-          </section>
-        )}
-        <aside className="mesa-reference-column mesa-tools" aria-label="Herramientas de la estación">
+           </section>
+         <aside className="mesa-reference-column mesa-tools" aria-label="Herramientas de la estación">
           {showExamples && (
             <details className="panel">
               <summary className="mesa-tools-summary">Pruebas sin lector · {availableUnits.length} mangas disponibles</summary>
@@ -764,7 +884,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
                 ))}
               </div>
             </details>
-          )}
+           )}
           {pendingUnions.length > 0 && (
             <details className="panel">
               <summary className="mesa-tools-summary">Uniones pendientes ({pendingUnions.length})</summary>
@@ -776,18 +896,18 @@ export default function MesaReturnsPilot({ showExamples = false }) {
                     </div>
                     <button type="button" className="btn btn-secondary" disabled={controlsDisabled} onClick={() => {
                       setPendingUnion(candidate);
+                      window.localStorage.setItem(PENDING_KEY, JSON.stringify(candidate));
                       setReceivingPending(true);
-                      setReceiveInput('');
-                      setReceiveUnit(null);
-                      setNetWeight('');
-                      setMode('receive');
+                      clearReceiveContext();
+                      setMode('union');
+                      window.localStorage.setItem(MODE_KEY, 'union');
                       setNotice({ type: 'info', text: `Escanee el QR de ${candidate.code} para retomar la unión.` });
                     }}>Retomar</button>
                   </div>
                 ))}
               </div>
             </details>
-          )}
+        )}
           {receipts.length > 0 && (
             <details className="panel mesa-receipts">
               <summary className="mesa-tools-summary">Ingresos confirmados ({receipts.length})</summary>

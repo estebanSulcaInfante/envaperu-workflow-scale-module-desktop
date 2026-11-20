@@ -6,7 +6,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from flask import Response, abort, request, send_from_directory
+from flask import Response, abort, redirect, request, send_from_directory
 
 from mesa_pilot import create_app
 from mesa_c66 import ReaderAccess
@@ -49,6 +49,8 @@ def station_app(database, reader_address=None, scale_port=None, *, scale_unconfi
     @app.get("/inventario/mesa")
     @app.get("/inventario/revision")
     def station():
+        if central is not None and request.path == "/inventario/revision":
+            return redirect("https://envaperu-scm-dashboard.onrender.com/almacen/revision-faltantes")
         return send_from_directory(UI, "mesa.html", max_age=0)
 
     @app.get("/inventario/conectar")

@@ -48,3 +48,12 @@ def test_no_capture_or_spoofed_origin_never_reaches_central(tmp_path):
     assert client.post("/api/mesa/receive", json={"code":"A", "net_kg":"1", "request_id":"123"}).status_code == 409
     assert client.post("/api/mesa/unions", headers={"Origin":"https://otro.example"}, json={"codes":["A","B"]}).status_code == 403
     assert not central.calls
+
+
+def test_station_review_bookmark_opens_scm_without_device_credentials(tmp_path):
+    from run_mesa_pilot import station_app
+
+    app, _ = station_app(tmp_path / "mesa.sqlite", scale_unconfigured=True, central=Central())
+    response = app.test_client().get("/inventario/revision")
+    assert response.status_code == 302
+    assert response.location == "https://envaperu-scm-dashboard.onrender.com/almacen/revision-faltantes"

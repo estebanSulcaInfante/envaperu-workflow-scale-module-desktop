@@ -18,11 +18,8 @@ function MesaPilot() {
   return (
     <div className="mesa-pilot-route-shell">
       {!lanMode && <nav className="mesa-pilot-route-nav" aria-label="Rutas de la estación">
-        <a href="/">Retornos de Armado</a>
-        <a href="/inventario/c66">Inventario C66</a>
-        <a href="/inventario/mesa">Inventario mesa</a>
-        <a href="/inventario/revision">Revisión</a>
-        <a href="/inventario/conectar">Conectar C66</a>
+        <a href="/" aria-current={pathname === '/' ? 'page' : undefined}>Retornos de Armado</a>
+        <a href="/inventario/mesa" aria-current={view === 'mesa' ? 'page' : undefined}>Inventario de mesa</a>
       </nav>}
       {view ? <MesaInventory initialView={view} /> : <MesaReturnsPilot showExamples />}
     </div>

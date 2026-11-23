@@ -6,8 +6,16 @@ export const EMPTY_SCALE = Object.freeze({
   disponible: false,
   base: null,
   kg: null,
+  kg_en_vivo: null,
+  estable: null,
   mensaje: '',
 });
+
+export function hasLiveScaleReading(value) {
+  if (value == null || value === '') return false;
+  const number = Number(String(value).replace(',', '.'));
+  return Number.isFinite(number);
+}
 
 function normalizeScaleStatus(value) {
   const mode = value?.modo === 'manual' || value?.modo === 'accura' ? value.modo : null;
@@ -17,6 +25,10 @@ function normalizeScaleStatus(value) {
     disponible: value?.disponible === true,
     base,
     kg: value?.kg == null ? null : String(value.kg),
+    kg_en_vivo: value?.kg_en_vivo == null
+      ? (value?.kg == null ? null : String(value.kg))
+      : String(value.kg_en_vivo),
+    estable: typeof value?.estable === 'boolean' ? value.estable : null,
     mensaje: String(value?.mensaje || ''),
   };
 }
@@ -37,11 +49,13 @@ async function readJsonResponse(response, fallbackMessage) {
   return data;
 }
 
-export async function getMesaScaleStatus(fetcher = globalThis.fetch) {
+export async function getMesaScaleStatus(fetcher = globalThis.fetch, options = {}) {
   let response;
   try {
-    response = await fetcher(MESA_SCALE_STATUS_URL);
+    const request = options?.signal ? [MESA_SCALE_STATUS_URL, { signal: options.signal }] : [MESA_SCALE_STATUS_URL];
+    response = await fetcher(...request);
   } catch (cause) {
+    if (cause?.name === 'AbortError') throw cause;
     const error = new Error('No se pudo consultar la balanza de mesa.');
     error.kind = 'network';
     error.cause = cause;

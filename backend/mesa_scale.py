@@ -39,6 +39,7 @@ class AccuraReading:
     base: str
     kg: str | None
     unit: str
+    kg_en_vivo: str | None = None
 
 
 def parse_accura_line(raw: bytes | str) -> AccuraReading | None:
@@ -70,15 +71,33 @@ def parse_accura_line(raw: bytes | str) -> AccuraReading | None:
         return None
     if sign == "-":
         value = -value
-    if state != "ST" or unit != "kg" or value <= 0:
+    if unit != "kg":
         return AccuraReading(stable=state == "ST", base=base, kg=None, unit=unit)
-    # Preserve the display precision while normalizing harmless leading zeros.
-    kg = format(value, "f")
-    return AccuraReading(stable=True, base=base, kg=kg, unit="kg")
+    # Preserve display precision while normalizing harmless leading zeros.
+    raw_value = match.group("value")
+    decimals = len(raw_value.partition(".")[2]) if "." in raw_value else 0
+    display_value = abs(value)
+    magnitude = format(display_value, f".{decimals}f") if decimals else format(display_value, "f")
+    kg_en_vivo = f"-{magnitude}" if sign == "-" else magnitude
+    # ``kg`` remains the compatibility/capture candidate: only stable,
+    # non-negative frames can populate it, while the live visor sees ST/US.
+    kg = kg_en_vivo if state == "ST" and sign != "-" and value >= 0 else None
+    return AccuraReading(
+        stable=state == "ST", base=base, kg=kg, unit="kg", kg_en_vivo=kg_en_vivo,
+    )
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _is_positive_kg(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        return Decimal(value) > 0
+    except (InvalidOperation, ValueError):
+        return False
 
 
 class MesaScaleReader:
@@ -107,6 +126,8 @@ class MesaScaleReader:
         self._available = False
         self._base: str | None = None
         self._kg: str | None = None
+        self._kg_en_vivo: str | None = None
+        self._estable: bool | None = None
         self._message = (
             "Balanza Accura no conectada."
             if self._configured
@@ -129,6 +150,8 @@ class MesaScaleReader:
                 "disponible": self._available,
                 "base": self._base,
                 "kg": self._kg,
+                "kg_en_vivo": self._kg_en_vivo,
+                "estable": self._estable,
                 "mensaje": self._message,
             }
 
@@ -209,11 +232,14 @@ class MesaScaleReader:
         with self._lock:
             kg = self._kg
             base = self._base
+            estable = self._estable
             available = self._available
             captured_at = self._last_received_at
         if not available:
             raise ValueError("La balanza Accura no está disponible")
-        if not kg or not base or captured_at is None:
+        if not kg or not base or captured_at is None or estable is not True:
+            raise ValueError("Espere una lectura estable positiva en kg")
+        if not _is_positive_kg(kg):
             raise ValueError("Espere una lectura estable positiva en kg")
         token = uuid.uuid4().hex
         return {
@@ -264,23 +290,42 @@ class MesaScaleReader:
             self._clear("Trama Accura inválida; esperando una lectura completa.")
             log_peripheral_state("accura", "invalid_frame", component="mesa_scale", available=self.is_available)
             return
-        if not reading.stable:
-            self._clear("Lectura inestable; espere ST.")
-            log_peripheral_state("accura", "unstable", component="mesa_scale", available=self.is_available)
-            return
         if reading.unit == "Pcs":
+            if not reading.stable:
+                self._clear("Lectura inestable; espere ST.")
+                log_peripheral_state("accura", "unstable", component="mesa_scale", available=self.is_available)
+                return
             with self._lock:
                 self._base = reading.base
                 self._kg = None
+                self._kg_en_vivo = None
+                self._estable = None
                 self._message = "La balanza está en conteo (Pcs); no se captura como kg."
                 self._last_received_at = self._clock()
                 self._last_received_monotonic = time.monotonic()
             log_peripheral_state("accura", "count_mode", component="mesa_scale", available=True, unit="Pcs", stable=True)
             return
+        if not reading.stable:
+            with self._lock:
+                self._base = reading.base
+                self._kg = None
+                self._kg_en_vivo = reading.kg_en_vivo
+                self._estable = False
+                self._message = "Lectura inestable; espere ST."
+                self._last_received_at = self._clock()
+                self._last_received_monotonic = time.monotonic()
+            log_peripheral_state("accura", "unstable", component="mesa_scale", available=self.is_available)
+            return
         with self._lock:
             self._base = reading.base
             self._kg = reading.kg
-            self._message = "Lectura Accura estable en kg." if reading.kg else "Peso no positivo; no se puede capturar."
+            self._kg_en_vivo = reading.kg_en_vivo
+            self._estable = True
+            self._message = (
+                "Lectura Accura estable en kg."
+                if _is_positive_kg(reading.kg)
+                else "Peso no positivo; no se puede capturar."
+            )
             self._last_received_at = self._clock()
             self._last_received_monotonic = time.monotonic()
         log_peripheral_state("accura", "stable_kg", component="mesa_scale", available=True, unit="kg", stable=True)
@@ -289,6 +334,8 @@ class MesaScaleReader:
         with self._lock:
             self._base = None
             self._kg = None
+            self._kg_en_vivo = None
+            self._estable = None
             self._message = message
             self._last_received_at = None
             self._last_received_monotonic = None
@@ -401,6 +448,11 @@ def validate_capture(connection, token: str, code: str, *, expected_kg: str | No
         raise ScaleCaptureError("La captura de balanza tiene una caducidad inválida")
     if _now() >= expires:
         raise ScaleCaptureError("La captura de balanza caducó; repita la lectura")
+    try:
+        if Decimal(str(row["kg"])) <= 0:
+            raise ScaleCaptureError("La captura de balanza debe contener un peso positivo")
+    except (InvalidOperation, TypeError, ValueError):
+        raise ScaleCaptureError("La captura de balanza tiene un peso inválido")
     if expected_kg is not None and Decimal(str(row["kg"])) != Decimal(str(expected_kg)):
         raise ScaleCaptureError("El peso capturado cambió; repita la lectura")
     return dict(row)

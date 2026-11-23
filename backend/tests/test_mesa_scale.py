@@ -6,14 +6,114 @@ def test_parser_accepts_observed_stable_net_kg_and_pcs_without_promoting_pcs():
     reading = parse_accura_line(b"ST,NT,+   0.40kg\r\n")
     pcs = parse_accura_line(b"ST,NT,+     46Pcs\r\n")
 
-    assert reading == AccuraReading(stable=True, base="NT", kg="0.40", unit="kg")
-    assert pcs == AccuraReading(stable=True, base="NT", kg=None, unit="Pcs")
+    assert reading == AccuraReading(stable=True, base="NT", kg="0.40", unit="kg", kg_en_vivo="0.40")
+    assert pcs == AccuraReading(stable=True, base="NT", kg=None, unit="Pcs", kg_en_vivo=None)
 
 
 def test_parser_does_not_produce_capturable_weight_for_unstable_or_non_positive():
-    for line in (b"US,NT,+   0.40kg\r\n", b"ST,NT,+   0.00kg\r\n", b"ST,NT,-   0.40kg\r\n"):
-        reading = parse_accura_line(line)
-        assert reading is not None and reading.kg is None
+    unstable = parse_accura_line(b"US,NT,+   0.40kg\r\n")
+    zero = parse_accura_line(b"ST,NT,+   0.00kg\r\n")
+    negative = parse_accura_line(b"ST,NT,-   0.40kg\r\n")
+    negative_zero = parse_accura_line(b"ST,NT,-   0.00kg\r\n")
+
+    assert unstable is not None and unstable.kg is None
+    assert unstable.kg_en_vivo == "0.40"
+    assert zero is not None and zero.kg == "0.00"
+    assert zero.kg_en_vivo == "0.00"
+    assert negative is not None and negative.kg is None
+    assert negative.kg_en_vivo == "-0.40"
+    assert negative_zero is not None and negative_zero.kg is None
+    assert negative_zero.kg_en_vivo == "-0.00"
+
+
+def test_stable_zero_is_visible_but_cannot_be_snapshotted_or_posted(tmp_path):
+    from mesa_scale import MesaScaleReader
+
+    for frame, expected in (
+        (b"ST,NT,+   0.0kg\r\n", "0.0"),
+        (b"ST,NT,+   0.00kg\r\n", "0.00"),
+    ):
+        reader = MesaScaleReader("COM9", serial_factory=lambda **_: None)
+        reader.feed_for_test(frame)
+        app = create_app(tmp_path / f"mesa-{expected.replace('.', '')}.sqlite3", scale_reader=reader)
+        app.config.update(TESTING=True)
+
+        with app.test_client() as client:
+            status = client.get("/api/mesa/balanza").get_json()
+            assert status["kg"] == expected
+            assert status["kg_en_vivo"] == expected
+            assert status["estable"] is True
+            assert status["mensaje"] == "Peso no positivo; no se puede capturar."
+
+            import pytest
+
+            with pytest.raises(ValueError, match="positiva"):
+                reader.snapshot_for("OFDEMO-OT101-M003")
+            capture = client.post(
+                "/api/mesa/balanza/capturas",
+                json={"codigo": "OFDEMO-OT101-M003"},
+            )
+            assert capture.status_code == 409
+
+
+def test_live_us_reading_is_visible_then_st_becomes_capturable(tmp_path):
+    from mesa_scale import MesaScaleReader
+
+    reader = MesaScaleReader("COM9", serial_factory=lambda **_: None)
+    app = create_app(tmp_path / "mesa-live-transition.sqlite3", scale_reader=reader)
+    app.config.update(TESTING=True)
+
+    with app.test_client() as client:
+        reader.feed_for_test(b"US,NT,+   0.40kg\r\n")
+        unstable = client.get("/api/mesa/balanza").get_json()
+        assert unstable["kg"] is None
+        assert unstable["kg_en_vivo"] == "0.40"
+        assert unstable["estable"] is False
+        assert client.post("/api/mesa/balanza/capturas", json={"codigo": "OFDEMO-OT101-M003"}).status_code == 409
+
+        reader.feed_for_test(b"ST,NT,+   0.40kg\r\n")
+        stable = client.get("/api/mesa/balanza").get_json()
+        assert stable["kg"] == "0.40"
+        assert stable["kg_en_vivo"] == "0.40"
+        assert stable["estable"] is True
+        assert client.post("/api/mesa/balanza/capturas", json={"codigo": "OFDEMO-OT101-M003"}).status_code == 201
+
+
+def test_live_negative_is_visible_but_never_capturable(tmp_path):
+    from mesa_scale import MesaScaleReader
+
+    reader = MesaScaleReader("COM9", serial_factory=lambda **_: None)
+    app = create_app(tmp_path / "mesa-negative-live.sqlite3", scale_reader=reader)
+    app.config.update(TESTING=True)
+
+    with app.test_client() as client:
+        for frame, stable in ((b"US,NT,-   0.40kg\r\n", False), (b"ST,NT,-   0.40kg\r\n", True)):
+            reader.feed_for_test(frame)
+            status = client.get("/api/mesa/balanza").get_json()
+            assert status["kg"] is None
+            assert status["kg_en_vivo"] == "-0.40"
+            assert status["estable"] is stable
+            assert client.post("/api/mesa/balanza/capturas", json={"codigo": "OFDEMO-OT101-M003"}).status_code == 409
+
+
+def test_live_unstable_reading_expires_and_clears_new_fields(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from mesa_scale import MesaScaleReader
+
+    clock_seconds = 10.0
+    monkeypatch.setattr('mesa_scale.time', SimpleNamespace(monotonic=lambda: clock_seconds))
+    reader = MesaScaleReader("COM9", serial_factory=lambda **_: None, freshness_seconds=3)
+    app = create_app(tmp_path / "mesa-live-expiry.sqlite3", scale_reader=reader)
+    app.config.update(TESTING=True)
+
+    with app.test_client() as client:
+        reader.feed_for_test(b"US,NT,+   0.40kg\r\n")
+        assert client.get("/api/mesa/balanza").get_json()["kg_en_vivo"] == "0.40"
+        clock_seconds += 4
+        status = client.get("/api/mesa/balanza").get_json()
+        assert status["kg"] is None
+        assert status["kg_en_vivo"] is None
+        assert status["estable"] is None
 
 
 def test_reader_waits_for_crlf_and_clears_after_incomplete_or_bad_line():
@@ -45,6 +145,12 @@ def test_kg_then_pcs_us_or_garbage_blocks_snapshot_without_reviving_old_weight(t
             reader.feed_for_test(frame)
             status = client.get("/api/mesa/balanza").get_json()
             assert status["kg"] is None
+            if frame.startswith(b"US"):
+                assert status["kg_en_vivo"] == "0.40"
+                assert status["estable"] is False
+            else:
+                assert status["kg_en_vivo"] is None
+                assert status["estable"] is None
             assert client.post("/api/mesa/balanza/capturas", json={"codigo": "OFDEMO-OT101-M003"}).status_code == 409
 
 

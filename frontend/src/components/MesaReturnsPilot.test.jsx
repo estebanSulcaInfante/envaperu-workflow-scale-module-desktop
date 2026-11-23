@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import MesaReturnsPilot from './MesaReturnsPilot';
 
@@ -47,6 +47,290 @@ describe('MesaReturnsPilot', () => {
     expect(screen.getByRole('button', { name: 'Pesar y recibir' }).disabled).toBe(false);
   });
 
+  it('muestra la lectura viva Accura al abrir ambas tareas sin exigir un QR y no habilita cero', async () => {
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '0.0', mensaje: 'ST' });
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('0,0');
+    expect(screen.getByText('Lectura viva de Accura')).toBeTruthy();
+    expect(screen.getByText('Peso NETO debe ser mayor que 0 kg para recibir.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Leer balanza' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pesar y recibir' }).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Unión de mangas' }));
+    expect(screen.getByText('0,0')).toBeTruthy();
+    expect(fetcher.mock.calls.filter(([url]) => url === '/api/mesa/state')).toHaveLength(1);
+  });
+
+  it('muestra nombre y círculo de color válido en la manga y en los orígenes de Unión', async () => {
+    const coloredUnits = [
+      { ...units[0], color: 'VERDE SÓLIDO', color_hex: '#00FF00' },
+      { ...units[1], color: 'BLANCO' },
+    ];
+    stubFetch(() => answer({ units: coloredUnits, receipts: [] }));
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza manual');
+    scanCode('Escanear manga a recibir', coloredUnits[0].code);
+    const identity = await screen.findByRole('region', { name: 'Manga escaneada' });
+    expect(identity.textContent).toContain('VERDE SÓLIDO');
+    expect(identity.querySelector('.mesa-color-dot')).toBeTruthy();
+    expect(identity.querySelector('.mesa-color-dot').getAttribute('aria-hidden')).toBe('true');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Unión de mangas' }));
+    scanCode('Escanear manga de origen', coloredUnits[0].code);
+    expect(screen.getByText('VERDE SÓLIDO')).toBeTruthy();
+    expect(screen.queryAllByText('BLANCO')).toHaveLength(0);
+  });
+
+  it('marca desconexión y recupera la lectura viva sin reiniciar el inventario', async () => {
+    let scaleCalls = 0;
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') {
+        scaleCalls += 1;
+        if (scaleCalls === 1) return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '99.000', kg_en_vivo: '0.0', estable: true, mensaje: 'ST' });
+        if (scaleCalls === 2) return Promise.reject(new TypeError('fetch failed'));
+        return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '99.000', kg_en_vivo: '1.250', estable: true, mensaje: 'ST' });
+      }
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('0,0');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1600)); });
+    await screen.findByText(/No se pudo consultar la balanza de mesa/);
+    expect(screen.getByText('Balanza Accura desconectada')).toBeTruthy();
+    expect(document.querySelector('.scm-live-weight').className).toContain('disconnected');
+    expect(fetcher.mock.calls.filter(([url]) => url === '/api/mesa/state')).toHaveLength(1);
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1600)); });
+    await screen.findByText('1,25');
+    expect(screen.queryByText(/No se pudo consultar la balanza de mesa/)).toBeNull();
+  }, 10000);
+
+  it('distingue US de ST y conserva la captura aunque la lectura viva cambie', async () => {
+    let scaleCalls = 0;
+    let completeReceive;
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') {
+        scaleCalls += 1;
+        if (scaleCalls === 1) return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '2.000', kg_en_vivo: '1.100', estable: false, mensaje: 'US' });
+        if (scaleCalls === 2) return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '2.000', kg_en_vivo: '2.000', estable: true, mensaje: 'ST' });
+        return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '2.000', kg_en_vivo: '9.000', estable: true, mensaje: 'ST' });
+      }
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/balanza/capturas') return answer({ kg: '2.000', scale_token: 'capture-frozen' });
+      if (url === '/api/mesa/receive') return new Promise((resolve) => {
+        completeReceive = () => resolve(answer({ code: units[0].code, net_kg: '2.000', created_at: '2026-11-23T15:00:00Z' }));
+      });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('1,1');
+    await screen.findByText(/Estabilizando/);
+    await screen.findByText('2,0');
+    scanCode('Escanear manga a recibir', units[0].code);
+    expect(screen.queryByLabelText('Peso NETO capturado')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/mesa/balanza/capturas')).toBe(true));
+    await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url === '/api/mesa/receive')).toBe(true));
+    expect(screen.queryByLabelText('Peso NETO capturado')).toBeNull();
+
+    const receive = fetcher.mock.calls.find(([url]) => url === '/api/mesa/receive');
+    expect(JSON.parse(receive[1].body)).toMatchObject({ net_kg: '2.000', scale_token: 'capture-frozen' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    await screen.findByText('9,0');
+    expect(screen.queryByLabelText('Peso NETO capturado')).toBeNull();
+    completeReceive();
+    await screen.findByText(/2.000 kg netos registrados/);
+  }, 10000);
+
+  it('descarta una captura cuyo peso difiere del visor y permite una medición nueva', async () => {
+    let scaleCalls = 0;
+    let captureCalls = 0;
+    let receiveCalls = 0;
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') {
+        scaleCalls += 1;
+        return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '2.000', kg_en_vivo: scaleCalls === 1 ? '1.000' : '2.000', estable: true, mensaje: 'ST' });
+      }
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/balanza/capturas') {
+        captureCalls += 1;
+        return answer({ kg: '2.000', scale_token: `mismatch-${captureCalls}` });
+      }
+      if (url === '/api/mesa/receive') {
+        receiveCalls += 1;
+        return answer({ code: units[0].code, net_kg: '2.000', created_at: '2026-11-23T15:03:00Z' });
+      }
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('1,0');
+    scanCode('Escanear manga a recibir', units[0].code);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/La lectura cambió durante la captura/);
+    expect(receiveCalls).toBe(0);
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    await screen.findByText('2,0');
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/2.000 kg netos registrados/);
+    expect(captureCalls).toBe(2);
+    expect(receiveCalls).toBe(1);
+  }, 10000);
+
+  it('trata la pérdida de respuesta de capturas como una nueva medición explícita', async () => {
+    let captureCalls = 0;
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '3.125', kg_en_vivo: '3.125', estable: true, mensaje: 'ST' });
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/balanza/capturas') {
+        captureCalls += 1;
+        return captureCalls === 1
+          ? Promise.reject(new TypeError('response lost'))
+          : answer({ kg: '3.125', scale_token: 'fresh-capture' });
+      }
+      if (url === '/api/mesa/receive') return answer({ code: units[0].code, net_kg: '3.125', created_at: '2026-11-23T15:05:00Z' });
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza Accura lista');
+    scanCode('Escanear manga a recibir', units[0].code);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/No se pudo capturar la lectura de la balanza/);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/3.125 kg netos registrados/);
+
+    const captures = fetcher.mock.calls.filter(([url]) => url === '/api/mesa/balanza/capturas');
+    expect(captures).toHaveLength(2);
+    expect(JSON.parse(captures[0][1].body)).toEqual({ codigo: units[0].code });
+    expect(JSON.parse(captures[1][1].body)).toEqual({ codigo: units[0].code });
+    expect(captures[0][1].headers['Idempotency-Key']).not.toBe(captures[1][1].headers['Idempotency-Key']);
+  }, 10000);
+
+  it('no recupera un comprobante histórico y liga la nueva pesada al ciclo actual', async () => {
+    let stateCalls = 0;
+    let captureCalls = 0;
+    let receiveCalls = 0;
+    const cycleOne = { ...units[0], cycle_id: 'ciclo-1' };
+    const cycleTwo = { ...units[0], cycle_id: 'ciclo-2' };
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '2.000', kg_en_vivo: '2.000', estable: true, mensaje: 'ST' });
+      if (url === '/api/mesa/state') {
+        stateCalls += 1;
+        return answer({
+          units: [stateCalls > 1 ? { ...cycleTwo, status: stateCalls > 2 ? 'received' : 'available' } : cycleOne],
+          receipts: stateCalls === 2 ? [{ code: cycleOne.code, cycle_id: 'ciclo-1', request_id: 'old-request', net_kg: '2.000', created_at: '2026-11-23T15:03:00Z' }] : [],
+        });
+      }
+      if (url === '/api/mesa/balanza/capturas') {
+        captureCalls += 1;
+        return answer({ kg: '2.000', scale_token: `cycle-${captureCalls}` });
+      }
+      if (url === '/api/mesa/receive') {
+        receiveCalls += 1;
+        return receiveCalls === 1
+          ? answer({ error: 'La unidad cambió de ciclo' }, 409)
+          : answer({ code: cycleTwo.code, net_kg: '2.000', created_at: '2026-11-23T15:04:00Z' });
+      }
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza Accura lista');
+    scanCode('Escanear manga a recibir', cycleOne.code);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/otro ciclo/);
+    expect(screen.queryByRole('button', { name: 'Ingreso ya registrado' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/2.000 kg netos registrados/);
+    expect(captureCalls).toBe(2);
+    expect(receiveCalls).toBe(2);
+    const receives = fetcher.mock.calls.filter(([url]) => url === '/api/mesa/receive');
+    expect(JSON.parse(receives[0][1].body).request_id).not.toBe(JSON.parse(receives[1][1].body).request_id);
+  }, 10000);
+
+  it('reintenta un receive ambiguo con la misma captura, kg y request_id sin recapturar', async () => {
+    let receiveCalls = 0;
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '3.125', kg_en_vivo: '3.125', estable: true, mensaje: 'ST' });
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/balanza/capturas') return answer({ kg: '3.125', scale_token: 'capture-retry' });
+      if (url === '/api/mesa/receive') {
+        receiveCalls += 1;
+        return receiveCalls === 1
+          ? Promise.reject(new TypeError('response lost after write'))
+          : answer({ code: units[0].code, net_kg: '3.125', created_at: '2026-11-23T15:01:00Z' });
+      }
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza Accura lista');
+    scanCode('Escanear manga a recibir', units[0].code);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/No pudimos verificar el ingreso/);
+    await screen.findByText(/Captura conservada para/);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/3.125 kg netos registrados/);
+
+    const captures = fetcher.mock.calls.filter(([url]) => url === '/api/mesa/balanza/capturas');
+    const receives = fetcher.mock.calls.filter(([url]) => url === '/api/mesa/receive');
+    expect(captures).toHaveLength(1);
+    expect(JSON.parse(receives[0][1].body)).toMatchObject({ net_kg: '3.125', scale_token: 'capture-retry' });
+    expect(JSON.parse(receives[1][1].body)).toEqual(JSON.parse(receives[0][1].body));
+  });
+
+  it('descarta un token de captura caducado y permite una captura nueva', async () => {
+    let captureCalls = 0;
+    let receiveCalls = 0;
+    const fetcher = vi.fn((url) => {
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '3.125', kg_en_vivo: '3.125', estable: true, mensaje: 'ST' });
+      if (url === '/api/mesa/state') return answer({ units, receipts: [] });
+      if (url === '/api/mesa/balanza/capturas') {
+        captureCalls += 1;
+        return answer({ kg: '3.125', scale_token: captureCalls === 1 ? 'expired-token' : 'fresh-token' });
+      }
+      if (url === '/api/mesa/receive') {
+        receiveCalls += 1;
+        return receiveCalls === 1
+          ? answer({ code: 'scale_token_expired', error: 'scale token expired' }, 422)
+          : answer({ code: units[0].code, net_kg: '3.125', created_at: '2026-11-23T15:02:00Z' });
+      }
+      return answer({ error: 'ruta no esperada' }, 404);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    render(<MesaReturnsPilot />);
+    await screen.findByText('Balanza Accura lista');
+    scanCode('Escanear manga a recibir', units[0].code);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/La captura Accura caducó/);
+    fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
+    await screen.findByText(/3.125 kg netos registrados/);
+
+    const captures = fetcher.mock.calls.filter(([url]) => url === '/api/mesa/balanza/capturas');
+    expect(captures).toHaveLength(2);
+    expect(JSON.parse(captures[0][1].body)).toEqual({ codigo: units[0].code });
+    expect(JSON.parse(captures[1][1].body)).toEqual({ codigo: units[0].code });
+  });
+
   it.each(['pending','received'])('identifica la unión %s en ambas pestañas al leer un origen', async status => {
     const parent = { ...units[0], code: 'MESA-001', status, origins: [units[0].code] };
     stubFetch(() => answer({ units: [{ ...units[0], status: status === 'pending' ? 'reserved' : 'received' },parent], receipts: [] }));
@@ -64,13 +348,15 @@ describe('MesaReturnsPilot', () => {
 
   it('recupera el comprobante del ingreso concurrente con sus kilos confirmados', async () => {
     let finished = false;
+    let requestId = null;
     const receipt = { code: units[0].code, net_kg: '2.420', created_at: '2026-11-18T12:01:00Z' };
-    stubFetch(url => {
+    stubFetch((url, options) => {
       if (url.endsWith('/receive')) {
         finished = true;
+        requestId = JSON.parse(options.body).request_id;
         return answer({error:'La unidad no está disponible para recepción'},409);
       }
-      return answer({ units: [{...units[0],status: finished ? 'received' : 'available'}], receipts:finished ? [receipt] : [] });
+      return answer({ units: [{...units[0],status: finished ? 'received' : 'available'}], receipts:finished ? [{ ...receipt, request_id: requestId }] : [] });
     });
     render(<MesaReturnsPilot />);
     await screen.findByText('Balanza manual');
@@ -287,7 +573,7 @@ describe('MesaReturnsPilot', () => {
   it('captura Accura dentro de Unión y liga el token al QR UNION', async () => {
     const fetcher = vi.fn((url) => {
       if (url === '/api/mesa/state') return answer({ units, receipts: [] });
-      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: null, mensaje: 'ST' });
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '5.125', estable: true, mensaje: 'ST' });
       if (url === '/api/mesa/unions') return answer({ code: 'UNION-001' });
       if (url === '/api/mesa/balanza/capturas') return answer({ kg: '5.125', scale_token: 'scale-union-1' });
       if (url === '/api/mesa/receive') return answer({ code: 'UNION-001', net_kg: '5.125', created_at: '2026-11-18T12:00:00Z' });
@@ -296,7 +582,7 @@ describe('MesaReturnsPilot', () => {
     vi.stubGlobal('fetch', fetcher);
 
     render(<MesaReturnsPilot />);
-    await screen.findByText('Balanza Accura conectada · esperando lectura');
+    await screen.findByText('Balanza Accura lista');
     fireEvent.click(screen.getByRole('tab', { name: 'Unión de mangas' }));
     const originScan = screen.getByLabelText('Escanear manga de origen');
     for (const code of [units[0].code, units[1].code]) {
@@ -308,8 +594,6 @@ describe('MesaReturnsPilot', () => {
     const newQr = screen.getByLabelText('Escanear QR nuevo');
     fireEvent.change(newQr, { target: { value: 'UNION-001' } });
     fireEvent.submit(newQr.closest('form'));
-    fireEvent.click(screen.getByRole('button', { name: 'Leer balanza' }));
-    await screen.findByText(/Lectura Accura capturada para UNION-001/);
     fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
     await screen.findByText(/5.125 kg netos registrados/i);
 
@@ -486,17 +770,15 @@ describe('MesaReturnsPilot', () => {
   it('captura Accura NT bajo demanda y conserva scale_token en el retorno', async () => {
     const fetcher = vi.fn((url) => {
       if (url === '/api/mesa/state') return answer({ units, receipts: [] });
-      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: null, mensaje: 'ST' });
+      if (url === '/api/mesa/balanza') return answer({ modo: 'accura', disponible: true, base: 'NT', kg: '3.125', estable: true, mensaje: 'ST' });
       if (url === '/api/mesa/balanza/capturas') return answer({ kg: '3.125', scale_token: 'scale-1' });
       if (url === '/api/mesa/receive') return answer({ code: units[0].code, net_kg: '3.125', created_at: '2026-11-19T01:00:00Z' });
       return answer({ error: 'ruta no esperada' }, 404);
     });
     vi.stubGlobal('fetch', fetcher);
     render(<MesaReturnsPilot />);
-    await screen.findByText('Balanza Accura conectada · esperando lectura');
+    await screen.findByText('Balanza Accura lista');
     scanCode('Escanear manga a recibir', units[0].code);
-    fireEvent.click(screen.getByRole('button', { name: 'Leer balanza' }));
-    await screen.findByText(/Lectura Accura capturada/);
     fireEvent.click(screen.getByRole('button', { name: 'Pesar y recibir' }));
     await screen.findByText(/3.125 kg netos registrados/);
     const receive = fetcher.mock.calls.find(([url]) => url === '/api/mesa/receive');

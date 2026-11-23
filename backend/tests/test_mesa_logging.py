@@ -114,6 +114,8 @@ def test_unconfigured_accura_is_explicit_and_does_not_open_or_start_thread(tmp_p
         "disponible": False,
         "base": None,
         "kg": None,
+        "kg_en_vivo": None,
+        "estable": None,
         "mensaje": "Configure el puerto COM de la Accura cuando conecte la balanza.",
     }
 

@@ -3,7 +3,9 @@ import './MesaReturnsPilot.css';
 import { MesaNotices, useMesaNotices } from './MesaNotices';
 import {
   captureMesaScale,
+  EMPTY_SCALE,
   getMesaScaleStatus,
+  hasLiveScaleReading,
   scaleErrorMessage,
 } from '../services/mesaScale';
 
@@ -55,6 +57,9 @@ const readJson = (key, fallback) => {
 };
 
 const normalizeCode = (value) => String(value || '').trim().toUpperCase();
+const requestSlotFor = (unit) => unit?.cycle_id ? `${normalizeCode(unit.code)}:${unit.cycle_id}` : normalizeCode(unit?.code);
+const scaleCaptureSlotFor = (unit, requestId) => `${requestSlotFor(unit)}:${requestId || ''}`;
+const validColorHex = (value) => /^#[0-9A-F]{6}$/i.test(String(value || '').trim()) ? String(value).trim() : null;
 
 const PREPESAJE_INVALID = 'QR PREPESAJE inválido. Verifique que tenga solo v:1 y label_id, y vuelva a escanear.';
 const PREPESAJE_UNKNOWN = 'Etiqueta PREPESAJE desconocida o no vigente. Verifique el QR y vuelva a escanear.';
@@ -143,10 +148,51 @@ function mesaOperationError(error, operation) {
   return 'No se pudo completar la operación. Vuelva a intentarlo.';
 }
 
+function isAmbiguousReceiveFailure(error) {
+  if (error?.kind === 'network') return true;
+  const status = Number(error?.status);
+  return status >= 500 || [408, 425, 429].includes(status);
+}
+
+function isExpiredScaleToken(error) {
+  const payload = error?.payload || error?.data || {};
+  const code = String(payload.code || payload.kind || '').toLowerCase();
+  const text = `${error?.message || ''} ${JSON.stringify(payload)}`.toLowerCase();
+  return ['scale_token_expired', 'capture_token_expired', 'token_expired'].includes(code)
+    || /token.{0,24}(expir|caduc)|(?:expir|caduc).{0,24}token/.test(text);
+}
+
+function cycleMatches(unit, target) {
+  if (!target?.cycle_id) return true;
+  return String(unit?.cycle_id || '') === String(target.cycle_id);
+}
+
+function receiveAttemptMatches(unit, receipt, target, requestId) {
+  if (!unit || !receipt || !cycleMatches(unit, target)) return false;
+  if (target?.cycle_id) {
+    const receiptCycle = receipt.cycle_id ?? receipt.receive_cycle_id ?? receipt.unit_cycle_id;
+    return receiptCycle != null && String(receiptCycle) === String(target.cycle_id);
+  }
+  const receiptRequest = receipt.request_id ?? receipt.receive_request_id ?? receipt.idempotency_key;
+  const unitRequest = unit.request_id ?? unit.receive_request_id ?? unit.idempotency_key;
+  return Boolean(requestId && [receiptRequest, unitRequest].some(value => value != null && String(value) === String(requestId)));
+}
+
 function otContext(unit) {
   const date = unit?.ot_date?.split('-').reverse().join('/') || 'Fecha sin registrar';
   const shift = { DIA: 'Día', NOCHE: 'Noche' }[unit?.ot_shift] || 'Turno sin registrar';
   return `${date} · ${shift}`;
+}
+
+function ColorSummary({ unit }) {
+  const name = unit?.color || 'Sin color informado';
+  const hex = validColorHex(unit?.color_hex);
+  return (
+    <span className="mesa-color-summary">
+      {hex && <span className="mesa-color-dot" style={{ backgroundColor: hex }} aria-hidden="true" />}
+      <span>{name}</span>
+    </span>
+  );
 }
 
 function UnitIdentity({ unit, label = 'Identidad seleccionada' }) {
@@ -159,7 +205,7 @@ function UnitIdentity({ unit, label = 'Identidad seleccionada' }) {
       </div>
       <dl className="scm-context-grid">
         <div><dt>Pieza</dt><dd>{unit.piece || 'Sin pieza informada'}</dd></div>
-        <div><dt>Color</dt><dd>{unit.color || 'Sin color informado'}</dd></div>
+        <div><dt>Color</dt><dd><ColorSummary unit={unit} /></dd></div>
         {!unit.originDetails?.length && <div><dt>Fecha y turno de OT</dt><dd>{otContext(unit)}</dd></div>}
       </dl>
       {unit.originDetails?.length > 0 && <ul className="mesa-identity-origins" aria-label="Fechas y turnos de origen">{unit.originDetails.map((origin) => <li key={origin.code}><strong>{origin.code}</strong><span>{otContext(origin)}</span></li>)}</ul>}
@@ -255,6 +301,14 @@ function WeightInput({ value, onChange, disabled, manual = true }) {
   );
 }
 
+function formatLiveScaleKg(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+  const [whole, decimals] = numeric.toFixed(3).split('.');
+  const trimmed = decimals.replace(/0+$/, '');
+  return `${whole},${trimmed || '0'}`;
+}
+
 export default function MesaReturnsPilot({ showExamples = false }) {
   const [mode, setMode] = useState(readMode);
   const [units, setUnits] = useState([]);
@@ -273,9 +327,10 @@ export default function MesaReturnsPilot({ showExamples = false }) {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [scaleStatus, setScaleStatus] = useState({ modo: null, disponible: false, base: null, kg: null, mensaje: '' });
+  const [scaleStatus, setScaleStatus] = useState(EMPTY_SCALE);
   const [scaleStatusWarning, setScaleStatusWarning] = useState('');
-  const [scaleBusy, setScaleBusy] = useState(false);
+  const [scaleConnection, setScaleConnection] = useState('unknown');
+  const scaleRequestRef = useRef(null);
   const scaleCaptures = useRef(new Map());
   const { notices, notify: setNotice, dismiss } = useMesaNotices();
   const unionStepNotice = useRef(null);
@@ -285,15 +340,29 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     unionStepNotice.current = setNotice(notice);
   };
 
-  const refreshScaleStatus = async () => {
+  const refreshScaleStatus = async (options = {}) => {
+    if (scaleRequestRef.current) return scaleRequestRef.current;
+    const request = getMesaScaleStatus(globalThis.fetch, options)
+      .then((status) => {
+        setScaleStatus(status);
+        setScaleConnection(status.modo === 'manual' ? 'manual' : status.modo === 'accura' && status.disponible ? 'connected' : 'disconnected');
+        setScaleStatusWarning(status.modo ? '' : 'La estación no entregó un modo de balanza válido. Seleccione modo manual o conecte Accura y reintente.');
+        return status;
+      })
+      .catch((error) => {
+        if (error?.name === 'AbortError') throw error;
+        setScaleStatus(EMPTY_SCALE);
+        setScaleConnection('disconnected');
+        setScaleStatusWarning(scaleErrorMessage(error, 'No se pudo consultar la configuración de la balanza.'));
+        throw error;
+      })
+      .finally(() => {
+        scaleRequestRef.current = null;
+      });
+    scaleRequestRef.current = request;
     try {
-      const status = await getMesaScaleStatus();
-      setScaleStatus(status);
-      setScaleStatusWarning(status.modo ? '' : 'La estación no entregó un modo de balanza válido. Seleccione modo manual o conecte Accura y reintente.');
-      return status;
+      return await request;
     } catch (error) {
-      setScaleStatus({ modo: null, disponible: false, base: null, kg: null, mensaje: '' });
-      setScaleStatusWarning(scaleErrorMessage(error, 'No se pudo consultar la configuración de la balanza.'));
       throw error;
     }
   };
@@ -327,7 +396,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       });
       const firstLot = recovered.lot || origins[0]?.lot || null;
       const sameLot = origins.every((origin) => (origin.lot || null) === firstLot);
-      setPendingUnion({ code: recovered.code, piece: recovered.piece || origins[0]?.piece, color: recovered.color || origins[0]?.color, lot: sameLot ? firstLot : null, origins });
+      setPendingUnion({ code: recovered.code, piece: recovered.piece || origins[0]?.piece, color: recovered.color || origins[0]?.color, color_hex: recovered.color_hex || origins[0]?.color_hex, lot: sameLot ? firstLot : null, origins });
       setReceivingPending(true);
     } else {
       setPendingUnion(null);
@@ -338,11 +407,6 @@ export default function MesaReturnsPilot({ showExamples = false }) {
 
   useEffect(() => {
     let active = true;
-    refreshScaleStatus()
-      .then((status) => {
-        if (!active) return;
-      })
-      .catch(() => {});
     refreshState()
       .then(({ units: nextUnits }) => {
         if (!active) return;
@@ -357,6 +421,57 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let timer = null;
+    let controller = null;
+    let running = false;
+    const liveSampleEveryMs = 300;
+    const retryEveryMs = 1500;
+
+    const schedule = (delay) => {
+      if (active) timer = window.setTimeout(sample, delay);
+    };
+    const sample = async () => {
+      if (!active || running) return;
+      if (document.visibilityState === 'hidden') return;
+      running = true;
+      controller = new AbortController();
+      try {
+        const status = await refreshScaleStatus({ signal: controller.signal });
+        schedule(status.modo === 'accura' && status.disponible ? liveSampleEveryMs : retryEveryMs);
+      } catch (error) {
+        if (error?.name !== 'AbortError') {
+          // The warning state is rendered by refreshScaleStatus; keep the loop alive for reconnection.
+        }
+        schedule(retryEveryMs);
+      } finally {
+        controller = null;
+        running = false;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (!active || running) return;
+      if (document.visibilityState === 'hidden') {
+        if (timer) window.clearTimeout(timer);
+        timer = null;
+        return;
+      }
+      if (timer) window.clearTimeout(timer);
+      timer = null;
+      sample();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    sample();
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+      if (controller) controller.abort();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -385,13 +500,25 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     [selectedCodes, units],
   );
   const currentWeight = weightValue(netWeight);
-  const controlsDisabled = loading || loadError || busy || scaleBusy;
+  const controlsDisabled = loading || loadError || busy;
   const alreadyReceived = receiveUnit && (receiveUnit.status === 'received' || receiveResult);
   const accuraMode = scaleStatus.modo === 'accura';
   const manualMode = scaleStatus.modo === 'manual';
-  const scaleHasWeight = Boolean(weightValue(scaleStatus.kg));
-  const returnScaleReady = accuraMode && scaleStatus.disponible && scaleStatus.base === 'NT' && scaleHasWeight;
-  const returnScaleLabel = !accuraMode
+  const liveScaleKg = scaleStatus.kg_en_vivo ?? scaleStatus.kg;
+  const scaleHasLiveReading = accuraMode && scaleStatus.disponible && hasLiveScaleReading(liveScaleKg);
+  const scaleHasPositiveLiveWeight = scaleHasLiveReading && Boolean(weightValue(liveScaleKg));
+  const scaleIsStable = scaleStatus.estable !== false;
+  const returnScaleReady = accuraMode && scaleStatus.disponible && scaleStatus.base === 'NT' && scaleHasPositiveLiveWeight && scaleIsStable;
+  const existingScaleCapture = receiveUnit ? scaleCaptures.current.get(scaleCaptureSlotFor(receiveUnit, receiveRequestId)) : null;
+  const accuraReceiveReady = accuraMode && (
+    Boolean(existingScaleCapture?.retryable && weightValue(existingScaleCapture.kg))
+    || (scaleStatus.disponible && scaleStatus.base === 'NT' && scaleHasPositiveLiveWeight && scaleIsStable)
+  );
+  const receiveReady = manualMode ? Boolean(currentWeight) : accuraReceiveReady;
+  const scaleVisualState = manualMode ? 'manual' : scaleConnection === 'connected' ? 'connected' : 'disconnected';
+  const returnScaleLabel = scaleConnection === 'disconnected'
+    ? 'Balanza Accura desconectada'
+    : !accuraMode
     ? (manualMode ? 'Balanza manual' : 'Balanza sin configurar')
     : !scaleStatus.disponible
       ? 'Balanza Accura no disponible'
@@ -416,13 +543,14 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     };
   };
   const findUnit = (value) => resolveUnit(value).unit;
-  const requestSlot = (unit) => unit.cycle_id ? `${normalizeCode(unit.code)}:${unit.cycle_id}` : normalizeCode(unit.code);
+  const requestSlot = requestSlotFor;
   const availableUnits = units.filter((unit) => unit.status === 'available');
   const pendingUnions = useMemo(() => {
     const fromState = units.filter((unit) => unit.status === 'pending').map((unit) => ({
       code: unit.code,
       piece: unit.piece,
       color: unit.color,
+      color_hex: unit.color_hex,
       lot: unit.lot || null,
       origins: (Array.isArray(unit.origins) ? unit.origins : []).map((code) => findUnit(code) || { code }),
     }));
@@ -496,7 +624,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       if (!code) throw new Error('No se recibió el código de la unión. Reintente con las mismas mangas.');
       const firstLot = selectedUnits[0]?.lot || null;
       const sameLot = selectedUnits.every((unit) => (unit.lot || null) === firstLot);
-      const nextPending = { code, piece: selectedUnits[0]?.piece, color: selectedUnits[0]?.color, lot: sameLot ? firstLot : null, origins: selectedUnits };
+      const nextPending = { code, piece: selectedUnits[0]?.piece, color: selectedUnits[0]?.color, color_hex: selectedUnits[0]?.color_hex, lot: sameLot ? firstLot : null, origins: selectedUnits };
       window.localStorage.setItem(PENDING_KEY, JSON.stringify(nextPending));
       const knownOrigins = readJson(ORIGINS_KEY, {});
       knownOrigins[code] = selectedUnits;
@@ -561,13 +689,13 @@ export default function MesaReturnsPilot({ showExamples = false }) {
         return;
       }
       setPendingUnion(candidate);
-      setReceiveUnit({ code: candidate.code, piece: candidate.piece, color: candidate.color, lot: candidate.lot, origins: candidate.origins.map((origin) => origin.code), originDetails: candidate.origins });
+      setReceiveUnit({ code: candidate.code, piece: candidate.piece, color: candidate.color, color_hex: candidate.color_hex, lot: candidate.lot, origins: candidate.origins.map((origin) => origin.code), originDetails: candidate.origins });
       const requestIds = readJson(REQUEST_KEY, {});
       const requestId = requestIds[normalizeCode(candidate.code)] || getRequestId();
       setReceiveRequestId(requestId);
       requestIds[normalizeCode(candidate.code)] = requestId;
       window.localStorage.setItem(REQUEST_KEY, JSON.stringify(requestIds));
-      notifyStep({ type: 'info', text: accuraMode ? 'QR nuevo confirmado. Pulse Leer balanza para obtener el NETO.' : 'QR nuevo confirmado. Ingrese la lectura NETO manual.' });
+      notifyStep({ type: 'info', text: accuraMode ? 'QR nuevo confirmado. Espere una lectura estable y pulse Pesar y recibir.' : 'QR nuevo confirmado. Ingrese la lectura NETO manual.' });
       return;
     }
     const unit = findUnit(code);
@@ -603,7 +731,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     window.localStorage.setItem(REQUEST_KEY, JSON.stringify(requestIds));
     setReceiveResult(null);
     setNetWeight('');
-    setNotice({ type: 'info', text: accuraMode ? 'Identidad resuelta. Pulse Leer balanza para obtener el NETO.' : 'Identidad resuelta. Ingrese el peso NETO manual para confirmar.' });
+    setNotice({ type: 'info', text: accuraMode ? 'Identidad resuelta. Espere una lectura estable y pulse Pesar y recibir.' : 'Identidad resuelta. Ingrese el peso NETO manual para confirmar.' });
   };
 
   const scanReceive = (event) => {
@@ -611,61 +739,64 @@ export default function MesaReturnsPilot({ showExamples = false }) {
     scanReceiveCode(receiveInput);
   };
 
-  const captureReturnWeight = async () => {
-    if (!receiveUnit || scaleBusy || alreadyReceived) return;
-    setScaleBusy(true);
-    const code = normalizeCode(receiveUnit.code);
-    const previous = scaleCaptures.current.get(code) || {};
-    const operationId = previous.operationId || getRequestId();
-    try {
-      const latest = await refreshScaleStatus();
-      if (latest.modo !== 'accura' || !latest.disponible) {
-        setNotice({ type: 'error', text: latest.mensaje || 'Accura no está disponible. Reintente cuando la estación indique ST.' });
-        return;
-      }
-      setScaleStatus(latest);
-      if (latest.base !== 'NT') {
-        setNotice({ type: 'error', text: 'La balanza Accura no está configurada en base NT para retornos.' });
-        return;
-      }
-      const value = await captureMesaScale({
-        codigo: code,
-        token: previous.token,
-        operationId,
-      });
-      if (!weightValue(value.kg)) throw new Error('La balanza no devolvió un NET válido.');
-      scaleCaptures.current.set(code, { operationId, token: value.token });
-      setNetWeight(value.kg);
-      setScaleStatus((current) => ({ ...current, kg: value.kg, disponible: true, mensaje: value.mensaje || current.mensaje }));
-      notifyStep({ type: 'success', text: `Lectura Accura capturada para ${code}: ${value.kg} kg NET.` });
-    } catch (error) {
-      scaleCaptures.current.set(code, { operationId, token: previous.token });
-      setNotice({ type: 'error', text: scaleErrorMessage(error, 'No se pudo actualizar/capturar la balanza. Reintente con el mismo código.') });
-    } finally {
-      setScaleBusy(false);
-    }
-  };
-
   const receive = async () => {
-    if (!receiveUnit || !currentWeight || controlsDisabled || alreadyReceived) return;
+    if (!receiveUnit || !receiveReady || controlsDisabled || alreadyReceived) return;
     setBusy(true);
+    let capturingScale = false;
+    let scaleCapture = null;
+    let captureKey = null;
+    let code = null;
     try {
+      code = normalizeCode(receiveUnit.code);
       const requestId = receiveRequestId || getRequestId();
+      captureKey = scaleCaptureSlotFor(receiveUnit, requestId);
+      const previous = scaleCaptures.current.get(captureKey) || {};
+      let confirmedWeight = currentWeight;
+      scaleCapture = previous;
+      if (accuraMode) {
+        const retryingConfirmedCapture = previous.retryable && weightValue(previous.kg);
+        const liveAtClick = Number(liveScaleKg);
+        if (retryingConfirmedCapture) {
+          confirmedWeight = previous.kg;
+        } else if (previous.token && weightValue(previous.kg)) {
+          if (!scaleStatus.disponible || scaleStatus.base !== 'NT' || !scaleIsStable || Number(previous.kg) !== liveAtClick) {
+            setNotice({ type: 'error', text: 'La captura conservada no coincide con el visor estable. Espere que la lectura vuelva a coincidir y reintente.' });
+            return;
+          }
+          confirmedWeight = previous.kg;
+        } else if (!accuraReceiveReady) {
+          setNotice({ type: 'error', text: scaleStatus.estable === false ? 'La lectura Accura aún se está estabilizando. Espere ST y reintente.' : 'La balanza Accura debe estar disponible en base NT con un peso NETO mayor que 0.' });
+          return;
+        } else {
+          const operationId = previous.operationId || getRequestId();
+          capturingScale = true;
+          const value = await captureMesaScale({ codigo: code, token: previous.token, operationId });
+          capturingScale = false;
+          if (!weightValue(value.kg)) throw new Error('La balanza no devolvió un NET válido.');
+          scaleCapture = { operationId, token: value.token, kg: value.kg };
+          scaleCaptures.current.set(captureKey, scaleCapture);
+          if (Number(value.kg) !== liveAtClick) {
+            scaleCaptures.current.delete(captureKey);
+            setNotice({ type: 'error', text: 'La lectura cambió durante la captura. No se registró el ingreso; confirme de nuevo cuando el visor esté estable.' });
+            return;
+          }
+          confirmedWeight = value.kg;
+        }
+      }
       if (!receiveRequestId) {
         const requestIds = readJson(REQUEST_KEY, {});
         requestIds[requestSlot(receiveUnit)] = requestId;
         window.localStorage.setItem(REQUEST_KEY, JSON.stringify(requestIds));
         setReceiveRequestId(requestId);
       }
-      const scaleCapture = scaleCaptures.current.get(normalizeCode(receiveUnit.code));
       const value = await request('/api/mesa/receive', {
         code: receiveUnit.code,
         ...(receiveUnit.label_id ? { label_id: receiveUnit.label_id } : {}),
-        net_kg: currentWeight,
+        net_kg: confirmedWeight,
         request_id: requestId,
         ...(scaleCapture?.token ? { scale_token: scaleCapture.token } : {}),
       });
-      if (value?.code !== receiveUnit.code || !weightValue(value.net_kg) || Number(value.net_kg) !== Number(currentWeight)) {
+      if (value?.code !== receiveUnit.code || !weightValue(value.net_kg) || Number(value.net_kg) !== Number(confirmedWeight)) {
         throw new Error('Comprobante incompleto');
       }
       const originDetails = receiveUnit.originDetails || (receiveUnit.origins || []).map((code) => findUnit(code) || { code });
@@ -676,6 +807,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       const requestIds = readJson(REQUEST_KEY, {});
       delete requestIds[requestSlot(receiveUnit)];
       window.localStorage.setItem(REQUEST_KEY, JSON.stringify(requestIds));
+      scaleCaptures.current.delete(captureKey);
       setReceiveResult(receipt);
       setReceipts((current) => [...current, receipt]);
       setUnits((current) => current.map((unit) => normalizeCode(unit.code) === normalizeCode(value.code) ? { ...unit, status: 'received' } : unit));
@@ -695,14 +827,34 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       if ([404,409].includes(error.status)) {
         try {
           const latest = await refreshState();
-          const receipt = latest.receipts.find(item => item.code === receiveUnit.code);
-          const unit = latest.units.find(item => item.code === receiveUnit.code);
+          const targetUnit = receiveUnit;
+          const targetCode = normalizeCode(targetUnit.code);
+          const receipt = latest.receipts.find(item => normalizeCode(item.code) === targetCode && receiveAttemptMatches(
+            latest.units.find(unit => normalizeCode(unit.code) === targetCode && cycleMatches(unit, targetUnit)),
+            item,
+            targetUnit,
+            receiveRequestId,
+          ));
+          const unit = latest.units.find(candidate => normalizeCode(candidate.code) === targetCode && cycleMatches(candidate, targetUnit));
           setNetWeight('');
           if (receipt && unit) {
             const origins = unit.origins.map(code => latest.units.find(item => item.code === code) || { code });
             setReceiveUnit({ ...unit, label_id: receiveUnit.label_id, originDetails: origins });
             setReceiveResult({ ...receipt, origins });
             notifyStep({ type: 'info', text: 'Esta manga ya tiene una recepción registrada.' });
+            return;
+          }
+          const nextCycleUnit = latest.units.find(candidate => normalizeCode(candidate.code) === targetCode && candidate.status === 'available');
+          if (nextCycleUnit) {
+            const requestIds = readJson(REQUEST_KEY, {});
+            const nextRequestId = requestIds[requestSlot(nextCycleUnit)] || getRequestId();
+            requestIds[requestSlot(nextCycleUnit)] = nextRequestId;
+            window.localStorage.setItem(REQUEST_KEY, JSON.stringify(requestIds));
+            scaleCaptures.current.delete(captureKey);
+            setReceiveUnit({ ...nextCycleUnit, label_id: targetUnit.label_id });
+            setReceiveRequestId(nextRequestId);
+            setReceiveResult(null);
+            setNotice({ type: 'error', text: 'El comprobante pertenece a otro ciclo. La manga disponible requiere una nueva pesada estable.' });
             return;
           }
           setReceiveUnit(null);
@@ -713,7 +865,20 @@ export default function MesaReturnsPilot({ showExamples = false }) {
           return;
         }
       }
-      notifyStep({ type: 'error', text: mesaOperationError(error, 'receive') });
+      if (accuraMode && scaleCapture?.token && isExpiredScaleToken(error)) {
+        scaleCaptures.current.delete(captureKey);
+        setNotice({ type: 'error', text: 'La captura Accura caducó. Espere una lectura estable y vuelva a pesar para tomar una captura nueva.' });
+        return;
+      }
+      if (accuraMode && scaleCapture?.token && isAmbiguousReceiveFailure(error)) {
+        scaleCaptures.current.set(captureKey, { ...scaleCapture, retryable: true });
+      }
+      notifyStep({
+        type: 'error',
+        text: capturingScale
+          ? scaleErrorMessage(error, 'No se pudo capturar la lectura Accura. Espere una lectura estable y reintente.')
+          : mesaOperationError(error, 'receive'),
+      });
     } finally {
       setBusy(false);
     }
@@ -738,7 +903,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
   };
 
   const switchMode = (nextMode) => {
-    if (nextMode === mode || busy || scaleBusy) return;
+    if (nextMode === mode || busy) return;
     clearReceiveContext();
     setReceivingPending(nextMode === 'union' && Boolean(pendingUnion));
     setMode(nextMode);
@@ -798,10 +963,10 @@ export default function MesaReturnsPilot({ showExamples = false }) {
       </header>
 
       <nav className="tab-nav" role="tablist" aria-label="Tareas de la estación">
-        <button type="button" role="tab" aria-label="Pesar y recibir" aria-selected={mode === 'receive'} className={`tab-btn ${mode === 'receive' ? 'active' : ''}`} onClick={() => switchMode('receive')} disabled={busy || scaleBusy}>
+        <button type="button" role="tab" aria-label="Pesar y recibir" aria-selected={mode === 'receive'} className={`tab-btn ${mode === 'receive' ? 'active' : ''}`} onClick={() => switchMode('receive')} disabled={busy}>
           Pesar y recibir
         </button>
-        <button type="button" role="tab" aria-label="Unión de mangas" aria-selected={mode === 'union'} className={`tab-btn ${mode === 'union' ? 'active' : ''}`} onClick={() => switchMode('union')} disabled={busy || scaleBusy}>
+        <button type="button" role="tab" aria-label="Unión de mangas" aria-selected={mode === 'union'} className={`tab-btn ${mode === 'union' ? 'active' : ''}`} onClick={() => switchMode('union')} disabled={busy}>
           Unión de mangas
         </button>
       </nav>
@@ -825,7 +990,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
                 </form>
                 {selectedUnits.length > 0 ? (
                   <div className="mesa-origin-list" aria-label="Orígenes seleccionados">
-                    {selectedUnits.map((unit) => <div className="mesa-origin-row" key={unit.code}><div><strong>{unit.code}</strong><span>{unit.piece} · {unit.color} · {otContext(unit)}</span></div><button type="button" className="btn btn-secondary" onClick={() => removeOrigin(normalizeCode(unit.code))} disabled={controlsDisabled}>Quitar</button></div>)}
+                    {selectedUnits.map((unit) => <div className="mesa-origin-row" key={unit.code}><div><strong>{unit.code}</strong><span>{unit.piece} · <ColorSummary unit={unit} /> · {otContext(unit)}</span></div><button type="button" className="btn btn-secondary" onClick={() => removeOrigin(normalizeCode(unit.code))} disabled={controlsDisabled}>Quitar</button></div>)}
                     <p className="mesa-origin-rule">Las mangas deben compartir pieza y color.</p>
                   </div>
                 ) : <p className="mesa-empty-line">Aún no hay orígenes. Comience con el QR de una manga disponible.</p>}
@@ -840,34 +1005,38 @@ export default function MesaReturnsPilot({ showExamples = false }) {
         <section className="panel" aria-labelledby="mesa-scale-title">
             <h2 id="mesa-scale-title" className="panel-header">Lectura de balanza</h2>
             <div className="panel-body">
-              <div className={`scm-live-weight ${accuraMode ? 'connected' : 'manual'}`} aria-label={`Lectura neta ${accuraMode ? 'Accura' : 'manual'}`}>
-                <span className="scm-live-weight-label">Peso neto de retorno</span>
+              <div className={`scm-live-weight ${scaleVisualState}`} aria-label={`Lectura ${accuraMode && scaleStatus.base === 'GS' ? 'bruta' : 'neta'} ${accuraMode ? 'Accura' : 'manual'}`}>
+                <span className="scm-live-weight-label">{accuraMode ? `Lectura viva de Accura${scaleStatus.base === 'GS' ? ' · bruto' : ''}` : 'Peso neto de retorno'}</span>
                 <div className="scm-live-weight-reading">
-                  <strong>{currentWeight ? Number(currentWeight).toFixed(3) : '—'}</strong><span>kg</span>
+                  <strong>{accuraMode && scaleHasLiveReading ? formatLiveScaleKg(liveScaleKg) : (currentWeight ? formatLiveScaleKg(currentWeight) : '—')}</strong><span>kg</span>
                 </div>
                 <small>{accuraMode
                   ? (scaleStatus.disponible
-                    ? (scaleHasWeight ? 'Accura · base NT · captura bajo demanda' : (scaleStatus.mensaje || 'Accura conectada · espere estabilización y vuelva a leer'))
+                    ? (scaleHasLiveReading
+                      ? (scaleStatus.estable === false
+                        ? 'Estabilizando · espere ST antes de recibir.'
+                        : scaleStatus.base === 'NT' && !scaleHasPositiveLiveWeight
+                          ? 'Peso NETO debe ser mayor que 0 kg para recibir.'
+                          : `Accura · base ${scaleStatus.base || 'sin base'} · ${scaleStatus.base === 'GS' ? 'bruto' : 'lectura viva'}`)
+                      : (scaleStatus.mensaje || 'Accura conectada · espere estabilización'))
                     : (scaleStatus.mensaje || 'Accura no disponible'))
                   : 'Entrada manual explícita'}</small>
               </div>
-              {scaleStatusWarning && <div className="mesa-scale-warning-wrap"><p className="mesa-scale-warning" role="status">{scaleStatusWarning}</p><button type="button" className="btn btn-secondary" onClick={() => refreshScaleStatus().catch(() => {})} disabled={scaleBusy || controlsDisabled}>Reintentar estado de balanza</button></div>}
+              {scaleStatusWarning && <div className="mesa-scale-warning-wrap"><p className="mesa-scale-warning" role="status">{scaleStatusWarning}</p></div>}
               {accuraMode ? (
                 <div className="mesa-scale-capture-actions">
-                  <button type="button" className="btn btn-secondary" onClick={() => refreshScaleStatus().catch(() => {})} disabled={scaleBusy || controlsDisabled}>
-                    Actualizar estado de balanza
-                  </button>
-                  <button type="button" className="btn btn-secondary" onClick={captureReturnWeight} disabled={!receiveUnit || !scaleStatus.disponible || scaleBusy || controlsDisabled || Boolean(alreadyReceived)}>
-                    {scaleBusy ? 'Leyendo…' : currentWeight ? 'Volver a leer balanza' : 'Leer balanza'}
-                  </button>
-                  <WeightInput value={netWeight} onChange={() => {}} manual={false} disabled />
+                  {existingScaleCapture?.retryable && weightValue(existingScaleCapture.kg) && (
+                    <p className="mesa-scale-capture-pending" role="status">
+                      Captura conservada para {receiveUnit?.code}: <strong>{formatLiveScaleKg(existingScaleCapture.kg)} kg</strong>. Pulse «Pesar y recibir» para reintentar con el mismo valor.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="mesa-manual-weight-box">
                   <WeightInput value={netWeight} onChange={setNetWeight} disabled={!manualMode || !receiveUnit || controlsDisabled || Boolean(alreadyReceived)} />
                 </div>
               )}
-              <button type="button" className="btn btn-primary mesa-wide-action" onClick={receive} disabled={!receiveUnit || !currentWeight || controlsDisabled || Boolean(alreadyReceived) || (!manualMode && !(accuraMode && scaleStatus.base === 'NT'))}>{busy ? 'Confirmando…' : alreadyReceived ? 'Ingreso ya registrado' : 'Pesar y recibir'}</button>
+              <button type="button" className="btn btn-primary mesa-wide-action" onClick={receive} disabled={!receiveUnit || !receiveReady || controlsDisabled || Boolean(alreadyReceived)}>{busy ? 'Capturando y confirmando…' : alreadyReceived ? 'Ingreso ya registrado' : 'Pesar y recibir'}</button>
                {receiveResult && <section className="mesa-success-result" aria-label="Retorno confirmado"><div className="mesa-success-copy"><strong>{receiveResult.net_kg} kg netos registrados</strong><span>Movimiento único confirmado para {receiveResult.code} · {receiptTime(receiveResult.created_at)}</span>{receiveResult.origins?.length > 0 && <span>Procedencias: {receiveResult.origins.map((origin) => `${origin.code} · ${otContext(origin)}`).join(' · ')}</span>}</div><img className="mesa-qr-preview" src={`/api/mesa/qr/${encodeURIComponent(receiveResult.code)}.svg`} alt={`QR de ${receiveResult.code}`} /><ReturnPrintControls code={receiveResult.code} /></section>}
             </div>
            </section>
@@ -913,7 +1082,7 @@ export default function MesaReturnsPilot({ showExamples = false }) {
               <summary className="mesa-tools-summary">Ingresos confirmados ({receipts.length})</summary>
               <ul className="panel-body">
                 {receipts.slice().reverse().map((receipt) => (
-                  <li key={receipt.code}>
+                  <li key={`${receipt.code}:${receipt.cycle_id || receipt.request_id || receipt.created_at}`}>
                     <div><strong>{receipt.code}</strong><span>{receipt.net_kg} kg · Recibido el {receiptTime(receipt.created_at)}</span></div>
                      <ReturnPrintControls code={receipt.code} />
                   </li>
